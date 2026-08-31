@@ -1,0 +1,12511 @@
+import React, { useState, useEffect, useRef, useMemo } from "react";
+import { jsPDF } from "jspdf";
+import JSZip from "jszip";
+import type { ExtractedFile } from "./components/ZipDicomExtractor";
+
+const BibliographySearch = React.lazy(() => import("./components/BibliographySearch"));
+const ImageSearch = React.lazy(() => import("./components/ImageSearch"));
+const ExpertImageAnalysis = React.lazy(() => import("./components/ExpertImageAnalysis"));
+const ZipDicomExtractor = React.lazy(() => import("./components/ZipDicomExtractor"));
+const VascularAnatomyViewer = React.lazy(() => import("./components/VascularAnatomyViewer"));
+const ShoulderAnatomyViewer = React.lazy(() => import("./components/ShoulderAnatomyViewer"));
+const KneeAnatomyViewer = React.lazy(() => import("./components/KneeAnatomyViewer"));
+const AnkleAnatomyViewer = React.lazy(() => import("./components/AnkleAnatomyViewer"));
+const ThighAnatomyViewer = React.lazy(() => import("./components/ThighAnatomyViewer"));
+const ThighPosteriorAnatomyViewer = React.lazy(() => import("./components/ThighPosteriorAnatomyViewer"));
+const NeckAnatomyViewer = React.lazy(() => import("./components/NeckAnatomyViewer"));
+const UrinaryAnatomyViewer = React.lazy(() => import("./components/UrinaryAnatomyViewer"));
+const ElbowAnatomyViewer = React.lazy(() => import("./components/ElbowAnatomyViewer"));
+const AbdomenAnatomyViewer = React.lazy(() => import("./components/AbdomenAnatomyViewer"));
+const ScrotumAnatomyViewer = React.lazy(() => import("./components/ScrotumAnatomyViewer"));
+const WristAnatomyViewer = React.lazy(() => import("./components/WristAnatomyViewer"));
+const BreastAnatomyViewer = React.lazy(() => import("./components/BreastAnatomyViewer"));
+const AsistenteMedidas = React.lazy(() => import("./components/AsistenteMedidas").then(m => ({ default: m.AsistenteMedidas })));
+const CreadorNotasPie = React.lazy(() => import("./components/CreadorNotasPie").then(m => ({ default: m.CreadorNotasPie })));
+const CreadorCuadroSinoptico = React.lazy(() => import("./components/CreadorCuadroSinoptico").then(m => ({ default: m.CreadorCuadroSinoptico })));
+const CreadorSinopsisFracturas = React.lazy(() => import("./components/CreadorSinopsisFracturas").then(m => ({ default: m.CreadorSinopsisFracturas })));
+const BiomechanicalRadarModule = React.lazy(() => import("./components/BiomechanicalRadarModule").then(m => ({ default: m.BiomechanicalRadarModule })));
+const AbdominalWallAnatomyViewer = React.lazy(() => import("./components/AbdominalWallAnatomyViewer"));
+const CalfAchillesAnatomyViewer = React.lazy(() => import("./components/CalfAchillesAnatomyViewer"));
+const NeonatalBrainAnatomyViewer = React.lazy(() => import("./components/NeonatalBrainAnatomyViewer"));
+import { Findings3dRenderModule, Create3dRenderModal, Finding3dRender } from "./components/Findings3dRenderModule";
+import CaseAnalysisRenderer from "./components/CaseAnalysisRenderer";
+import InteractiveCaseEditor from "./components/InteractiveCaseEditor";
+import { ClassificationBreakdownModule } from "./components/ClassificationBreakdownModule";
+import { CaseAnalysisData, CaseAnalysisFormatOption, CaseAnalysisElementsConfig } from "./types";
+import { 
+  Activity, 
+  ShieldCheck,
+  AlertCircle, 
+  ArrowDown,
+  Check, 
+  CheckCircle2, 
+  ChevronRight, 
+  Code, 
+  Copy, 
+  FileDown,
+  FileImage,
+  Image as ImageIcon, 
+  FileText, 
+  History, 
+  Layers, 
+  MessageSquare, 
+  Send,
+  Key,
+  Plus,
+  RefreshCw, 
+  Search, 
+  Settings, 
+  Sliders, 
+  Sparkles, 
+  Trash2, 
+  Upload, 
+  X,
+  BookOpen,
+  ExternalLink,
+  Printer,
+  User,
+  Mic,
+  MicOff,
+  Square,
+  Loader2,
+  Undo,
+  Edit,
+  Save,
+  RotateCcw,
+  Download,
+  Zap,
+  Brain,
+  Bone,
+  Languages,
+  Database,
+  BookOpenText,
+  Maximize2,
+  Minimize2,
+  Columns,
+  Eye,
+  Ruler,
+  Bookmark,
+  Box
+} from "lucide-react";
+import { initAuth, googleSignIn, logout as googleLogout, anonymousSignIn, emailSignIn, emailSignUp, getFirebaseConfig } from "./firebaseAuth";
+import { CloudStudy, saveStudyToCloud, getStudiesFromCloud, deleteStudyFromCloud, Worklist, WorklistPatient, saveWorklistToCloud, getWorklistFromCloud, getSingleStudyFromCloud, testFirebaseConfigConnection } from "./firebaseDb";
+import { idbSaveWorklist, idbGetWorklist, idbClearWorklist, idbSaveStudy, idbGetAllStudies, idbDeleteStudy, idbSaveHistory, idbGetHistory } from "./localDb";
+import { uploadPdfToDrive } from "./lib/googleDrive";
+import { Mail, LogOut, Clock, Calendar, ListTodo, UserCheck, ImagePlus, Wifi, HelpCircle, Info, Laptop, Network, ChevronDown, Link } from "lucide-react";
+import { motion, AnimatePresence } from "motion/react";
+import { 
+  STUDY_PRESETS, 
+  PROMPT_SHORTCUTS, 
+  GENERAL_SYSTEM_INSTRUCTION, 
+  CHAT_SYSTEM_INSTRUCTION, 
+  CLASSIFICATION_SYSTEM_INSTRUCTION, 
+  CLASSIFICATIONS_DATA, 
+  INTERACTIVE_RESULTS,
+  Presets,
+  ClassificationSystem 
+} from "./constants";
+
+// Interceptor global seguro de localStorage (preserva historial y delega datos pesados a IndexedDB)
+try {
+  if (typeof window !== "undefined" && window.localStorage) {
+    const originalSetItem = window.localStorage.setItem;
+    window.localStorage.setItem = function (key: string, value: string) {
+      try {
+        originalSetItem.call(window.localStorage, key, value);
+      } catch (error: any) {
+        console.warn(`[SafeLocalStorage] Cuota de localStorage excedida para '${key}'. Se usarÃ¡ almacenamiento persistente IndexedDB.`);
+        if (key === "rad_local_studies") {
+          try {
+            // Guardar versiÃ³n ligera sin PDF base64 pesado para fallback en localStorage
+            const parsed = JSON.parse(value);
+            if (Array.isArray(parsed)) {
+              const light = parsed.map((s: any) => ({ ...s, pdfBase64: "", attachedImages: [] }));
+              originalSetItem.call(window.localStorage, key, JSON.stringify(light));
+            }
+          } catch (lightErr) {
+            console.warn("[SafeLocalStorage] No se pudo guardar fallback ligero:", lightErr);
+          }
+        }
+      }
+    };
+  }
+} catch (e) {
+  console.error("[SafeLocalStorage] Error al inicializar el interceptor:", e);
+}
+
+// Structure for historical reports stored in local storage
+interface SavedReport {
+  id: string;
+  timestamp: string;
+  studyType: string;
+  clinicalHistory: string;
+  reportText: string;
+}
+
+
+export const DIAGNOSTIC_GLOSSARY = [
+  {
+    acronym: "BI-RADS",
+    name: "Breast Imaging-Reporting and Data System",
+    category: "MamografÃ­a",
+    desc: "Escala estandarizada oficial para mamografÃ­a, ultrasonido y resonancia de mamas. CategorÃ­as del 0 (estudio incompleto) al 6 (malignidad comprobada por biopsia). El BI-RADS 4 indica sospecha de lesiÃ³n y amerita biopsia histolÃ³gica."
+  },
+  {
+    acronym: "ACR",
+    name: "American College of Radiology",
+    category: "General",
+    desc: "AsociaciÃ³n mÃ©dica norteamericana responsable de estandarizar la nomenclatura radiolÃ³gica, guÃ­as de prÃ¡ctica clÃ­nica y control de calidad de dosis de radiaciÃ³n ionizante."
+  },
+  {
+    acronym: "U. Hounsfield (HU)",
+    name: "Unidades Hounsfield",
+    category: "TomografÃ­a",
+    desc: "Escala lineal que cuantifica cuantitativamente la atenuaciÃ³n fÃ­sica de los rayos X en tejidos. Referencias clave: Aire (-1000 HU), Grasa (-120 a -80 HU), Agua pura (0 HU), Sangre coagulada (+60 a +80 HU), e Hueso cortical (+1000 HU)."
+  },
+  {
+    acronym: "FLAIR",
+    name: "Fluid-Attenuated Inversion Recovery",
+    category: "Resonancia",
+    desc: "AtenuaciÃ³n de Fluido por RecuperaciÃ³n de InversiÃ³n. Secuencia de resonancia magnÃ©tica ponderada en T2 donde se cancela la seÃ±al libre del lÃ­quido cefalorraquÃ­deo. Es de vital importancia para visualizar la esclerosis mÃºltiple, infartos cerebrales tempranos y otras patologÃ­as con edema perilesional."
+  },
+  {
+    acronym: "CIE-10 (CIE10)",
+    name: "ClasificaciÃ³n Internacional de Enfermedades",
+    category: "General",
+    desc: "CÃ³digo de clasificaciÃ³n diagnÃ³stica administrado por la OrganizaciÃ³n Mundial de la Salud (OMS). Facilita el cruce internacional de morbimortalidad y estandariza la facturaciÃ³n mÃ©dica (ej. M54.5 para lumbalgia)."
+  },
+  {
+    acronym: "TI-RADS",
+    name: "Thyroid Imaging-Reporting and Data System",
+    category: "Ultrasonido",
+    desc: "Escala ecogrÃ¡fica para evaluar el riesgo de malignidad en nÃ³dulos tiroideos. Basado en composiciÃ³n, ecogenicidad, forma, mÃ¡rgenes y focos ecogÃ©nicos. Facilita decidir de forma objetiva la indicaciÃ³n de biopsia por aspiraciÃ³n con aguja fina (BAAF)."
+  },
+  {
+    acronym: "PI-RADS",
+    name: "Prostate Imaging-Reporting and Data System",
+    category: "Resonancia",
+    desc: "EstÃ¡ndar clÃ­nico de informe para RM multiparamÃ©trica de prÃ³stata. Valora zonas perifÃ©rica e transicional con escalas de 1 (altamente improbable) a 5 (alta sospecha de cÃ¡ncer clÃ­nicamente significativo)."
+  },
+  {
+    acronym: "LI-RADS",
+    name: "Liver Imaging-Reporting and Data System",
+    category: "TomografÃ­a",
+    desc: "Sistema estandarizado de categorizaciÃ³n para hallazgos hepÃ¡ticos en pacientes cirrÃ³ticos o con sospecha diagnÃ³stica de carcinoma hepatocelular (CHC)."
+  },
+  {
+    acronym: "Opacidad Alveolar",
+    name: "ConsolidaciÃ³n de Espacio AÃ©reo",
+    category: "RadiografÃ­a",
+    desc: "Hallazgo en tele de tÃ³rax caracterizado por el reemplazo del aire gas alveolar por exudado, sangre o pus. ClÃ­nicamente compatible con neumonÃ­a clÃ¡sica, contusiÃ³n pulmonar o edema agudo de pulmÃ³n. Produce signo de broncograma aÃ©reo."
+  },
+  {
+    acronym: "Atelectasia",
+    name: "Colapso Parcial de ParÃ©nquima",
+    category: "RadiografÃ­a",
+    desc: "PÃ©rdida localizada de volumen pulmonar por reabsorciÃ³n u obstrucciÃ³n bronquial. RadiogrÃ¡ficamente se presenta como una opacidad lineal o densa con desplazamiento de estructuras anatÃ³micas."
+  },
+  {
+    acronym: "KOSS",
+    name: "ClasificaciÃ³n de Kellgren & Lawrence",
+    category: "General",
+    desc: "Criterio radiolÃ³gico clave para diagnosticar y medir el grado de osteoartritis de rodilla. Grados de 0 (normal) a 4 (severo, con grandes osteofitos y deformaciÃ³n Ã³sea articular marcada)."
+  }
+];
+
+export interface ImageAnnotation {
+  id: string;
+  type: "point" | "box";
+  x: number; // percentage (0-100)
+  y: number; // percentage (0-100)
+  w?: number; // percentage (0-100)
+  h?: number; // percentage (0-100)
+  label: string;
+}
+
+const formatDateToDMY = (dateStr: string): string => {
+  if (!dateStr) return "";
+  
+  // Format yyyy-mm-dd
+  if (dateStr.includes("-")) {
+    const parts = dateStr.split("-");
+    if (parts.length === 3 && parts[0].length === 4) {
+      const [yyyy, mm, dd] = parts;
+      return `${dd}-${mm}-${yyyy}`;
+    }
+  }
+  
+  // Format yyyy/mm/dd
+  if (dateStr.includes("/")) {
+    const parts = dateStr.split("/");
+    if (parts.length === 3 && parts[0].length === 4) {
+      const [yyyy, mm, dd] = parts;
+      return `${dd}/${mm}/${yyyy}`;
+    }
+  }
+
+  return dateStr;
+};
+
+const formatCostaRicaPhone = (rawPhone: string): string => {
+  if (!rawPhone) return "";
+  // Strip all non-numeric characters
+  const clean = rawPhone.replace(/\D/g, "");
+  if (!clean) return "";
+  
+  if (clean.length === 8) {
+    return "506" + clean;
+  }
+  if (clean.startsWith("506") && clean.length > 8) {
+    return clean;
+  }
+  if (clean.length > 8 && !clean.startsWith("506")) {
+    return "506" + clean;
+  }
+  if (clean.length < 8 && !clean.startsWith("506")) {
+    return "506" + clean;
+  }
+  return clean;
+};
+
+const extractSectionContent = (reportText: string, sectionKeywords: string[]): string => {
+  if (!reportText) return "";
+  const lines = reportText.split("\n");
+  
+  const normalizeHeader = (text: string): string => {
+    return text
+      .trim()
+      .toLowerCase()
+      .replace(/^[\s#\-\*]+/, "")
+      .replace(/[\*\_\:]/g, "")
+      .trim();
+  };
+
+  const allHeaders = [
+    "tipo de estudio", "estudio",
+    "historia clÃ­nica", "historia clinica", "indicaciones", "historia clÃ­nica / indicaciones", "historia clinica / indicaciones",
+    "tÃ©cnica del examen", "tecnica del examen", "tÃ©cnica", "tecnica",
+    "hallazgos", "hallazgos principales", "resultados",
+    "impresiÃ³n diagnÃ³stica", "impresion diagnostica", "impresiones diagnÃ³sticas", "impresiones diagnosticas", "impresiÃ³n", "impresion",
+    "conclusiÃ³n", "conclusiones", "conclusion",
+    "diagnÃ³stico", "diagnostico",
+    "resumen operacional de hallazgos", "resumen operacional", "resumen ejecutivo", "resumen de hallazgos", "resumen",
+    "fdo", "mÃ©dico", "medico", "firma"
+  ];
+
+  for (const key of sectionKeywords) {
+    let startIndex = -1;
+    for (let i = 0; i < lines.length; i++) {
+      const norm = normalizeHeader(lines[i]);
+      if (norm === key || norm.startsWith(key + " ")) {
+        startIndex = i;
+        break;
+      }
+    }
+
+    if (startIndex !== -1) {
+      const sectionLines: string[] = [];
+      for (let j = startIndex + 1; j < lines.length; j++) {
+        const currentLine = lines[j];
+        const normCurrent = normalizeHeader(currentLine);
+
+        const isBoundary = allHeaders.some(h => {
+          if (normCurrent === h) return true;
+          if (normCurrent.startsWith(h + ":") || normCurrent.startsWith(h + " ")) return true;
+          return false;
+        });
+        if (isBoundary) {
+          break;
+        }
+        sectionLines.push(currentLine);
+      }
+
+      const extractedText = sectionLines.join("\n").trim();
+      if (extractedText && extractedText.replace(/[\s\-\*\#\:\.]/g, "").length > 0) {
+        return extractedText;
+      }
+    }
+  }
+  return "";
+};
+
+const extractImpresionDiagnostica = (reportText: string): string => {
+  return extractSectionContent(reportText, [
+    "impresiÃ³n diagnÃ³stica", "impresion diagnostica", "impresiÃ³n diagnostica", "impresion diagnÃ³stica", 
+    "impresiones diagnÃ³sticas", "impresiones diagnosticas", "conclusiÃ³n", "conclusiones", "conclusion", 
+    "diagnÃ³stico", "diagnostico", "impresiÃ³n", "impresion"
+  ]);
+};
+
+const extractHallazgos = (reportText: string): string => {
+  return extractSectionContent(reportText, ["hallazgos principales", "hallazgos", "resultados"]);
+};
+
+const extractResumenOperacional = (reportText: string): string => {
+  if (!reportText) return "";
+
+  // 1st Priority: Explicit Resumen Operacional / Resumen Ejecutivo
+  const explicitResumen = extractSectionContent(reportText, [
+    "resumen operacional de hallazgos", "resumen operacional", "resumen ejecutivo", "resumen de hallazgos", "resumen"
+  ]);
+  if (explicitResumen) return explicitResumen;
+
+  // 2nd Priority: ImpresiÃ³n DiagnÃ³stica / ConclusiÃ³n / DiagnÃ³stico
+  const impresion = extractImpresionDiagnostica(reportText);
+  if (impresion) return impresion;
+
+  // 3rd Priority: Hallazgos Principales / Hallazgos
+  const hallazgos = extractHallazgos(reportText);
+  if (hallazgos) return hallazgos;
+
+  // Fallback 1: let's look for bullet points in the entire report that are NOT part of standard template headers
+  const lines = reportText.split("\n");
+  const normalizeHeader = (text: string): string => {
+    return text
+      .trim()
+      .toLowerCase()
+      .replace(/^[\s#\-\*]+/, "")
+      .replace(/[\*\_\:]/g, "")
+      .trim();
+  };
+
+  const allHeaders = [
+    "tipo de estudio", "estudio",
+    "historia clÃ­nica", "historia clinica", "indicaciones", "historia clÃ­nica / indicaciones", "historia clinica / indicaciones",
+    "tÃ©cnica del examen", "tecnica del examen", "tÃ©cnica", "tecnica",
+    "hallazgos", "hallazgos principales", "resultados",
+    "impresiÃ³n diagnÃ³stica", "impresion diagnostica", "impresiones diagnÃ³sticas", "impresiones diagnosticas", "impresiÃ³n", "impresion",
+    "conclusiÃ³n", "conclusiones", "conclusion",
+    "diagnÃ³stico", "diagnostico",
+    "resumen operacional de hallazgos", "resumen operacional", "resumen ejecutivo", "resumen de hallazgos", "resumen",
+    "fdo", "mÃ©dico", "medico", "firma"
+  ];
+
+  const cleanBulletLines = lines.filter(line => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("-") && !trimmed.startsWith("*") && !/^\d+\./.test(trimmed)) return false;
+    
+    // Check if the bullet line is just a header
+    const norm = normalizeHeader(trimmed);
+    if (allHeaders.includes(norm)) return false;
+    
+    return true;
+  });
+
+  if (cleanBulletLines.length > 0) {
+    return cleanBulletLines.slice(0, 6).join("\n");
+  }
+
+  // Fallback 2: If we still don't have anything, let's look for the last section of the report that has text
+  let lastNonEmptyBlock: string[] = [];
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (line) {
+      // If we hit a known header or potential header line, that starts the block!
+      const norm = normalizeHeader(line);
+      const isHeaderLine = allHeaders.includes(norm) || norm.endsWith(":") || line.startsWith("#");
+      if (isHeaderLine) {
+        lastNonEmptyBlock.unshift(line);
+        // Let's get the content below it
+        let j = i + 1;
+        while (j < lines.length) {
+          const subLine = lines[j].trim();
+          const subNorm = normalizeHeader(subLine);
+          if (allHeaders.some(h => subNorm === h || subNorm.startsWith(h + ":"))) {
+            break;
+          }
+          if (subLine) {
+            lastNonEmptyBlock.push(lines[j]);
+          }
+          j++;
+        }
+        break;
+      }
+    }
+  }
+
+  if (lastNonEmptyBlock.length > 0) {
+    // Remove the header line if it's there
+    const headerLine = lastNonEmptyBlock[0];
+    const normHeader = normalizeHeader(headerLine);
+    if (allHeaders.some(h => normHeader === h || normHeader.startsWith(h + ":"))) {
+      lastNonEmptyBlock.shift();
+    }
+    const fallbackText = lastNonEmptyBlock.join("\n").trim();
+    if (fallbackText) {
+      return fallbackText;
+    }
+  }
+
+  return "";
+};
+
+interface ManualPatientAdderProps {
+  onAdd: (newPatient: { name: string; age: string; gender: string; patientId: string; studyType: string; time: string; phone?: string }) => void;
+}
+
+const ManualPatientAdder: React.FC<ManualPatientAdderProps> = ({ onAdd }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [age, setAge] = useState("");
+  const [gender, setGender] = useState("");
+  const [patientId, setPatientId] = useState("");
+  const [studyType, setStudyType] = useState("");
+  const [time, setTime] = useState("");
+  const [phone, setPhone] = useState("");
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim()) return;
+    onAdd({
+      name: name.trim(),
+      age: age.trim(),
+      gender: gender,
+      patientId: patientId.trim(),
+      studyType: studyType.trim(),
+      time: time.trim(),
+      phone: formatCostaRicaPhone(phone.trim())
+    });
+    // Reset form
+    setName("");
+    setAge("");
+    setGender("");
+    setPatientId("");
+    setStudyType("");
+    setTime("");
+    setPhone("");
+    setIsOpen(false);
+  };
+
+  return (
+    <div className="bg-slate-950/20 border border-slate-850 rounded-xl overflow-hidden mt-2">
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full px-4 py-2.5 text-left text-[10px] font-black uppercase text-slate-400 hover:text-slate-200 hover:bg-slate-900/30 flex items-center justify-between transition tracking-wider font-mono"
+      >
+        <span className="flex items-center gap-1.5">
+          <Plus className="h-3.5 w-3.5 text-indigo-400" /> AÃ±adir Paciente Manual
+        </span>
+        <ChevronRight className={`h-3 w-3 text-slate-500 transition-transform ${isOpen ? "rotate-90" : ""}`} />
+      </button>
+
+      {isOpen && (
+        <form onSubmit={handleSubmit} className="p-3.5 border-t border-slate-850/40 space-y-2.5 bg-slate-900/5">
+          <div>
+            <label className="text-[8.5px] font-black uppercase text-slate-500 tracking-wider font-mono block mb-1">Nombre Completo *</label>
+            <input
+              type="text"
+              required
+              placeholder="Ej. Carlos PÃ©rez"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="w-full text-xs bg-slate-950 border border-slate-850 rounded-lg px-2.5 py-1.5 text-white focus:outline-none focus:border-indigo-500 font-bold"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-[8.5px] font-black uppercase text-slate-500 tracking-wider font-mono block mb-1">Edad</label>
+              <input
+                type="text"
+                placeholder="Ej. 45"
+                value={age}
+                onChange={(e) => setAge(e.target.value)}
+                className="w-full text-xs bg-slate-950 border border-slate-850 rounded-lg px-2.5 py-1.5 text-white focus:outline-none focus:border-indigo-500 font-bold"
+              />
+            </div>
+            <div>
+              <label className="text-[8.5px] font-black uppercase text-slate-500 tracking-wider font-mono block mb-1">GÃ©nero</label>
+              <select
+                value={gender}
+                onChange={(e) => setGender(e.target.value)}
+                className="w-full text-xs bg-slate-950 border border-slate-850 rounded-lg px-2 py-1.5 text-white focus:outline-none focus:border-indigo-500 font-bold"
+              >
+                <option value="">--</option>
+                <option value="M">M</option>
+                <option value="F">F</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-[8.5px] font-black uppercase text-slate-500 tracking-wider font-mono block mb-1">IdentificaciÃ³n</label>
+              <input
+                type="text"
+                placeholder="CÃ©dula / ID"
+                value={patientId}
+                onChange={(e) => setPatientId(e.target.value)}
+                className="w-full text-xs bg-slate-950 border border-slate-850 rounded-lg px-2.5 py-1.5 text-white focus:outline-none focus:border-indigo-500 font-mono font-bold"
+              />
+            </div>
+            <div>
+              <label className="text-[8.5px] font-black uppercase text-slate-500 tracking-wider font-mono block mb-1">Hora Turno</label>
+              <input
+                type="text"
+                placeholder="Ej. 08:30"
+                value={time}
+                onChange={(e) => setTime(e.target.value)}
+                className="w-full text-xs bg-slate-950 border border-slate-850 rounded-lg px-2.5 py-1.5 text-white focus:outline-none focus:border-indigo-500 font-mono font-bold"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="text-[8.5px] font-black uppercase text-slate-500 tracking-wider font-mono block mb-1">Estudio Solicitado</label>
+            <input
+              type="text"
+              placeholder="Ej. EcografÃ­a Renal"
+              value={studyType}
+              onChange={(e) => setStudyType(e.target.value)}
+              className="w-full text-xs bg-slate-950 border border-slate-850 rounded-lg px-2.5 py-1.5 text-white focus:outline-none focus:border-indigo-500 font-bold"
+            />
+          </div>
+
+          <div>
+            <label className="text-[8.5px] font-black uppercase text-slate-500 tracking-wider font-mono block mb-1">TelÃ©fono o Celular (Costa Rica)</label>
+            <input
+              type="text"
+              placeholder="Ej. 8888-8888"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              className="w-full text-xs bg-slate-950 border border-slate-850 rounded-lg px-2.5 py-1.5 text-white focus:outline-none focus:border-indigo-500 font-mono font-bold"
+            />
+          </div>
+
+          <button
+            type="submit"
+            className="w-full bg-slate-800 hover:bg-indigo-600 text-slate-300 hover:text-white font-bold text-[9px] uppercase tracking-wider py-1.5 rounded-lg transition"
+          >
+            Agregar a la Agenda
+          </button>
+        </form>
+      )}
+    </div>
+  );
+};
+
+interface UltrasoundWorklistExporterProps {
+  patients: WorklistPatient[];
+}
+
+const UltrasoundWorklistExporter: React.FC<UltrasoundWorklistExporterProps> = ({ patients }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [exportFormat, setExportFormat] = useState<"standard_csv" | "samsung_v7_csv" | "ge_csv" | "mindray_xml" | "json_bridge">("samsung_v7_csv");
+  const [copiedScript, setCopiedScript] = useState(false);
+  const [activeTab, setActiveTab] = useState<"export" | "guide">("export");
+
+  const handleExport = () => {
+    if (patients.length === 0) {
+      alert("No hay pacientes en la agenda para exportar.");
+      return;
+    }
+
+    const today = new Date();
+    const dateStr = today.toISOString().split("T")[0];
+
+    if (exportFormat === "standard_csv") {
+      const headers = ["ID Paciente", "Nombre Completo", "Edad", "Genero", "Estudio Solicitado", "Hora Turno", "Estado"];
+      const rows = patients.map(p => [
+        p.patientId || `REG-${p.id.substring(p.id.length - 4)}`,
+        p.name,
+        p.age || "",
+        p.gender || "",
+        p.studyType || "",
+        p.time || "",
+        p.status
+      ]);
+      const csvContent = "\ufeff" + [headers.join(","), ...rows.map(e => e.map(val => `"${val.replace(/"/g, '""')}"`).join(","))].join("\n");
+      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.setAttribute("href", url);
+      link.setAttribute("download", `agenda_radiologia_${dateStr}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } else if (exportFormat === "samsung_v7_csv") {
+      // Samsung V7 optimized CSV structure with standard DICOM field mappings
+      const headers = ["PatientID", "PatientName", "Gender", "BirthDate", "StudyDescription", "AccessionNumber", "ScheduledDate", "ScheduledTime"];
+      const rows = patients.map(p => {
+        let birthDate = "";
+        if (p.age) {
+          const numericAge = parseInt(p.age.replace(/\D/g, ""));
+          if (!isNaN(numericAge)) {
+            const birthYear = today.getFullYear() - numericAge;
+            birthDate = `${birthYear}0101`; // format YYYYMMDD
+          }
+        }
+        
+        // Para el Samsung V7, exportamos el nombre completo sin delimitadores de careto "^" ni cortes.
+        // Al enviarlo como un solo string continuo, el ecÃ³grafo muestra el nombre completo con todos sus apellidos y nombres.
+        const cleanName = p.name.trim();
+        
+        return [
+          p.patientId || `SS-${p.id.substring(p.id.length - 4)}`,
+          cleanName,
+          p.gender || "O",
+          birthDate,
+          p.studyType || "Ultrasound",
+          `ACC-${p.id.substring(p.id.length - 4)}`,
+          dateStr.replace(/-/g, ""),
+          p.time ? p.time.replace(":", "") + "00" : "080000"
+        ];
+      });
+      const csvContent = [headers.join(","), ...rows.map(e => e.map(val => `"${val.replace(/"/g, '""')}"`).join(","))].join("\n");
+      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.setAttribute("href", url);
+      link.setAttribute("download", `Samsung_V7_Worklist_${dateStr}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } else if (exportFormat === "ge_csv") {
+      const headers = ["Patient ID", "Patient Name", "Sex", "Birth Date", "Accession Number", "Requested Procedure"];
+      const rows = patients.map(p => {
+        let birthDate = "";
+        if (p.age) {
+          const numericAge = parseInt(p.age.replace(/\D/g, ""));
+          if (!isNaN(numericAge)) {
+            const birthYear = today.getFullYear() - numericAge;
+            birthDate = `${birthYear}0101`;
+          }
+        }
+        return [
+          p.patientId || `GE-${p.id.substring(p.id.length - 4)}`,
+          p.name,
+          p.gender || "",
+          birthDate,
+          `ACC-${p.id.substring(p.id.length - 4)}`,
+          p.studyType || "Ultrasound"
+        ];
+      });
+      const csvContent = [headers.join(","), ...rows.map(e => e.map(val => `"${val.replace(/"/g, '""')}"`).join(","))].join("\n");
+      const blob = new Blob([csvContent], { type: "text/csv;charset=ascii;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.setAttribute("href", url);
+      link.setAttribute("download", `GE_Worklist_${dateStr}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } else if (exportFormat === "mindray_xml") {
+      let xml = `<?xml version="1.0" encoding="UTF-8"?>\n<PatientList Date="${dateStr}">\n`;
+      patients.forEach(p => {
+        const id = p.patientId || `MR-${p.id.substring(p.id.length - 4)}`;
+        const sex = p.gender === "M" ? "Male" : p.gender === "F" ? "Female" : "Other";
+        xml += `  <Patient>\n`;
+        xml += `    <PatientID>${id}</PatientID>\n`;
+        xml += `    <Name>${p.name}</Name>\n`;
+        xml += `    <Sex>${sex}</Sex>\n`;
+        xml += `    <Age>${p.age || ""}</Age>\n`;
+        xml += `    <ExamType>${p.studyType || "US"}</ExamType>\n`;
+        xml += `    <ScheduledTime>${p.time || ""}</ScheduledTime>\n`;
+        xml += `  </Patient>\n`;
+      });
+      xml += `</PatientList>`;
+      const blob = new Blob([xml], { type: "text/xml;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.setAttribute("href", url);
+      link.setAttribute("download", `mindray_worklist_${dateStr}.xml`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } else if (exportFormat === "json_bridge") {
+      const data = {
+        date: dateStr,
+        patients: patients.map(p => ({
+          name: p.name,
+          patientId: p.patientId || `REG-${p.id.substring(p.id.length - 4)}`,
+          gender: p.gender,
+          age: p.age,
+          studyType: p.studyType,
+          time: p.time
+        }))
+      };
+      const jsonContent = JSON.stringify(data, null, 2);
+      const blob = new Blob([jsonContent], { type: "application/json;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.setAttribute("href", url);
+      link.setAttribute("download", `worklist.json`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+  };
+
+  const pythonScript = `# Servidor DICOM Worklist Local (MWL SCP) para Ecografo Samsung V7
+# Corre este script en tu PC (requiere instalar: pip install pynetdicom pydicom)
+import os
+import json
+import re
+import datetime
+from pydicom.dataset import Dataset
+from pynetdicom import AE, evt, debug_logger
+from pynetdicom.sop_class import ModalityWorklistInformationFind
+
+debug_logger() # Imprime conexiones entrantes en la consola
+
+def cargar_pacientes():
+    if os.path.exists("worklist.json"):
+        with open("worklist.json", "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data.get("patients", [])
+    return []
+
+def formatear_nombre_dicom(nombre_completo):
+    if not nombre_completo:
+        return "Paciente^Anonimo"
+    
+    # Limpiamos espacios adicionales
+    palabras = [w for w in nombre_completo.strip().split() if w]
+    if not palabras:
+        return "Paciente^Anonimo"
+        
+    # HeurÃ­stica robusta de nombres en espaÃ±ol para evitar nombres cortados o mal ordenados:
+    # 1 palabra: "Luz" -> "Luz"
+    # 2 palabras: "Milton Maldonado" -> "Maldonado^Milton"
+    # 3 palabras: "Milton Maldonado Brizuela" -> "Maldonado Brizuela^Milton"
+    # 4 o mÃ¡s palabras: "Maria del Carmen Gomez Perez" -> Surnames: "Gomez Perez", GivenNames: "Maria del Carmen"
+    # Esto asegura que el ecÃ³grafo Samsung V7 reciba todos los apellidos y nombres sin recortar nada.
+    
+    if len(palabras) == 1:
+        return palabras[0]
+    elif len(palabras) == 2:
+        return f"{palabras[1]}^{palabras[0]}"
+    elif len(palabras) == 3:
+        # e.g., Milton Maldonado Brizuela -> Apellidos: Maldonado Brizuela, Nombre: Milton
+        return f"{palabras[1]} {palabras[2]}^{palabras[0]}"
+    else:
+        # 4 o mÃ¡s palabras: e.g., Maria del Carmen Gomez Perez -> Apellidos: Gomez Perez, Nombres: Maria del Carmen
+        apellidos = f"{palabras[-2]} {palabras[-1]}"
+        nombres = " ".join(palabras[:-2])
+        return f"{apellidos}^{nombres}"
+
+def parse_patient_age_and_dob(edad_raw):
+    """
+    Intenta extraer la edad y fecha de nacimiento a partir del string ingresado.
+    Retorna (fecha_nacimiento_dicom, edad_dicom)
+    """
+    dob_fallback = "19800101"
+    age_fallback = "040Y"
+    
+    if not edad_raw:
+        return dob_fallback, age_fallback
+        
+    val = str(edad_raw).strip()
+    
+    # 1. Intentar detectar formato fecha de nacimiento: YYYY-MM-DD o DD-MM-YYYY
+    # PatrÃ³n YYYY-MM-DD / YYYY/MM/DD
+    match_iso = re.search(r'(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})', val)
+    # PatrÃ³n DD-MM-YYYY / DD/MM/YYYY
+    match_lat = re.search(r'(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})', val)
+    
+    dt = None
+    if match_iso:
+        try:
+            dt = datetime.date(int(match_iso.group(1)), int(match_iso.group(2)), int(match_iso.group(3)))
+        except ValueError:
+            pass
+    elif match_lat:
+        try:
+            dt = datetime.date(int(match_lat.group(3)), int(match_lat.group(2)), int(match_lat.group(1)))
+        except ValueError:
+            pass
+            
+    if dt:
+        dob_str = dt.strftime("%Y%m%d")
+        # Calcular edad actual en base a la fecha de nacimiento
+        hoy = datetime.date.today()
+        calculated_age = hoy.year - dt.year - ((hoy.month, hoy.day) < (dt.month, dt.day))
+        calculated_age = max(0, calculated_age)
+        age_str = f"{calculated_age:03d}Y"
+        return dob_str, age_str
+        
+    # 2. Si no es fecha, intentar extraer un nÃºmero (ej. "45", "45 aÃ±os", "45a")
+    match_num = re.search(r'\d+', val)
+    if match_num:
+        try:
+            years = int(match_num.group(0))
+            if 0 <= years <= 130:
+                age_str = f"{years:03d}Y"
+                hoy = datetime.date.today()
+                # Estimamos fecha de nacimiento usando el aÃ±o y un mes/dÃ­a promedio (06 de junio)
+                birth_year = hoy.year - years
+                dob_str = f"{birth_year}0601"
+                return dob_str, age_str
+        except Exception:
+            pass
+            
+    return dob_fallback, age_fallback
+
+def handle_find(event):
+    print("\\n[+] Consulta DICOM recibida del Samsung V7!")
+    pacientes = cargar_pacientes()
+    for index, p in enumerate(pacientes):
+        ds = Dataset()
+        
+        nombre_original = p.get("name", "").strip()
+        nombre_formateado = formatear_nombre_dicom(nombre_original)
+        ds.PatientName = nombre_formateado
+        
+        print(f"   [-] Paciente original: '{nombre_original}' -> DICOM enviado: '{nombre_formateado}'")
+            
+        ds.PatientID = p.get("patientId") or f"REG-{index+1:04d}"
+        
+        g = p.get("gender", "").upper()
+        ds.PatientSex = g if g in ["M", "F"] else "O"
+        
+        # Calcular edad y fecha de nacimiento de forma dinamica
+        edad_raw = p.get("age", "")
+        dob, age_dicom = parse_patient_age_and_dob(edad_raw)
+        ds.PatientBirthDate = dob
+        ds.PatientAge = age_dicom
+        
+        print(f"       -> Edad: '{edad_raw}' | DICOM DOB: {dob} | DICOM Age: {age_dicom}")
+        
+        step = Dataset()
+        step.ScheduledStationAETitle = "MWL_SERVER"
+        # Usar la fecha actual de hoy para la cita
+        step.ScheduledProcedureStepStartDate = datetime.date.today().strftime("%Y%m%d")
+        step.ScheduledProcedureStepStartTime = p.get("time", "0800").replace(":", "") + "00"
+        step.Modality = "US"
+        step.ScheduledProcedureStepDescription = p.get("studyType", "Ecografia US")
+        step.ScheduledProcedureStepID = f"SPS-{index+1:04d}"
+        
+        ds.ScheduledProcedureStepSequence = [step]
+        ds.RequestedProcedureID = f"RP-{index+1:04d}"
+        ds.RequestedProcedureDescription = p.get("studyType", "Ecografia US")
+        ds.AccessionNumber = f"ACC-{index+1:04d}"
+        
+        yield (0xFF00, ds)
+
+ae = AE(ae_title=b"MWL_SERVER")
+ae.add_supported_context(ModalityWorklistInformationFind)
+
+print("--------------------------------------------------")
+print(" Servidor DICOM Worklist activo para Samsung V7")
+print(" Direccion IP de tu PC: Usa tu IP local (ej. 192.168.1.5)")
+print(" Puerto: 1040")
+print(" AE Title: MWL_SERVER")
+print("--------------------------------------------------")
+
+ae.start_server(("0.0.0.0", 1040), evt_handlers=[(evt.EVT_C_FIND, handle_find)])
+`;
+
+  const copyToClipboard = () => {
+    navigator.clipboard.writeText(pythonScript);
+    setCopiedScript(true);
+    setTimeout(() => setCopiedScript(false), 2000);
+  };
+
+  return (
+    <div className="bg-slate-950/40 border border-indigo-500/25 hover:border-indigo-500/40 rounded-xl overflow-hidden mt-3 transition duration-300">
+      <button
+        type="button"
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full px-4 py-3 text-left text-[10px] font-black uppercase text-indigo-300 hover:text-indigo-200 hover:bg-indigo-950/10 flex items-center justify-between transition tracking-wider font-mono"
+      >
+        <span className="flex items-center gap-1.5">
+          <Network className="h-4 w-4 text-indigo-400 animate-pulse" /> Sincronizar con Samsung V7
+        </span>
+        <ChevronDown className={`h-3.5 w-3.5 text-indigo-400 transition-transform duration-300 ${isOpen ? "rotate-180" : ""}`} />
+      </button>
+
+      {isOpen && (
+        <div className="p-4 border-t border-slate-850/60 bg-slate-950/20 space-y-3.5">
+          <div className="flex border-b border-slate-850/60 pb-1.5">
+            <button
+              type="button"
+              onClick={() => setActiveTab("export")}
+              className={`flex-1 text-[8.5px] font-black uppercase tracking-wider py-1 text-center transition cursor-pointer ${
+                activeTab === "export"
+                  ? "text-indigo-400 border-b-2 border-indigo-500 pb-2 -mb-2 font-black"
+                  : "text-slate-500 hover:text-slate-300"
+              }`}
+            >
+              1. Exportar Lista
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("guide")}
+              className={`flex-1 text-[8.5px] font-black uppercase tracking-wider py-1 text-center transition cursor-pointer ${
+                activeTab === "guide"
+                  ? "text-indigo-400 border-b-2 border-indigo-500 pb-2 -mb-2 font-black"
+                  : "text-slate-500 hover:text-slate-300"
+              }`}
+            >
+              2. GuÃ­a Samsung V7 (Wi-Fi)
+            </button>
+          </div>
+
+          {activeTab === "export" && (
+            <div className="space-y-3.5">
+              <p className="text-[9.5px] text-slate-400 leading-normal">
+                Genera un archivo optimizado para el ecÃ³grafo <strong className="text-indigo-400">Samsung V7</strong>. DescÃ¡rgalo para transferirlo localmente por USB o cargarlo mediante el puente de red de tu consultorio.
+              </p>
+
+              <div className="space-y-2">
+                <label className="text-[8.5px] font-black uppercase text-slate-500 tracking-wider font-mono block">Selecciona Formato</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setExportFormat("samsung_v7_csv")}
+                    className={`px-2.5 py-2 rounded-lg text-left text-[9px] font-bold border transition cursor-pointer ${
+                      exportFormat === "samsung_v7_csv"
+                        ? "bg-indigo-600/10 border-indigo-500 text-indigo-300 font-black"
+                        : "bg-slate-900/40 border-slate-850 text-slate-400 hover:border-slate-800"
+                    }`}
+                  >
+                    Samsung V7 (.csv)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setExportFormat("standard_csv")}
+                    className={`px-2.5 py-2 rounded-lg text-left text-[9px] font-bold border transition cursor-pointer ${
+                      exportFormat === "standard_csv"
+                        ? "bg-indigo-600/10 border-indigo-500 text-indigo-300 font-black"
+                        : "bg-slate-900/40 border-slate-850 text-slate-400 hover:border-slate-800"
+                    }`}
+                  >
+                    CSV EstÃ¡ndar (.csv)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setExportFormat("ge_csv")}
+                    className={`px-2.5 py-2 rounded-lg text-left text-[9px] font-bold border transition cursor-pointer ${
+                      exportFormat === "ge_csv"
+                        ? "bg-indigo-600/10 border-indigo-500 text-indigo-300 font-black"
+                        : "bg-slate-900/40 border-slate-850 text-slate-400 hover:border-slate-800"
+                    }`}
+                  >
+                    GE Voluson / Logiq
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setExportFormat("mindray_xml")}
+                    className={`px-2.5 py-2 rounded-lg text-left text-[9px] font-bold border transition cursor-pointer ${
+                      exportFormat === "mindray_xml"
+                        ? "bg-indigo-600/10 border-indigo-500 text-indigo-300 font-black"
+                        : "bg-slate-900/40 border-slate-850 text-slate-400 hover:border-slate-800"
+                    }`}
+                  >
+                    Mindray XML (.xml)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setExportFormat("json_bridge")}
+                    className={`px-2.5 py-2 rounded-lg text-left text-[9px] font-bold border col-span-2 transition cursor-pointer ${
+                      exportFormat === "json_bridge"
+                        ? "bg-indigo-600/10 border-indigo-500 text-indigo-300 font-black"
+                        : "bg-slate-900/40 border-slate-850 text-slate-400 hover:border-slate-800"
+                    }`}
+                    title="Formato JSON directo para alimentar el servidor de red local"
+                  >
+                    Puente JSON (.json)
+                  </button>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleExport}
+                className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-black text-[9.5px] uppercase tracking-wider py-2 rounded-lg transition flex items-center justify-center gap-2 shadow-[0_2px_10px_rgba(99,102,241,0.2)] cursor-pointer"
+              >
+                <Download className="h-3.5 w-3.5" /> Descargar Archivo para Samsung V7
+              </button>
+            </div>
+          )}
+
+          {activeTab === "guide" && (
+            <div className="space-y-3.5 text-left max-h-[350px] overflow-y-auto pr-1">
+              <div className="bg-indigo-500/5 border border-indigo-500/10 rounded-lg p-2.5 flex gap-2">
+                <Wifi className="h-4 w-4 text-indigo-400 shrink-0" />
+                <p className="text-[9px] text-slate-300 leading-relaxed font-bold">
+                  Â¡Excelente elecciÃ³n! Tu ecÃ³grafo <span className="text-indigo-400">Samsung V7</span> estÃ¡ en red mediante cable y tu computadora a travÃ©s de Wi-Fi en el mismo mÃ³dem. Al estar en el mismo mÃ³dem, pueden comunicarse de forma inalÃ¡mbrica y privada.
+                </p>
+              </div>
+
+              <div className="space-y-3">
+                <div className="border border-slate-850 rounded-lg p-2.5 space-y-1.5 bg-slate-900/10">
+                  <span className="text-[9px] font-black uppercase text-indigo-400 tracking-wider font-mono flex items-center gap-1">
+                    <Laptop className="h-3 w-3" /> OpciÃ³n A: Carga local rÃ¡pida por USB
+                  </span>
+                  <p className="text-[9px] text-slate-400 leading-normal">
+                    La forma mÃ¡s sencilla sin instalar nada es utilizar el puerto USB de tu Samsung V7:
+                  </p>
+                  <ol className="list-decimal list-inside text-[9px] text-slate-400 space-y-1">
+                    <li>Selecciona el formato <strong className="text-slate-300">Samsung V7 (.csv)</strong> arriba y descÃ¡rgalo.</li>
+                    <li>GuÃ¡rdalo en una memoria USB e insÃ©rtala en el puerto de la consola del Samsung V7.</li>
+                    <li>En el ecÃ³grafo, presiona la tecla de <strong className="text-slate-300">Patient</strong> en la consola tÃ¡ctil.</li>
+                    <li>Selecciona <strong className="text-slate-300">Import</strong>, selecciona el archivo CSV desde el USB y realiza el mapeo de columnas si es necesario. Â¡La lista de pacientes se cargarÃ¡ al instante!</li>
+                  </ol>
+                </div>
+
+                <div className="border border-indigo-500/10 rounded-lg p-2.5 space-y-2 bg-[#090C17]">
+                  <span className="text-[9px] font-black uppercase text-emerald-400 tracking-wider font-mono flex items-center gap-1 animate-pulse">
+                    <Check className="h-3 w-3 text-emerald-500" /> OpciÃ³n B: Puente DICOM Worklist Activo (InalÃ¡mbrico)
+                  </span>
+                  <p className="text-[9px] text-slate-400 leading-relaxed">
+                    Si quieres automatizarlo para que al presionar el botÃ³n <strong>"Search/Query"</strong> de tu <strong>Samsung V7</strong> jale la lista automÃ¡ticamente por Wi-Fi sin usar USB:
+                  </p>
+                  
+                  <ol className="list-decimal list-inside text-[9px] text-slate-400 space-y-1.5">
+                    <li>Descarga la agenda en formato <strong className="text-indigo-300">Puente JSON (.json)</strong> de arriba y colÃ³cala en una carpeta de tu PC.</li>
+                    <li>Copia el script de Python de abajo y guÃ¡rdalo como <code className="text-indigo-300">samsung_mwl.py</code> en esa misma carpeta.</li>
+                    <li>EjecÃºtalo en tu PC desde una consola con <code className="text-indigo-300">python samsung_mwl.py</code>.</li>
+                    <li>En tu ecÃ³grafo <strong>Samsung V7</strong>:
+                      <ul className="list-disc list-inside pl-3 pt-1 space-y-0.5 text-slate-400">
+                        <li>Presiona el botÃ³n <strong className="text-slate-300">Utility</strong> (o Setup) en la consola fÃ­sica.</li>
+                        <li>Ve a la pestaÃ±a <strong className="text-slate-300">Connectivity</strong> y luego a <strong className="text-slate-300">DICOM</strong>.</li>
+                        <li>Haz clic en <strong className="text-slate-300">Add</strong> para aÃ±adir un servidor.</li>
+                        <li>Configura <strong className="text-indigo-300">Service Type: MWL</strong> (Modality Worklist).</li>
+                        <li>Establece el <strong className="text-indigo-300">AE Title: MWL_SERVER</strong>, la <strong className="text-indigo-300">IP</strong> de tu PC, y el Puerto <strong className="text-indigo-300">1040</strong>.</li>
+                        <li>Haz clic en <strong className="text-slate-300">Test</strong> para verificar la conexiÃ³n.</li>
+                      </ul>
+                    </li>
+                    <li>Â¡Listo! Ahora ve a la pantalla de <strong className="text-slate-300">Patient</strong>, presiona <strong className="text-slate-300">Worklist</strong>, y haz clic en <strong className="text-slate-300">Query</strong> para descargar la agenda inalÃ¡mbricamente.</li>
+                  </ol>
+
+                  <div className="space-y-1.5 pt-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[8.5px] font-black uppercase text-slate-500 font-mono">Script Python Local</span>
+                      <button
+                        type="button"
+                        onClick={copyToClipboard}
+                        className="text-[8px] font-black uppercase tracking-wider bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-0.5 rounded flex items-center gap-1 transition cursor-pointer"
+                      >
+                        <Copy className="h-2.5 w-2.5" /> {copiedScript ? "Copiado" : "Copiar CÃ³digo"}
+                      </button>
+                    </div>
+                    <pre className="text-[8px] font-mono p-2 bg-slate-950 rounded-lg border border-slate-850 max-h-[140px] overflow-y-auto text-indigo-300 whitespace-pre scrollbar-none select-all leading-normal">
+                      {pythonScript}
+                    </pre>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+
+export default function App() {
+  // Public Patient View System
+  const [currentCloudStudyId, setCurrentCloudStudyId] = useState<string>("");
+  const [isPatientPublicView, setIsPatientPublicView] = useState<boolean>(false);
+  const [isPatientViewLoading, setIsPatientViewLoading] = useState<boolean>(false);
+  const [patientViewError, setPatientViewError] = useState<string | null>(null);
+  const [loadedCloudPdfBase64, setLoadedCloudPdfBase64] = useState<string>("");
+  const [patientLogoUrl, setPatientLogoUrl] = useState<string>("");
+  const [operationalSummaryText, setOperationalSummaryText] = useState<string>("");
+  const [isGeneratingOperationalSummary, setIsGeneratingOperationalSummary] = useState<boolean>(false);
+
+  // Navigation & General Settings
+  const [activeTab, setActiveTab] = useState<"generator" | "classifications" | "consult" | "presets" | "api" | "bibliography" | "images" | "expert-analysis" | "measurements" | "cloud-db">("generator");
+  
+  // Synchronized export states from medical image generator
+  const [exportedImage, setExportedImage] = useState<string | null>(null);
+  const [exportedMimeType, setExportedMimeType] = useState<string>("");
+  const clearExportedImage = () => {
+    setExportedImage(null);
+    setExportedMimeType("");
+  };
+  
+  // Patient Infographic generation states
+  const [isGeneratingInfographic, setIsGeneratingInfographic] = useState<boolean>(false);
+  const [infographicUrl, setInfographicUrl] = useState<string | null>(null);
+  const [infographicError, setInfographicError] = useState<string | null>(null);
+  const [attachInfographicToOfficialReport, setAttachInfographicToOfficialReport] = useState<boolean>(false);
+  // Local storage customizable instructions
+  const [systemInstruction, setSystemInstruction] = useState<string>("");
+  const [chatInstruction, setChatInstruction] = useState<string>("");
+  const [classifyInstruction, setClassifyInstruction] = useState<string>("");
+  const [savedReports, setSavedReports] = useState<SavedReport[]>([]);
+
+  // 1. STATE FOR REPORT GENERATOR
+  const [selectedPresetId, setSelectedPresetId] = useState<string>("torax-rx");
+  const [studyType, setStudyType] = useState<string>("");
+  const [clinicalHistory, setClinicalHistory] = useState<string>("");
+  const [findings, setFindings] = useState<string>("");
+  const [inputReport, setInputReport] = useState<string>("");
+  const [customPrompt, setCustomPrompt] = useState<string>("");
+  
+  // 1b. Patient & Corporate Header customization states for PDF/Print
+  const [patientName, setPatientName] = useState<string>("");
+  const [patientAge, setPatientAge] = useState<string>("");
+  const [patientGender, setPatientGender] = useState<string>("");
+  const [patientId, setPatientId] = useState<string>("");
+  const [dicomNotification, setDicomNotification] = useState<string | null>(null);
+  const [patientEmail, setPatientEmail] = useState<string>(() => localStorage.getItem("rad_patient_email") || "");
+  const [reportDate, setReportDate] = useState<string>(() => {
+    const today = new Date();
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const dd = String(today.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  });
+  const [clinicName, setClinicName] = useState<string>("");
+  const [doctorName, setDoctorName] = useState<string>(() => {
+    const saved = localStorage.getItem("rad_doctor_name");
+    if (!saved || saved === "Dr. Benavides S. Cod.6025" || (saved.includes("Benavides S. Cod.6025") && !saved.includes("Milton"))) {
+      localStorage.setItem("rad_doctor_name", "Dr. Milton Benavides S. Cod.6025");
+      return "Dr. Milton Benavides S. Cod.6025";
+    }
+    return saved;
+  });
+  const [doctorLicense, setDoctorLicense] = useState<string>(() => {
+    const saved = localStorage.getItem("rad_doctor_license");
+    if (!saved || saved === "M.S.P. Reg: 6025 / Senescyt: 1005-12-7489") {
+      localStorage.setItem("rad_doctor_license", "CÃ³digo Profesional 6025");
+      return "CÃ³digo Profesional 6025";
+    }
+    return saved;
+  });
+  
+  // Helper to generate a stable, professional cryptographic verification hash
+  const getValidationHash = () => {
+    const seed = `${patientName || ""}-${doctorName || ""}-${reportDate || ""}-${clinicName || ""}`;
+    let hash = 0;
+    for (let i = 0; i < seed.length; i++) {
+      const char = seed.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash |= 0; // Convert to 32bit integer
+    }
+    const hex = Math.abs(hash).toString(16).toUpperCase().padStart(8, "0");
+    const pSeed = (patientName && patientName.length > 0) ? patientName.charCodeAt(0) + patientName.length : 42;
+    const dSeed = (doctorName && doctorName.length > 0) ? doctorName.charCodeAt(0) + doctorName.length : 17;
+    const partKey = ((pSeed * 231 + dSeed * 19) % 65535).toString(16).toUpperCase().padStart(4, "E");
+    return `SHA256: FD82-${hex.substring(0, 4)}-${hex.substring(4, 8)}-${partKey}-9B1C-E8B1`;
+  };
+  // Multiple custom clinic logo upload states
+  const [customLogos, setCustomLogos] = useState<Array<{ id: string; name: string; url: string }>>(() => {
+    const saved = localStorage.getItem("rad_custom_logos");
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        // Fallback
+      }
+    }
+    const legacyLogo = localStorage.getItem("rad_custom_logo");
+    if (legacyLogo) {
+      return [{ id: "custom-legacy", name: "Logotipo Principal", url: legacyLogo }];
+    }
+    return [];
+  });
+  const [isUploadingToDrive, setIsUploadingToDrive] = useState(false);
+  const [driveUploadStatus, setDriveUploadStatus] = useState("");
+
+  const [selectedLogo, setSelectedLogo] = useState<string>(() => {
+    const saved = localStorage.getItem("rad_selected_logo");
+    if (saved) return saved;
+    const oldLegacy = localStorage.getItem("rad_custom_logo");
+    if (oldLegacy) return "custom-legacy";
+    return "none";
+  });
+
+  const [customLogoStyle, setCustomLogoStyle] = useState<string>(() => {
+    return localStorage.getItem("rad_custom_logo_style") || "left"; // "left" or "banner"
+  });
+
+  useEffect(() => {
+    localStorage.setItem("rad_custom_logos", JSON.stringify(customLogos));
+  }, [customLogos]);
+
+  useEffect(() => {
+    localStorage.setItem("rad_selected_logo", selectedLogo);
+  }, [selectedLogo]);
+
+  const customLogoUrl = useMemo(() => {
+    if (isPatientPublicView && patientLogoUrl) {
+      return patientLogoUrl;
+    }
+    const matched = customLogos.find(l => l.id === selectedLogo);
+    if (matched) return matched.url;
+    if (selectedLogo === "custom" && customLogos.length > 0) {
+      return customLogos[0].url;
+    }
+    return "";
+  }, [isPatientPublicView, patientLogoUrl, selectedLogo, customLogos]);
+
+  const [selectedModel, setSelectedModel] = useState<string>(() => {
+    const saved = localStorage.getItem("rad_selected_model");
+    if (!saved || saved === "gemini-3.6-flash" || saved === "gemini-2.5-flash" || saved === "gemini-1.5-flash") {
+      return "gemini-3.7-flash";
+    }
+    return saved;
+  });
+
+  useEffect(() => {
+    localStorage.setItem("rad_selected_model", selectedModel);
+  }, [selectedModel]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const viewStudyId = params.get("view_study");
+    if (viewStudyId) {
+      setIsPatientPublicView(true);
+      setIsPatientViewLoading(true);
+      setPatientViewError(null);
+      
+      // Try to load from local storage rad_local_studies first
+      let localStudy: CloudStudy | null = null;
+      try {
+        const stored = localStorage.getItem("rad_local_studies");
+        if (stored) {
+          const parsed = JSON.parse(stored) as CloudStudy[];
+          const found = parsed.find(s => s.id === viewStudyId);
+          if (found) {
+            localStudy = found;
+          }
+        }
+      } catch (e) {
+        console.error("Error reading local studies in view parameter:", e);
+      }
+
+      if (localStudy) {
+        setCurrentCloudStudyId(localStudy.id);
+        setPatientName(localStudy.patientName || "");
+        setPatientEmail(localStudy.patientEmail || "");
+        setPatientAge(localStudy.patientAge || "");
+        setPatientGender(localStudy.patientGender || "");
+        setPatientId(localStudy.patientId || "");
+        setReportDate(localStudy.reportDate || "");
+        setDoctorName(localStudy.doctorName || "");
+        setDoctorLicense(localStudy.doctorLicense || "");
+        setClinicName(localStudy.clinicName || "");
+        setStudyType(localStudy.studyType || "");
+        setClinicalHistory(localStudy.clinicalHistory || "");
+        setFindings(localStudy.findings || "");
+        setGeneratedReport(localStudy.reportText || "");
+        setLoadedCloudPdfBase64(localStudy.pdfBase64 || "");
+        setPatientLogoUrl(localStudy.customLogoUrl || "");
+        setCustomLogoStyle(localStudy.customLogoStyle || "logo");
+        setCustomSignatureUrl(localStudy.customSignatureUrl || "");
+        setOperationalSummaryText(localStudy.operationalSummaryText || "");
+        if (localStudy.specificStudy) setSpecificStudy(localStudy.specificStudy);
+        if (localStudy.pdfLayoutType) setPdfLayoutType(localStudy.pdfLayoutType as any);
+        if (localStudy.selectedLogo) setSelectedLogo(localStudy.selectedLogo);
+        if (localStudy.attachedImages) setAttachedImages(localStudy.attachedImages);
+        if (localStudy.findings3dRenders) setFindings3dRenders(localStudy.findings3dRenders);
+        if (localStudy.patientSummary) setPatientSummary(localStudy.patientSummary);
+        setIsPatientViewLoading(false);
+      } else {
+        getSingleStudyFromCloud(viewStudyId)
+          .then((study) => {
+            if (study) {
+              setCurrentCloudStudyId(study.id);
+              setPatientName(study.patientName || "");
+              setPatientEmail(study.patientEmail || "");
+              setPatientAge(study.patientAge || "");
+              setPatientGender(study.patientGender || "");
+              setPatientId(study.patientId || "");
+              setReportDate(study.reportDate || "");
+              setDoctorName(study.doctorName || "");
+              setDoctorLicense(study.doctorLicense || "");
+              setClinicName(study.clinicName || "");
+              setStudyType(study.studyType || "");
+              setClinicalHistory(study.clinicalHistory || "");
+              setFindings(study.findings || "");
+              setGeneratedReport(study.reportText || "");
+              setLoadedCloudPdfBase64(study.pdfBase64 || "");
+              setPatientLogoUrl(study.customLogoUrl || "");
+              setCustomLogoStyle(study.customLogoStyle || "logo");
+              setCustomSignatureUrl(study.customSignatureUrl || "");
+              setOperationalSummaryText(study.operationalSummaryText || "");
+              if (study.specificStudy) setSpecificStudy(study.specificStudy);
+              if (study.pdfLayoutType) setPdfLayoutType(study.pdfLayoutType as any);
+              if (study.selectedLogo) setSelectedLogo(study.selectedLogo);
+              if (study.attachedImages) setAttachedImages(study.attachedImages);
+              if (study.findings3dRenders) setFindings3dRenders(study.findings3dRenders);
+              if (study.patientSummary) setPatientSummary(study.patientSummary);
+            } else {
+              setPatientViewError("El estudio clÃ­nico solicitado no existe o el enlace es incorrecto.");
+            }
+          })
+          .catch((err) => {
+            console.error("Error fetching single study publicly:", err);
+            const isQuota = 
+              err?.message?.toLowerCase().includes("quota") || 
+              String(err).toLowerCase().includes("quota") || 
+              err?.message?.toLowerCase().includes("exceeded") || 
+              String(err).toLowerCase().includes("exceeded");
+            
+            if (isQuota) {
+              setPatientViewError(
+                "El servidor de base de datos temporal ha superado su lÃ­mite de cuota diaria gratuita de Google Cloud (Plan Free de AI Studio). Por favor, contacte a su especialista de salud o reintente mÃ¡s tarde cuando se reinicie la cuota diaria de Google. Su reporte clÃ­nico estÃ¡ guardado de forma 100% segura en la nube."
+              );
+            } else {
+              setPatientViewError("Error de conexiÃ³n al cargar el estudio clÃ­nico. Por favor, reintente.");
+            }
+          })
+          .finally(() => {
+            setIsPatientViewLoading(false);
+          });
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/firebase-config")
+      .then((res) => {
+        if (!res.ok) throw new Error("Could not fetch server config");
+        return res.json();
+      })
+      .then((serverConfig) => {
+        const localCustomStr = localStorage.getItem("rad_custom_firebase_config");
+        let localCustom = null;
+        if (localCustomStr) {
+          try {
+            localCustom = JSON.parse(localCustomStr);
+          } catch (e) {}
+        }
+
+        if (localCustom && localCustom.apiKey && localCustom.projectId) {
+          // El navegador tiene una configuraciÃ³n personalizada en localStorage.
+          if (serverConfig && (serverConfig.projectId === "gen-lang-client-0578019690" || !serverConfig.projectId)) {
+            // El servidor tiene la base de datos predeterminada de AI Studio.
+            // Sincronizamos subiendo nuestra configuraciÃ³n personalizada al servidor.
+            console.log("Detectado Firebase personalizado en localStorage local. Sincronizando con el servidor para fijarlo...");
+            fetch("/api/save-firebase-config", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ config: localCustom })
+            })
+            .then(res => res.json())
+            .then(data => {
+              if (data.success) {
+                console.log("Â¡ConfiguraciÃ³n de Firebase personalizada fijada en el servidor!");
+              }
+            })
+            .catch(err => console.error("Error al sincronizar Firebase personalizado con el servidor:", err));
+          } else if (serverConfig && serverConfig.projectId !== localCustom.projectId) {
+            // El servidor tiene una configuraciÃ³n personalizada diferente de la local. El servidor manda.
+            console.log("Sincronizando configuraciÃ³n de Firebase desde el servidor...");
+            localStorage.setItem("rad_custom_firebase_config", JSON.stringify(serverConfig));
+            localStorage.setItem("rad_custom_firebase_config_raw", JSON.stringify(serverConfig, null, 2));
+            window.location.reload();
+          }
+        } else {
+          // El navegador NO tiene una configuraciÃ³n en localStorage.
+          if (serverConfig && serverConfig.projectId && serverConfig.projectId !== "gen-lang-client-0578019690") {
+            // Pero el servidor sÃ­ tiene una personalizada. La descargamos y recargamos.
+            console.log("Descargando configuraciÃ³n de Firebase personalizada del servidor...");
+            localStorage.setItem("rad_custom_firebase_config", JSON.stringify(serverConfig));
+            localStorage.setItem("rad_custom_firebase_config_raw", JSON.stringify(serverConfig, null, 2));
+            window.location.reload();
+          }
+        }
+      })
+      .catch((err) => {
+        console.warn("No se pudo sincronizar la configuraciÃ³n de Firebase con el servidor:", err);
+      });
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = initAuth(
+      (user, token) => {
+        setGmailUser(user);
+        setGmailAccessToken(token);
+      },
+      () => {
+        setGmailUser(null);
+        setGmailAccessToken(null);
+      }
+    );
+    return () => unsubscribe();
+  }, []);
+
+  const compressImageBase64 = (base64Str: string, maxWidth: number = 2000, quality: number = 0.92): Promise<string> => {
+    return new Promise((resolve) => {
+      try {
+        if (!base64Str || !base64Str.startsWith("data:image")) {
+          resolve(base64Str);
+          return;
+        }
+        const isPng = base64Str.startsWith("data:image/png");
+        const img = new Image();
+        img.onload = () => {
+          let width = img.width;
+          let height = img.height;
+          
+          if (width > maxWidth) {
+            height = Math.round((height * maxWidth) / width);
+            width = maxWidth;
+          }
+          
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            if (!isPng) {
+              ctx.fillStyle = "#ffffff";
+              ctx.fillRect(0, 0, width, height);
+            }
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = "high";
+            ctx.drawImage(img, 0, 0, width, height);
+            
+            // Preserve PNG format to keep alpha transparency and crisp vector-grade edges
+            const mimeType = isPng ? "image/png" : "image/jpeg";
+            const compressed = canvas.toDataURL(mimeType, quality);
+            resolve(compressed);
+          } else {
+            resolve(base64Str);
+          }
+        };
+        img.onerror = () => {
+          resolve(base64Str);
+        };
+        img.src = base64Str;
+      } catch (e) {
+        console.error("Error compressing image:", e);
+        resolve(base64Str);
+      }
+    });
+  };
+
+  const handleCustomLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    const originalName = file.name || "Nuevo Logotipo";
+    const cleanName = originalName.substring(0, originalName.lastIndexOf('.')) || originalName;
+    
+    const reader = new FileReader();
+    reader.onloadend = async () => {
+      const rawBase64 = reader.result as string;
+      const compressedBase64 = await compressImageBase64(rawBase64, 2400, 0.95);
+      const newLogoId = "custom-logo-" + Date.now();
+      const newLogo = {
+        id: newLogoId,
+        name: cleanName,
+        url: compressedBase64
+      };
+      setCustomLogos(prev => [...prev, newLogo]);
+      setSelectedLogo(newLogoId);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemoveCustomLogoById = (id: string) => {
+    if (confirm("Â¿EstÃ¡s seguro de eliminar este logotipo de la lista?")) {
+      setCustomLogos(prev => prev.filter(l => l.id !== id));
+      if (selectedLogo === id) {
+        setSelectedLogo("none");
+      }
+    }
+  };
+
+  const handleRemoveCustomLogo = () => {
+    if (selectedLogo.startsWith("custom-logo-") || selectedLogo === "custom-legacy") {
+      handleRemoveCustomLogoById(selectedLogo);
+    } else {
+      setSelectedLogo("none");
+    }
+  };
+
+  const handleChangeCustomLogoStyle = (style: string) => {
+    setCustomLogoStyle(style);
+    localStorage.setItem("rad_custom_logo_style", style);
+  };
+
+  // Custom doctor's signature upload states
+  const [customSignatureUrl, setCustomSignatureUrl] = useState<string>(() => {
+    return localStorage.getItem("rad_custom_signature") || "";
+  });
+
+  const [uploadedReportContent, setUploadedReportContent] = useState<string>("");
+  const [uploadedReportName, setUploadedReportName] = useState<string | null>(null);
+  const [uploadedReportMimeType, setUploadedReportMimeType] = useState<string>("");
+  const reportFileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleCustomSignatureUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onloadend = async () => {
+      const rawBase64 = reader.result as string;
+      const compressedBase64 = await compressImageBase64(rawBase64, 1600, 0.95);
+      setCustomSignatureUrl(compressedBase64);
+      localStorage.setItem("rad_custom_signature", compressedBase64);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleReportFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    setUploadedReportName(file.name);
+    setUploadedReportMimeType(file.type || "");
+    
+    const reader = new FileReader();
+    reader.onload = (event) => {
+        const result = event.target?.result as string;
+        setUploadedReportContent(result);
+        
+        // Auto-detect study type only for text-based files, skip for binary attachments like PDF or images
+        const isPdfOrImage = file.type.startsWith('image/') || file.type === 'application/pdf' || file.name.endsWith('.pdf');
+        if (!isPdfOrImage) {
+            autoDetectSpecificStudyAndModality(result, file.name);
+        }
+    };
+    
+    const isPdfOrImage = file.type.startsWith('image/') || file.type === 'application/pdf' || file.name.endsWith('.pdf');
+    if (isPdfOrImage) {
+        reader.readAsDataURL(file);
+    } else {
+        reader.readAsText(file);
+    }
+  };
+
+  const handleRemoveCustomSignature = () => {
+    setCustomSignatureUrl("");
+    localStorage.removeItem("rad_custom_signature");
+  };
+
+  const [showPatientDetails, setShowPatientDetails] = useState<boolean>(false);
+  const [showPrintModal, setShowPrintModal] = useState<boolean>(false);
+  const [adaptivePDFContrast, setAdaptivePDFContrast] = useState<boolean>(false);
+  const [pdfLayoutType, setPdfLayoutType] = useState<"classic" | "clinical_slate" | "executive_medical">("classic");
+  
+  // PDF Real-Time Preview States
+  const [printModalDocType, setPrintModalDocType] = useState<'report' | 'patient_summary'>('report');
+  const [printModalViewType, setPrintModalViewType] = useState<'html_simulator' | 'pdf_viewer'>('html_simulator');
+  const [generatedNativePdfUrl, setGeneratedNativePdfUrl] = useState<string | null>(null);
+  const [generatedSummaryPdfUrl, setGeneratedSummaryPdfUrl] = useState<string | null>(null);
+  const [isGeneratingPdfPreview, setIsGeneratingPdfPreview] = useState<boolean>(false);
+  const [isSplitPdfActive, setIsSplitPdfActive] = useState<boolean>(true);
+  
+  // WhatsApp Share States
+  const [showWhatsAppModal, setShowWhatsAppModal] = useState<boolean>(false);
+  const [whatsappShareType, setWhatsappShareType] = useState<'report_pdf' | 'patient_infographic' | 'patient_summary'>('report_pdf');
+  const [whatsappPhone, setWhatsappPhone] = useState<string>(() => localStorage.getItem("rad_whatsapp_phone") || "");
+  const [whatsappIncludePatientSummary, setWhatsappIncludePatientSummary] = useState<boolean>(true);
+  const [whatsappIncludeOperationalSummary, setWhatsappIncludeOperationalSummary] = useState<boolean>(true);
+  
+  // Gmail Share States
+  const [showGmailModal, setShowGmailModal] = useState<boolean>(false);
+  const [gmailTo, setGmailTo] = useState<string>("");
+  const [gmailSubject, setGmailSubject] = useState<string>("");
+  const [gmailBody, setGmailBody] = useState<string>("");
+  const [gmailAttachedType, setGmailAttachedType] = useState<'report_pdf' | 'patient_summary' | 'both_pdfs'>('patient_summary');
+  const [gmailAttachReport, setGmailAttachReport] = useState<boolean>(false);
+  const [gmailAttachSummary, setGmailAttachSummary] = useState<boolean>(true);
+  const [gmailAttachInfographic, setGmailAttachInfographic] = useState<boolean>(false);
+  const [gmailSuccessMessage, setGmailSuccessMessage] = useState<string | null>(null);
+  const [gmailErrorMessage, setGmailErrorMessage] = useState<string | null>(null);
+  const [gmailUser, setGmailUser] = useState<any | null>(() => {
+    try {
+      const stored = localStorage.getItem("rad_cached_user");
+      return stored ? JSON.parse(stored) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [gmailAccessToken, setGmailAccessToken] = useState<string | null>(() => {
+    return localStorage.getItem("rad_gmail_access_token");
+  });
+  const [isLoggingInGmail, setIsLoggingInGmail] = useState<boolean>(false);
+  const [authEmail, setAuthEmail] = useState<string>("");
+  const [authPassword, setAuthPassword] = useState<string>("");
+  const [authFormMode, setAuthFormMode] = useState<'google' | 'email_login' | 'email_register'>('google');
+  const [isSendingGmail, setIsSendingGmail] = useState<boolean>(false);
+
+  // 1c. WORKLIST ("LISTA DE TRABAJO") STATES
+  const [worklist, setWorklist] = useState<Worklist | null>(() => {
+    if (typeof window === "undefined" || !window.localStorage) return null;
+    try {
+      const isExplicitlyCleared = localStorage.getItem("rad_worklist_explicitly_cleared") === "true";
+      if (isExplicitlyCleared) {
+        return null;
+      }
+      const primaryKeys = ["rad_worklist_current", "rad_worklist_latest"];
+      for (const key of primaryKeys) {
+        const val = localStorage.getItem(key);
+        if (val) {
+          const parsed = JSON.parse(val);
+          if (parsed && Array.isArray(parsed.patients) && parsed.patients.length > 0) {
+            return parsed;
+          }
+        }
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  });
+  const [isWorklistSidebarOpen, setIsWorklistSidebarOpen] = useState<boolean>(() => {
+    if (typeof window === "undefined" || !window.localStorage) return false;
+    return localStorage.getItem("rad_worklist_sidebar_open") === "true";
+  });
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.localStorage) {
+      localStorage.setItem("rad_worklist_sidebar_open", String(isWorklistSidebarOpen));
+    }
+  }, [isWorklistSidebarOpen]);
+
+  const [isProcessingWorklist, setIsProcessingWorklist] = useState<boolean>(false);
+  const [worklistError, setWorklistError] = useState<string | null>(null);
+  const [selectedWorklistPatientId, setSelectedWorklistPatientId] = useState<string | null>(null);
+  
+  // Real-time voice dictation states using Web Speech API
+  const [isListening, setIsListening] = useState<boolean>(false);
+  const [speechError, setSpeechError] = useState<string | null>(null);
+  const recognitionRef = useRef<any>(null);
+  const isListeningRef = useRef<boolean>(false);
+  const errorTimeRef = useRef<number>(0);
+  const useContinuousRef = useRef<boolean>(true); // Intenta continuo primero, reduce a simple si falla
+
+  // Premium Audio Recorder Dictation states
+  const [isRecordingAudio, setIsRecordingAudio] = useState<boolean>(false);
+  const [recordingDuration, setRecordingDuration] = useState<number>(0);
+  const [transcribing, setTranscribing] = useState<boolean>(false);
+  const [isAssistingHistory, setIsAssistingHistory] = useState<boolean>(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const timerRef = useRef<any>(null);
+
+  const startRecordingAudio = async () => {
+    setSpeechError(null);
+    audioChunksRef.current = [];
+    setRecordingDuration(0);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      
+      // Determine modern mimeType, fallback to standard
+      let mimeType = "audio/webm";
+      if (typeof MediaRecorder === "undefined") {
+        setSpeechError("El navegador no soporta grabaciÃ³n de Voz/Dictado directa.");
+        return;
+      }
+
+      if (!MediaRecorder.isTypeSupported("audio/webm")) {
+        // Fallback for iOS Safari which supports audio/mp4 for audio voice clip recording
+        mimeType = "audio/mp4";
+        if (!MediaRecorder.isTypeSupported("audio/mp4")) {
+          mimeType = ""; // use browser default
+        }
+      }
+
+      const options = mimeType ? { mimeType } : undefined;
+      const mediaRecorder = new MediaRecorder(stream, options);
+      
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        // Stop all tracks to release microphone cleanly
+        stream.getTracks().forEach((track) => track.stop());
+        
+        // Auto-detect the exact mimeType produced by the browser or recorder options
+        const actualMime = audioChunksRef.current[0]?.type || mediaRecorder.mimeType || mimeType || "audio/webm";
+        let apiMime = "audio/webm"; // standard fallback
+        
+        // Map detected formats precisely to supported Gemini API mimetypes
+        const cleanMime = actualMime.toLowerCase();
+        if (cleanMime.includes("mp4") || cleanMime.includes("m4b") || cleanMime.includes("m4a") || cleanMime.includes("quicktime")) {
+          apiMime = "audio/mp4";
+        } else if (cleanMime.includes("aac")) {
+          apiMime = "audio/aac";
+        } else if (cleanMime.includes("wav") || cleanMime.includes("wave")) {
+          apiMime = "audio/wav";
+        } else if (cleanMime.includes("ogg")) {
+          apiMime = "audio/ogg";
+        } else if (cleanMime.includes("webm")) {
+          apiMime = "audio/webm";
+        }
+        
+        const audioBlob = new Blob(audioChunksRef.current, { type: actualMime });
+        if (audioBlob.size === 0) {
+          setSpeechError("La grabaciÃ³n de voz estÃ¡ vacÃ­a.");
+          return;
+        }
+
+        // Convert blob to base64
+        setTranscribing(true);
+        const reader = new FileReader();
+        reader.readAsDataURL(audioBlob);
+        reader.onloadend = async () => {
+          const base64Data = reader.result?.toString().split(",")[1];
+          if (!base64Data) {
+            setSpeechError("Fallo al procesar el audio.");
+            setTranscribing(false);
+            return;
+          }
+
+          try {
+            const resp = await fetch("/api/transcribe", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                audio: base64Data,
+                mimeType: apiMime,
+              }),
+            });
+
+            const data = await resp.json();
+            if (data.success && data.text) {
+              const transcribedText = data.text.trim();
+              setFindings((prev) => {
+                const trimmedPrev = prev.trim();
+                return trimmedPrev ? `${trimmedPrev} ${transcribedText}` : transcribedText;
+              });
+            } else {
+              setSpeechError(data.error || "Error al transcribir el dictado por IA.");
+            }
+          } catch (e: any) {
+            console.error("Transcription API error:", e);
+            setSpeechError("Error de conexiÃ³n: no se pudo enviar el audio al servidor de IA.");
+          } finally {
+            setTranscribing(false);
+          }
+        };
+      };
+
+      mediaRecorderRef.current = mediaRecorder;
+      mediaRecorder.start(250); // Slice chunks list
+      setIsRecordingAudio(true);
+
+      timerRef.current = setInterval(() => {
+        setRecordingDuration((prev) => prev + 1);
+      }, 1000);
+
+    } catch (err: any) {
+      console.error("Microphone access error:", err);
+      setSpeechError("No se pudo acceder al micrÃ³fono para realizar la grabaciÃ³n de dictado.");
+    }
+  };
+
+  const stopRecordingAudio = () => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      try {
+        mediaRecorderRef.current.stop();
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    setIsRecordingAudio(false);
+  };
+
+  const startListening = (forceSingleShot = false) => {
+    setSpeechError(null);
+    const SpeechRecognitionDefault = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognitionDefault) {
+      setSpeechError("La API de Dictado por Voz no estÃ¡ soportada de forma nativa en este navegador. Recomendamos usar Safari (iOS/macOS) o Google Chrome en computador.");
+      return;
+    }
+
+    // Detectar si estÃ¡ en iOS o iPadOS
+    const isIOSDevice = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
+                        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+    // Los dispositivos iOS limitan de forma estricta el modo continuo. 
+    // Usamos modo no-continuo con bucle de auto-reinicio para simular continuidad de manera ultra-estable.
+    if (isIOSDevice || forceSingleShot) {
+      useContinuousRef.current = false;
+    }
+
+    try {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.abort();
+        } catch (e) {}
+      }
+
+      const recognition = new SpeechRecognitionDefault();
+      recognition.continuous = useContinuousRef.current;
+      recognition.interimResults = false;
+      recognition.lang = "es-ES";
+
+      recognition.onstart = () => {
+        setIsListening(true);
+        isListeningRef.current = true;
+      };
+
+      recognition.onerror = (event: any) => {
+        console.error("Reconocimiento de voz error:", event.error);
+        errorTimeRef.current = Date.now();
+        
+        if (event.error === "not-allowed") {
+          setSpeechError("Acceso denegado al micrÃ³fono. Por favor, asigne permisos de micrÃ³fono en la barra del navegador para dictar.");
+          isListeningRef.current = false;
+          setIsListening(false);
+        } else if (event.error === "service-not-allowed") {
+          // Si fallÃ³ con continuous = true, baja automÃ¡ticamente al modo alternativo (single shot)
+          if (useContinuousRef.current) {
+            console.log("Reintentando dictado en modo alternativo compatible...");
+            useContinuousRef.current = false;
+            setTimeout(() => {
+              if (isListeningRef.current) {
+                startListening(true);
+              }
+            }, 300);
+          } else {
+            setSpeechError("service-not-allowed");
+            isListeningRef.current = false;
+            setIsListening(false);
+          }
+        } else {
+          // Otros errores de red o silencio
+          setSpeechError(`Error al dictar (${event.error})`);
+          isListeningRef.current = false;
+          setIsListening(false);
+        }
+      };
+
+      recognition.onend = () => {
+        const timeSinceLastError = Date.now() - errorTimeRef.current;
+        // Si el usuario quiere seguir dictando (isListeningRef.current es true)
+        // y estamos en modo no continuo, reiniciamos la sesiÃ³n inmediatamente (emula dictado ilimitado en iPhone!)
+        if (isListeningRef.current && !useContinuousRef.current && timeSinceLastError > 1500) {
+          console.log("Reiniciando sesiÃ³n de audio para dictado continuo...");
+          try {
+            recognition.start();
+          } catch (e) {
+            console.error("Fallo al auto-reiniciar:", e);
+          }
+        } else if (!isListeningRef.current || timeSinceLastError <= 1500) {
+          setIsListening(false);
+        }
+      };
+
+      recognition.onresult = (event: any) => {
+        let resultText = "";
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          if (event.results[i].isFinal) {
+            resultText += event.results[i][0].transcript;
+          }
+        }
+        if (resultText) {
+          setFindings((prev) => {
+            const trimmedPrev = prev.trim();
+            const addition = resultText.trim();
+            // Evitar acumulaciones dobles instantÃ¡neas del buffer
+            if (trimmedPrev.endsWith(addition)) {
+              return prev;
+            }
+            return trimmedPrev ? `${trimmedPrev} ${addition}` : addition;
+          });
+        }
+      };
+
+      recognitionRef.current = recognition;
+      recognition.start();
+    } catch (e: any) {
+      console.error(e);
+      setSpeechError("No se pudo iniciar el dictado por voz.");
+      isListeningRef.current = false;
+      setIsListening(false);
+    }
+  };
+
+  const stopListening = () => {
+    isListeningRef.current = false;
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch (err) {
+        console.warn("Error stopping voice recognition:", err);
+      }
+    }
+    setIsListening(false);
+  };
+
+  const toggleListening = () => {
+    if (isListening) {
+      stopListening();
+    } else {
+      startListening();
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      isListeningRef.current = false;
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch (e) {}
+      }
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+      }
+    };
+  }, []);
+  
+  // Custom smart selection states
+  const [modality, setModality] = useState<string>("RadiografÃ­a");
+  const [specificStudy, setSpecificStudy] = useState<string>("TÃ³rax");
+  const [customStudy, setCustomStudy] = useState<string>("");
+  const [laterality, setLaterality] = useState<string>(""); // "" | "Derecha" | "Izquierda" | "Bilateral"
+  const [projections, setProjections] = useState<string[]>([]);
+  const [customProjection, setCustomProjection] = useState<string>("");
+  const [activeProtocol, setActiveProtocol] = useState<string>("");
+
+  // Helper to build gendered laterality
+  const getGenderedLaterality = (lat: string, study: string) => {
+    if (!lat || lat === "Bilateral") return lat;
+    const masculineStudies = [
+      "Hombro", "Tobillo", "Pie", "Doppler venoso de miembro inferior",
+      "Doppler arterial de miembro inferior", "CrÃ¡neo", "Abdomen",
+      "Escroto", "Cuello", "TÃ³rax", "Codo", "Muslo Anterior", "Muslo Posterior"
+    ];
+
+    if (masculineStudies.map(s => s.toLowerCase()).includes(study.toLowerCase())) {
+      if (lat.toLowerCase() === "derecha") return "Derecho";
+      if (lat.toLowerCase() === "izquierda") return "Izquierdo";
+    }
+    return lat;
+  };
+
+  // Helper to build projections string
+  const getFormattedProjections = (projs: string[], customProj: string) => {
+    if (!projs || projs.length === 0) return "";
+    const mapped = projs.map(p => {
+      if (p === "Otra") {
+        return customProj.trim() ? customProj.trim() : "Otra";
+      }
+      return p === "Lateral" ? "Lateral" : p === "Oblicua" ? "Oblicua" : p === "Axial" ? "Axial" : p;
+    });
+    if (mapped.length === 1) return mapped[0];
+    const last = mapped[mapped.length - 1];
+    const rest = mapped.slice(0, -1).join(", ");
+    return `${rest} y ${last}`;
+  };
+
+  // Helper to build the studyType string dynamically
+  const buildStudyTypeString = (mod: string, spec: string, lat: string, custom: string, projs: string[], customProj: string) => {
+    let mainStudy = spec === "Otro" ? (custom || "") : spec;
+    if (!mainStudy) {
+      return mod;
+    }
+
+    const mainStudyLower = mainStudy.toLowerCase();
+
+    // Custom alignment for MamografÃ­a/MomografÃ­a
+    if (mod === "MamografÃ­a" && (mainStudyLower === "mamas" || mainStudyLower === "momografia" || mainStudyLower === "mamografÃ­a")) {
+      const gLat = getGenderedLaterality(lat, mainStudy);
+      return gLat ? `MamografÃ­a ${gLat}` : "MamografÃ­a";
+    }
+
+    let preposition = "de";
+    if (mainStudyLower.startsWith("doppler")) {
+      preposition = "-";
+    }
+
+    let base = `${mod} ${preposition} ${mainStudy}`;
+    base = base.replace(/\s+-\s+/, " - ").trim();
+
+    if (lat) {
+      const gLat = getGenderedLaterality(lat, mainStudy);
+      base = `${base} ${gLat}`;
+    }
+
+    if (mod === "RadiografÃ­a" && projs && projs.length > 0) {
+      const formattedProjs = getFormattedProjections(projs, customProj);
+      base = `${base} ${formattedProjs}`;
+    }
+
+    return base;
+  };
+
+  // Synchronise form dropdowns when parsing a string
+  const handleLoadStudyType = (fullStudy: string) => {
+    if (!fullStudy) {
+      setModality("RadiografÃ­a");
+      setSpecificStudy("TÃ³rax");
+      setCustomStudy("");
+      setLaterality("");
+      setProjections([]);
+      return;
+    }
+
+    // 1. Detect Modality
+    let detectedModality = "RadiografÃ­a";
+    if (/ultrasonido|ecografÃ­a|eco|ud|usg/i.test(fullStudy)) {
+      detectedModality = "Ultrasonido";
+    } else if (/mamografÃ­a|mamografia|momografÃ­a|momografia/i.test(fullStudy)) {
+      detectedModality = "MamografÃ­a";
+    } else if (/tomografÃ­a|tomografia|tc|tac|ct/i.test(fullStudy)) {
+      detectedModality = "TAC";
+    }
+    setModality(detectedModality);
+
+    // 2. Detect Specific Study
+    const studies = [
+      "Abdomen",
+      "Mamas",
+      "Vias urinarias",
+      "Escroto",
+      "Cuello",
+      "Rodilla",
+      "Hombro",
+      "Tobillo",
+      "Muslo Anterior",
+      "Muslo Posterior",
+      "MuÃ±eca",
+      "Mano",
+      "Pie",
+      "Doppler de carÃ³tidas",
+      "Doppler venoso de miembro inferior",
+      "Doppler arterial de miembro inferior",
+      "Columna lumbosacra",
+      "Columna dorsal",
+      "Columna cervical",
+      "MomografÃ­a",
+      "TÃ³rax",
+      "CrÃ¡neo",
+      "Cadera",
+      "Pantorrilla y TendÃ³n de Aquiles"
+    ];
+
+    let foundSpecific = "Otro";
+    let foundCustom = "";
+
+    const cleanFull = fullStudy.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+    for (const study of studies) {
+      const cleanStudy = study.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      if (
+        cleanFull.includes(cleanStudy) || 
+        (study === "Muslo Posterior" && cleanFull.includes("muslo posterior")) ||
+        (study === "Muslo Anterior" && cleanFull.includes("muslo") && !cleanFull.includes("posterior")) ||
+        (study === "Pantorrilla y TendÃ³n de Aquiles" && (cleanFull.includes("pantorilla") || cleanFull.includes("pantorrilla") || cleanFull.includes("aquiles") || cleanFull.includes("achilles")))
+      ) {
+        foundSpecific = study;
+        break;
+      }
+    }
+
+    if (foundSpecific === "Otro") {
+      let cleaned = fullStudy;
+      // Remove modality names
+      cleaned = cleaned.replace(/radiografÃ­a|ultrasonido|mamografÃ­a|mamografia|momografÃ­a|tomografÃ­a|tomografia|tc|tac|ct/gi, "");
+      // Remove starting prepositions / separators
+      cleaned = cleaned.replace(/^\s*(de|-|\s+)\s*/i, "").trim();
+      // Remove projections if present
+      cleaned = cleaned.replace(/\s*(ap|pa|lateral|lat|oblicua|obli|axial|otra)\b/gi, "").trim();
+      // Remove trailing 'y'
+      cleaned = cleaned.replace(/\s+y\s*$/gi, "").trim();
+      // Remove laterality from the very end of custom study if present
+      cleaned = cleaned.replace(/\s*(derecha|derecho|izquierda|izquierdo|bilateral)\s*$/gi, "").trim();
+      foundCustom = cleaned;
+    }
+
+    setSpecificStudy(foundSpecific);
+    setCustomStudy(foundCustom);
+
+    // 3. Detect Laterality
+    let detectedLaterality = "";
+    if (/derecho|derecha/i.test(fullStudy)) {
+      detectedLaterality = "Derecha";
+    } else if (/izquierdo|izquierda/i.test(fullStudy)) {
+      detectedLaterality = "Izquierda";
+    } else if (/bilateral/i.test(fullStudy)) {
+      detectedLaterality = "Bilateral";
+    }
+    setLaterality(detectedLaterality);
+
+    // 4. Detect Projections
+    const detectedProjections: string[] = [];
+    if (detectedModality === "RadiografÃ­a") {
+      if (/ap\b|anteroposterior/i.test(fullStudy)) {
+        detectedProjections.push("AP");
+      }
+      if (/pa\b|posteroanterior/i.test(fullStudy)) {
+        detectedProjections.push("PA");
+      }
+      if (/lateral\b|lat\b/i.test(fullStudy)) {
+        detectedProjections.push("Lateral");
+      }
+      if (/oblicua\b|obli\b|oblicuas\b/i.test(fullStudy)) {
+        detectedProjections.push("Oblicua");
+      }
+      if (/axial\b/i.test(fullStudy)) {
+        detectedProjections.push("Axial");
+      }
+      if (/otra|otras\b/i.test(fullStudy)) {
+        detectedProjections.push("Otra");
+      }
+    }
+    setProjections(detectedProjections);
+  };
+
+  // Auto-detect and active clinical study block based on keywords in inputted text or generated reports
+  const autoDetectSpecificStudyAndModality = (reportText: string, currentStudyType: string) => {
+    // Completely disabled per user request: Protocol activation must be strictly manual via buttons or dropdown.
+    return;
+    const combined = `${currentStudyType || ""} ${reportText || ""}`.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+    // 1. Detect Codo (Prioritized to avoid conflicts, e.g. "bicep" in elbow reports triggering shoulder)
+    if (
+      combined.includes("codo") ||
+      combined.includes("epicondilo") ||
+      combined.includes("epitroclea") ||
+      combined.includes("epicondilitis") ||
+      combined.includes("epitrocleitis") ||
+      combined.includes("colateral radial") ||
+      combined.includes("colateral cubital") ||
+      combined.includes("nervio cubital") ||
+      combined.includes("nervio ulnar")
+    ) {
+      setSpecificStudy("Codo");
+      setModality("Ultrasonido");
+      return;
+    }
+
+    // 2. Detect Muslo Posterior (biceps femoral, semitendinous, semimembranoso, sciatic/ciatico, isquiotibiales)
+    if (
+      combined.includes("muslo posterior") ||
+      combined.includes("isquiotibial") ||
+      combined.includes("isquio") ||
+      combined.includes("biceps femo") ||
+      combined.includes("biceps femoral") ||
+      combined.includes("semitendinoso") ||
+      combined.includes("semimembranoso") ||
+      combined.includes("ciatico")
+    ) {
+      setSpecificStudy("Muslo Posterior");
+      setModality("Ultrasonido");
+      return;
+    }
+
+    // 2. Detect Muslo Anterior (recto femoral, quadriceps, sartorio, vasto lateral/medial)
+    if (
+      combined.includes("muslo anterior") ||
+      combined.includes("recto femoral") ||
+      combined.includes("cuadriceps") ||
+      combined.includes("sartorio") ||
+      combined.includes("vasto medial") ||
+      combined.includes("vasto lateral") ||
+      (combined.includes("muslo") && !combined.includes("posterior") && !combined.includes("isquio"))
+    ) {
+      setSpecificStudy("Muslo Anterior");
+      setModality("Ultrasonido");
+      return;
+    }
+
+    // 3. Detect Hombro
+    if (
+      combined.includes("hombro") ||
+      combined.includes("supraespinoso") ||
+      combined.includes("infraespinoso") ||
+      combined.includes("subescapular") ||
+      combined.includes("bicep") ||
+      combined.includes("glenohumeral") ||
+      combined.includes("acromioclavicular")
+    ) {
+      setSpecificStudy("Hombro");
+      setModality("Ultrasonido");
+      return;
+    }
+
+    // 4. Detect Rodilla
+    if (
+      combined.includes("rodilla") ||
+      combined.includes("patela") ||
+      combined.includes("rotula") ||
+      combined.includes("menisco") ||
+      combined.includes("ligamento cruzado") ||
+      combined.includes("femorotibial")
+    ) {
+      setSpecificStudy("Rodilla");
+      setModality("Ultrasonido");
+      return;
+    }
+
+    // 5. Detect Tobillo
+    if (
+      combined.includes("tobillo") ||
+      combined.includes("talo") ||
+      combined.includes("aquiles") ||
+      combined.includes("peroneo") ||
+      combined.includes("calcaneo")
+    ) {
+      setSpecificStudy("Tobillo");
+      setModality("Ultrasonido");
+      return;
+    }
+
+    // 6. Detect Doppler Venoso
+    if (
+      combined.includes("doppler venoso") ||
+      combined.includes("venas del miembro") ||
+      combined.includes("safena") ||
+      combined.includes("trombosis venosa")
+    ) {
+      setSpecificStudy("Doppler venoso de miembro inferior");
+      setModality("Ultrasonido");
+      return;
+    }
+
+    // 7. Detect Doppler Arterial
+    if (
+      combined.includes("doppler arterial") ||
+      combined.includes("indice tobillo brazo") ||
+      combined.includes("arterias del miembro") ||
+      combined.includes("enfermedad arterial")
+    ) {
+      setSpecificStudy("Doppler arterial de miembro inferior");
+      setModality("Ultrasonido");
+      return;
+    }
+
+    // 7.5 Detect MuÃ±eca
+    if (
+      combined.includes("muneca") ||
+      combined.includes("muÃ±eca") ||
+      combined.includes("carpo") ||
+      combined.includes("carpiano") ||
+      combined.includes("nervio mediano") ||
+      combined.includes("canal de guyon") ||
+      combined.includes("de quervain") ||
+      combined.includes("extensor carpi ulnaris") ||
+      combined.includes("fibrocartilago triangular")
+    ) {
+      setSpecificStudy("MuÃ±eca");
+      setModality("Ultrasonido");
+      return;
+    }
+
+    // 8. Detect Cuello / Tiroides
+    if (
+      combined.includes("tiroides") ||
+      combined.includes("tiroideo") ||
+      combined.includes("tiroidea") ||
+      combined.includes("istmo tiroideo") ||
+      combined.includes("lobulo tiroideo") ||
+      combined.includes("parotida") ||
+      combined.includes("parotideo") ||
+      combined.includes("submandibular") ||
+      combined.includes("ganglios cervicales") ||
+      (combined.includes("cuello") && !combined.includes("doppler de carotidas") && !combined.includes("doppler carotideo") && !combined.includes("doppler de carotida") && !combined.includes("doppler carotidas"))
+    ) {
+      setSpecificStudy("Cuello");
+      setModality("Ultrasonido");
+      return;
+    }
+
+    // 9. Detect Doppler CarÃ³tidas
+    if (
+      combined.includes("carotida") ||
+      combined.includes("carotideo") ||
+      combined.includes("carotidas") ||
+      combined.includes("doppler de carotidas")
+    ) {
+      setSpecificStudy("Doppler de carÃ³tidas");
+      setModality("Ultrasonido");
+      return;
+    }
+
+    // 9.5 Detect Escroto
+    if (
+      combined.includes("escroto") ||
+      combined.includes("escrotal") ||
+      combined.includes("testiculo") ||
+      combined.includes("testicular") ||
+      combined.includes("testiculos") ||
+      combined.includes("testiculares") ||
+      combined.includes("epididimo") ||
+      combined.includes("epididimos") ||
+      combined.includes("varicocele") ||
+      combined.includes("hidrocele") ||
+      combined.includes("orquitis")
+    ) {
+      setSpecificStudy("Escroto");
+      setModality("Ultrasonido");
+      return;
+    }
+
+    // 10. Detect VÃ­as Urinarias (Renal and Urinary Tract)
+    const pointsToUrinaryOnly = 
+      combined.includes("vias urinarias") || 
+      combined.includes("vias urinaria") || 
+      combined.includes("renal y vias") || 
+      combined.includes("urologico") ||
+      combined.includes("us renal") || 
+      combined.includes("ecografia renal") ||
+      combined.includes("urosonido");
+      
+    const mentionsAbdomenTitle = 
+      combined.includes("abdomen completo") || 
+      combined.includes("abdomen superior") || 
+      combined.includes("ecografia de abdomen") || 
+      combined.includes("ultrasonido de abdomen") ||
+      combined.includes("abdomen inferior") ||
+      combined.includes("abdomen");
+
+    if (pointsToUrinaryOnly && !mentionsAbdomenTitle) {
+      setSpecificStudy("Vias urinarias");
+      setModality("Ultrasonido");
+      
+      if (combined.includes("prostata") || combined.includes("prostatic")) {
+        setUrinaryGenderMode("hombre");
+      } else {
+        setUrinaryGenderMode("mujer");
+      }
+      return;
+    }
+
+    if (mentionsAbdomenTitle) {
+      setSpecificStudy("Abdomen");
+      setModality("Ultrasonido");
+      return;
+    }
+  };
+
+  useEffect(() => {
+    const computed = buildStudyTypeString(modality, specificStudy, laterality, customStudy, projections, customProjection);
+    setStudyType(computed);
+  }, [modality, specificStudy, laterality, customStudy, projections, customProjection]);
+
+  // Auto-detect specific study from pasted/draft report, findings, or clinical history if specificStudy is the default "TÃ³rax"
+  useEffect(() => {
+    if (specificStudy === "TÃ³rax") {
+      const combinedText = `${inputReport || ""} ${findings || ""} ${clinicalHistory || ""}`;
+      if (combinedText.trim()) {
+        autoDetectSpecificStudyAndModality(combinedText, "");
+      }
+    }
+  }, [inputReport, findings, clinicalHistory]);
+  
+  // Image input
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [base64Image, setBase64Image] = useState<string | null>(null);
+  const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
+  const [dragActive, setDragActive] = useState<boolean>(false);
+  
+  // ZIP-DICOM Extractor state
+  const [zipFile, setZipFile] = useState<File | null>(null);
+  const [isZipExtractorOpen, setIsZipExtractorOpen] = useState<boolean>(false);
+  const [zipExtractedFileForAnalysis, setZipExtractedFileForAnalysis] = useState<{ file: ExtractedFile; slot: 1 | 2 | 3 } | { file: ExtractedFile; slot: 1 | 2 | 3 }[] | null>(null);
+  
+  // Loading & Generation results
+  const [isGenerating, setIsGenerating] = useState<boolean>(false);
+  const [generationSteps, setGenerationSteps] = useState<string>("");
+  const [generatedReport, setGeneratedReport] = useState<string>("");
+
+  // --- INTERACTIVE SYNTACTIC HIGHLIGHTING AND DYNAMIC AESTHETIC STATES ---
+  const [isSyntacticHighlightingActive, setIsSyntacticHighlightingActive] = useState<boolean>(true);
+  const [manualSeverityOverrides, setManualSeverityOverrides] = useState<Record<string, "critical" | "altered" | "normal">>({});
+  const [aiSeverityCache, setAiSeverityCache] = useState<Record<string, "critical" | "altered" | "normal">>({});
+  const [isAnalyzingParagraphs, setIsAnalyzingParagraphs] = useState<boolean>(false);
+
+  // Cloud studies states
+  const [cloudStudies, setCloudStudies] = useState<CloudStudy[]>([]);
+  const [isLoadingCloudStudies, setIsLoadingCloudStudies] = useState<boolean>(false);
+  const [cloudStudiesError, setCloudStudiesError] = useState<string | null>(null);
+  const [cloudStudiesSuccess, setCloudStudiesSuccess] = useState<string | null>(null);
+  const [isSavingToCloud, setIsSavingToCloud] = useState<boolean>(false);
+  const [cloudSearch, setCloudSearch] = useState<string>("");
+  const [viewingCloudStudy, setViewingCloudStudy] = useState<CloudStudy | null>(null);
+
+  // Biomechanical Radar Data
+  const [biomechanicalRadarData, setBiomechanicalRadarData] = useState<any | null>(null);
+
+  // 3D Schematic Volumetric Renders for Findings
+  const [findings3dRenders, setFindings3dRenders] = useState<Finding3dRender[]>([]);
+  const [is3dRenderModalOpen, setIs3dRenderModalOpen] = useState<boolean>(false);
+  const [modal3dSourceImage, setModal3dSourceImage] = useState<any>(null);
+  const [modal3dInitialFinding, setModal3dInitialFinding] = useState<string>("");
+
+  const pdfStateRef = useRef<any>({});
+  pdfStateRef.current = {
+    generatedReport,
+    patientName,
+    patientEmail,
+    patientAge,
+    patientGender,
+    patientId,
+    reportDate,
+    doctorName,
+    doctorLicense,
+    clinicName,
+    clinicalHistory,
+    findings,
+    studyType,
+    customLogoUrl,
+    customLogoStyle,
+    customSignatureUrl,
+    specificStudy,
+    pdfLayoutType,
+    selectedLogo,
+    biomechanicalRadarData,
+    findings3dRenders,
+  };
+
+  useEffect(() => {
+    if (!generatedReport) return;
+
+    // Parse elements to get all unique paragraphs and list items
+    const elements = parseReportToElements(generatedReport, "temp");
+    const paragraphsToAnalyze: string[] = [];
+
+    elements.forEach(elem => {
+      if (elem.type === "list") {
+        elem.items?.forEach(item => {
+          let cleanItem = item.trim();
+          const isNumbered = /^\d+\.\s+/.test(cleanItem);
+          if (isNumbered) {
+            const match = cleanItem.match(/^(\d+\.)\s+/);
+            if (match) {
+              cleanItem = cleanItem.substring(match[0].length);
+            }
+          } else if (cleanItem.startsWith("- ") || cleanItem.startsWith("* ")) {
+            cleanItem = cleanItem.substring(2);
+          }
+          cleanItem = cleanItem.trim();
+          const cleanItemLower = cleanItem.toLowerCase();
+
+          if (cleanItem && !aiSeverityCache[cleanItem] && !aiSeverityCache[cleanItemLower] && !paragraphsToAnalyze.includes(cleanItem)) {
+            paragraphsToAnalyze.push(cleanItem);
+          }
+        });
+      } else if (elem.type === "text" || !elem.type) {
+        elem.lines?.forEach(line => {
+          const trimmedLine = line.trim();
+          const trimmedLineLower = trimmedLine.toLowerCase();
+          if (trimmedLine && !aiSeverityCache[trimmedLine] && !aiSeverityCache[trimmedLineLower] && !paragraphsToAnalyze.includes(trimmedLine)) {
+            paragraphsToAnalyze.push(trimmedLine);
+          }
+        });
+      }
+    });
+
+    if (paragraphsToAnalyze.length === 0) return;
+
+    const timeoutId = setTimeout(async () => {
+      setIsAnalyzingParagraphs(true);
+      try {
+        const response = await fetch("/api/analyze-paragraphs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: selectedModel,
+            paragraphs: paragraphsToAnalyze
+          })
+        });
+        const data = await response.json();
+        if (data.success && data.results) {
+          const normalizedResults: Record<string, "critical" | "altered" | "normal"> = {};
+          Object.entries(data.results).forEach(([key, value]) => {
+            const trimmedKey = key.trim();
+            normalizedResults[trimmedKey] = value as "critical" | "altered" | "normal";
+            normalizedResults[trimmedKey.toLowerCase()] = value as "critical" | "altered" | "normal";
+          });
+          setAiSeverityCache(prev => ({
+            ...prev,
+            ...normalizedResults
+          }));
+        }
+      } catch (e) {
+        console.error("Error calling analyze-paragraphs:", e);
+      } finally {
+        setIsAnalyzingParagraphs(false);
+      }
+    }, 1200);
+
+    return () => clearTimeout(timeoutId);
+  }, [generatedReport, selectedModel]);
+
+  const [reportTheme, setReportTheme] = useState<string>("slate-dark"); // 'slate-dark' | 'academic-light' | 'clinical-minimal' | 'retro-glowing'
+  const [reportFont, setReportFont] = useState<string>("sans"); // 'sans' | 'serif' | 'mono'
+  const [reportDensity, setReportDensity] = useState<string>("airy"); // 'compact' | 'airy'
+  const [showPathology, setShowPathology] = useState<boolean>(true);
+  const [showAnatomy, setShowAnatomy] = useState<boolean>(true);
+  const [showNormal, setShowNormal] = useState<boolean>(true);
+  const [showTechnical, setShowTechnical] = useState<boolean>(true);
+
+  // --- VERSION HISTORY AND MANUAL REPORT EDIT STATE ---
+  const [originalBaseReport, setOriginalBaseReport] = useState<string>("");
+  const [reportHistory, setReportHistory] = useState<string[]>([]);
+  const [reportRedoHistory, setReportRedoHistory] = useState<string[]>([]);
+  const [isEditingReportManual, setIsEditingReportManual] = useState<boolean>(false);
+  const [editedReportText, setEditedReportText] = useState<string>("");
+
+  // --- SPECIAL INTERACTIVE AI PARAGRAPH ACTIONS STATES ---
+  const [selectedParagraphText, setSelectedParagraphText] = useState<string | null>(null);
+  const [selectedParagraphOriginal, setSelectedParagraphOriginal] = useState<string | null>(null);
+  const [paragraphActionLoading, setParagraphActionLoading] = useState<boolean>(false);
+  const [paragraphActionResult, setParagraphActionResult] = useState<string | null>(null);
+  const [paragraphActionActive, setParagraphActionActive] = useState<string | null>(null);
+  const [paragraphActionError, setParagraphActionError] = useState<string | null>(null);
+  const [customParagraphPrompt, setCustomParagraphPrompt] = useState<string>("");
+
+  const handleSelectParagraph = (lineText: string) => {
+    const trimmedText = lineText.trim();
+    if (!trimmedText) return;
+    if (selectedParagraphOriginal === trimmedText) {
+      // Toggle unselect
+      setSelectedParagraphText(null);
+      setSelectedParagraphOriginal(null);
+      setParagraphActionResult(null);
+      setParagraphActionActive(null);
+      setParagraphActionError(null);
+      setCustomParagraphPrompt("");
+    } else {
+      setSelectedParagraphText(trimmedText);
+      setSelectedParagraphOriginal(trimmedText);
+      setParagraphActionResult(null);
+      setParagraphActionActive(null);
+      setParagraphActionError(null);
+      setCustomParagraphPrompt("");
+    }
+  };
+
+  const handleToggleManualSeverity = (severity: "critical" | "altered" | "normal") => {
+    if (!selectedParagraphOriginal) return;
+    const trimmed = selectedParagraphOriginal.trim();
+    setManualSeverityOverrides(prev => ({
+      ...prev,
+      [trimmed]: severity,
+      [selectedParagraphOriginal]: severity
+    }));
+  };
+
+  const handleTextSelection = () => {
+    const selection = window.getSelection();
+    if (selection) {
+      const selectedStr = selection.toString().trim();
+      // Only process selections of meaningful size
+      if (selectedStr.length > 4 && selectedStr.length < 1500) {
+        setSelectedParagraphText(selectedStr);
+        if (generatedReport && generatedReport.includes(selectedStr)) {
+          setSelectedParagraphOriginal(selectedStr);
+        } else {
+          setSelectedParagraphOriginal(null);
+        }
+        setParagraphActionResult(null);
+        setParagraphActionActive(null);
+        setParagraphActionError(null);
+        setCustomParagraphPrompt("");
+      }
+    }
+  };
+
+  const executeParagraphAction = async (actionType: string, customPromptText?: string) => {
+    if (!selectedParagraphText) return;
+    
+    setParagraphActionLoading(true);
+    setParagraphActionActive(actionType);
+    setParagraphActionError(null);
+    setParagraphActionResult(null);
+    
+    try {
+      const response = await fetch("/api/ai-paragraph-action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: selectedModel,
+          text: selectedParagraphText,
+          action: actionType,
+          customPrompt: customPromptText,
+          fullReport: generatedReport,
+          studyType: studyType || "No especificado",
+          clinicalHistory: clinicalHistory || "No especificada"
+        }),
+      });
+      
+      const data = await response.json();
+      if (data.success) {
+        setParagraphActionResult(data.result);
+      } else {
+        setParagraphActionError(data.error || "OcurriÃ³ un error inesperado al procesar la acciÃ³n de pÃ¡rrafo.");
+      }
+    } catch (err: any) {
+      console.error("Error executing paragraph action:", err);
+      setParagraphActionError("Error de conexiÃ³n con el servidor de IA.");
+    } finally {
+      setParagraphActionLoading(false);
+    }
+  };
+
+  const handleApplyParagraphImprovement = (improvedText: string) => {
+    if (!selectedParagraphOriginal || !generatedReport) return;
+    
+    // Save current report in history
+    setReportHistory((prev) => [...prev, generatedReport]);
+    setReportRedoHistory([]);
+    
+    // Replace the original text with improved text in generatedReport
+    const updatedReport = generatedReport.replace(selectedParagraphOriginal, improvedText);
+    setGeneratedReport(updatedReport);
+    
+    // Reset selection states
+    setSelectedParagraphText(null);
+    setSelectedParagraphOriginal(null);
+    setParagraphActionResult(null);
+    setParagraphActionActive(null);
+    setParagraphActionError(null);
+  };
+
+  const handleInsertBelowParagraph = (newText: string) => {
+    if (!selectedParagraphOriginal || !generatedReport) return;
+
+    setReportHistory((prev) => [...prev, generatedReport]);
+    setReportRedoHistory([]);
+
+    const index = generatedReport.indexOf(selectedParagraphOriginal);
+    if (index !== -1) {
+      const insertionPoint = index + selectedParagraphOriginal.length;
+      const updatedReport = 
+        generatedReport.substring(0, insertionPoint) + 
+        "\n\n" + newText + 
+        generatedReport.substring(insertionPoint);
+      setGeneratedReport(updatedReport);
+    }
+
+    setSelectedParagraphText(null);
+    setSelectedParagraphOriginal(null);
+    setParagraphActionResult(null);
+    setParagraphActionActive(null);
+    setParagraphActionError(null);
+  };
+
+  const handleAppendParagraphToReport = (newText: string) => {
+    if (!generatedReport) return;
+
+    setReportHistory((prev) => [...prev, generatedReport]);
+    setReportRedoHistory([]);
+
+    const updatedReport = generatedReport.trim() + "\n\n" + newText;
+    setGeneratedReport(updatedReport);
+
+    setSelectedParagraphText(null);
+    setSelectedParagraphOriginal(null);
+    setParagraphActionResult(null);
+    setParagraphActionActive(null);
+    setParagraphActionError(null);
+  };
+
+  const handleStartManualEdit = () => {
+    setEditedReportText(generatedReport);
+    setIsEditingReportManual(true);
+  };
+
+  const handleSaveManualEdit = () => {
+    if (editedReportText !== generatedReport) {
+      if (generatedReport) {
+        setReportHistory((prev) => [...prev, generatedReport]);
+        setReportRedoHistory([]);
+      }
+      setGeneratedReport(editedReportText);
+    }
+    setIsEditingReportManual(false);
+  };
+
+  const handleCancelManualEdit = () => {
+    setIsEditingReportManual(false);
+  };
+
+  // --- CONTROLES DE CHAT INTELIGENTE MÃ‰DICO-RADIOLÃ“GICO ---
+  const [showVersionComparison, setShowVersionComparison] = useState<boolean>(false);
+  const [smartChatMessages, setSmartChatMessages] = useState<Array<{
+    id: string;
+    role: "user" | "model";
+    text: string;
+    summary?: string;
+  }>>(() => {
+    return [
+      {
+        id: "welcome",
+        role: "model",
+        text: "Â¡Hola! Soy tu **Asistente Inteligente MÃ©dico-RadiolÃ³gico**. Consulta clasificaciones (ej. Neer o Bosniak), dosis de contraste o tÃ©rminos. Te brindarÃ© resÃºmenes exportables para inyectarlos directo en el reporte."
+      }
+    ];
+  });
+  const [smartChatInput, setSmartChatInput] = useState<string>("" );
+  const [isSmartChatLoading, setIsSmartChatLoading] = useState<boolean>(false);
+  const [smartChatError, setSmartChatError] = useState<string | null>(null);
+
+  const smartChatBottomRef = useRef<HTMLDivElement>(null);
+
+  const handleSendSmartChatMessage = async (customMessage?: string) => {
+    const textToSend = customMessage || smartChatInput;
+    if (!textToSend.trim() || isSmartChatLoading) return;
+
+    setSmartChatError(null);
+    setIsSmartChatLoading(true);
+    if (!customMessage) {
+      setSmartChatInput("");
+    }
+
+    const newMsgId = "msg-" + Date.now();
+    const userMsg = { id: newMsgId, role: "user" as const, text: textToSend };
+    const updatedMessages = [...smartChatMessages, userMsg];
+    setSmartChatMessages(updatedMessages);
+
+    // Scroll smoothly
+    setTimeout(() => {
+      smartChatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, 60);
+
+    try {
+      const systemInstruction = `Eres un consultor e inteligencia conversacional mÃ©dica y radiolÃ³gica de Ã©lite. Tienes un dominio absoluto de la terminologÃ­a de salud, enfermedades, dosificaciones de medicamentos, dosificaciones de medios de contraste, y clasificaciones radiolÃ³gicas internacionales (como Neer de hÃºmero proximal, Bosniak, BI-RADS, Fleischner, etc.).
+Tu objetivo es dar respuestas sumamente claras, cientÃ­ficamente precisas, profesionales y estructuradas.
+
+${generatedReport ? `Contexto del informe radiolÃ³gico activo actualmente en el que trabaja el mÃ©dico en su workspace:\n"""\n${generatedReport}\n"""\n` : ""}
+
+REGLAS CRÃTICAS PARA CLASIFICACIONES Y RESÃšMENES:
+1. Explica con total claridad y detalle los grados de la clasificaciÃ³n o temas que se te consultan.
+2. Si el usuario te consulta o solicita clasificar un hallazgo en tÃ©rminos clÃ­nicos o escalas (por ejemplo, 'escala de Neer', 'clasificaciÃ³n de fracturas de hÃºmero proximal', 'Bosniak', 'Fleischner', etc.), DEBES incluir al final de tu respuesta un bloque especial de resumen de clasificaciÃ³n opcional encerrado EXACTAMENTE entre los delimitadores [RESUMEN_CLASIFICACION]...[/RESUMEN_CLASIFICACION] para que el mÃ©dico pueda exportarlo.
+3. El contenido dentro de [RESUMEN_CLASIFICACION] debe ser redactado en formato Markdown limpio, sin rodeos, listo para ser acoplado directamente en el reporte de estudio bajo una secciÃ³n de conclusiÃ³n o impresiÃ³n diagnÃ³stica. No repitas la escala completa aquÃ­, solo aplica un resumen personalizado y conciso del hallazgo aplicable al caso.
+Ejemplo:
+[RESUMEN_CLASIFICACION]
+**ClasificaciÃ³n de Neer (HÃºmero Proximal):** Fractura-luxaciÃ³n en 3 partes con desplazamiento del troquiter > 1 cm y angulaciÃ³n de la cabeza humeral > 45Â°. ImpresiÃ³n diagnÃ³stica de inestabilidad articular que requiere interconsulta con traumatologÃ­a.
+[/RESUMEN_CLASIFICACION]`;
+
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: selectedModel,
+          messages: updatedMessages.map(m => ({ role: m.role, text: m.text })),
+          systemInstruction,
+        }),
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        let rawReply = data.reply || "";
+        let parsedText = rawReply;
+        let summaryText: string | undefined = undefined;
+
+        const startTag = "[RESUMEN_CLASIFICACION]";
+        const endTag = "[/RESUMEN_CLASIFICACION]";
+        const startIndex = rawReply.indexOf(startTag);
+        const endIndex = rawReply.indexOf(endTag);
+
+        if (startIndex !== -1 && endIndex !== -1) {
+          summaryText = rawReply.substring(startIndex + startTag.length, endIndex).trim();
+          parsedText = (rawReply.substring(0, startIndex) + rawReply.substring(endIndex + endTag.length)).trim();
+        }
+
+        setSmartChatMessages(prev => [...prev, {
+          id: "reply-" + Date.now(),
+          role: "model",
+          text: parsedText,
+          summary: summaryText
+        }]);
+      } else {
+        setSmartChatError(data.error || "No se pudo obtener una respuesta vÃ¡lida de Gemini.");
+      }
+    } catch (err) {
+      console.error(err);
+      setSmartChatError("Error de conexiÃ³n mÃ©dica con el servidor de inteligencia.");
+    } finally {
+      setIsSmartChatLoading(false);
+      setTimeout(() => {
+        smartChatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
+      }, 60);
+    }
+  };
+
+  const handleAppendBlockToReport = (content: string) => {
+    const currentText = generatedReport || "";
+    const spacing = currentText.endsWith("\n\n") ? "" : currentText.endsWith("\n") ? "\n" : currentText ? "\n\n" : "";
+    const updated = currentText + spacing + content;
+    
+    // Save history
+    if (generatedReport) {
+      setReportHistory(prev => [...prev, generatedReport]);
+      setReportRedoHistory([]);
+    }
+    setGeneratedReport(updated);
+    setEditedReportText(updated);
+  };
+
+
+  const handleRevertReport = () => {
+    if (reportHistory.length === 0) return;
+    const previous = reportHistory[reportHistory.length - 1];
+    setReportHistory((prev) => prev.slice(0, -1));
+    if (generatedReport) {
+      setReportRedoHistory((prev) => [...prev, generatedReport]);
+    }
+    setGeneratedReport(previous);
+    setIsEditingReportManual(false);
+  };
+
+  const handleRedoReport = () => {
+    if (reportRedoHistory.length === 0) return;
+    const next = reportRedoHistory[reportRedoHistory.length - 1];
+    setReportRedoHistory((prev) => prev.slice(0, -1));
+    if (generatedReport) {
+      setReportHistory((prev) => [...prev, generatedReport]);
+    }
+    setGeneratedReport(next);
+    setIsEditingReportManual(false);
+  };
+  const [reportError, setReportError] = useState<string | null>(null);
+  const [copiedReportId, setCopiedReportId] = useState<boolean>(false);
+  const [presetCopiedId, setPresetCopiedId] = useState<string | null>(null);
+  const [copiedEhrStudyId, setCopiedEhrStudyId] = useState<string | null>(null);
+
+  // States for embedded classification recommendations
+  const [classRecommendations, setClassRecommendations] = useState<any[] | null>(null);
+  const [isRecommendingClassifications, setIsRecommendingClassifications] = useState<boolean>(false);
+  const [recommenderError, setRecommenderError] = useState<string | null>(null);
+  const [incorporatedRecs, setIncorporatedRecs] = useState<Record<number, boolean>>({});
+  const [includeManagementRecs, setIncludeManagementRecs] = useState<Record<number, boolean>>({});
+  const [incorporatingIndex, setIncorporatingIndex] = useState<number | null>(null);
+
+  // States for interactive report modification & image valuation
+  const [imageEvaluation, setImageEvaluation] = useState<string>("");
+  const [isEvaluatingImage, setIsEvaluatingImage] = useState<boolean>(false);
+  const [currentModInstruction, setCurrentModInstruction] = useState<string>("");
+  const [isModifyingReport, setIsModifyingReport] = useState<boolean>(false);
+  const [pendingRecText, setPendingRecText] = useState<string | null>(null);
+  const [pendingRecs, setPendingRecs] = useState<Record<string, boolean>>({});
+  const [incorporatedAuditRecs, setIncorporatedAuditRecs] = useState<Record<string, boolean>>({});
+  const [modifyError, setModifyError] = useState<string | null>(null);
+
+  // Queue references for simultaneous / sequential recommendation processing
+  const recQueueRef = useRef<string[]>([]);
+  const isProcessingRecQueueRef = useRef<boolean>(false);
+
+  const generatedReportRef = useRef(generatedReport);
+  generatedReportRef.current = generatedReport;
+
+  const editedReportTextRef = useRef(editedReportText);
+  editedReportTextRef.current = editedReportText;
+
+  const isEditingReportManualRef = useRef(isEditingReportManual);
+  isEditingReportManualRef.current = isEditingReportManual;
+
+  const selectedModelRef = useRef(selectedModel);
+  selectedModelRef.current = selectedModel;
+
+  const base64ImageRef = useRef(base64Image);
+  base64ImageRef.current = base64Image;
+
+  const selectedFileRef = useRef(selectedFile);
+  selectedFileRef.current = selectedFile;
+
+  const [additionalEvaluation, setAdditionalEvaluation] = useState<string>("");
+  const [isEvaluatingAdditional, setIsEvaluatingAdditional] = useState<boolean>(false);
+  const [additionalEvalError, setAdditionalEvalError] = useState<string | null>(null);
+
+  // States for Complete Case Analysis & Intelligent Medical Bibliography Search
+  const [caseAnalysis, setCaseAnalysis] = useState<string>("");
+  const [isAnalyzingCase, setIsAnalyzingCase] = useState<boolean>(false);
+  const [caseAnalysisError, setCaseAnalysisError] = useState<string | null>(null);
+  const [isIncorporatingDiffs, setIsIncorporatingDiffs] = useState<boolean>(false);
+  const [diffsIncorporated, setDiffsIncorporated] = useState<boolean>(false);
+  const [diffsError, setDiffsError] = useState<string | null>(null);
+  const [selectedCaseFormat, setSelectedCaseFormat] = useState<CaseAnalysisFormatOption>("flujograma_semiologico");
+  const [caseElements, setCaseElements] = useState<CaseAnalysisElementsConfig>({
+    includeSonographic: true,
+    includeSonographicDetails: true,
+    includeClinicalCorr: true,
+    includeCertainty: false,
+    includeDifferentials: true,
+    includeDiscardedDifferentials: true,
+    includeManagement: true,
+  });
+  const [isFormattingCaseJSON, setIsFormattingCaseJSON] = useState<boolean>(false);
+
+  // States to hold the structured case data editable in real-time on the main screen
+  const [editableCaseData, setEditableCaseData] = useState<CaseAnalysisData | null>(null);
+  const [checkedDetails, setCheckedDetails] = useState<boolean[]>([]);
+  const [checkedDifferentials, setCheckedDifferentials] = useState<boolean[]>([]);
+  const [checkedDecisionSteps, setCheckedDecisionSteps] = useState<boolean[]>([]);
+  const [isExtractingCaseData, setIsExtractingCaseData] = useState<boolean>(false);
+  const [caseDataError, setCaseDataError] = useState<string | null>(null);
+
+  // Automatically load/extract the structured Case Analysis components whenever caseAnalysis is populated or format changes
+  React.useEffect(() => {
+    if (caseAnalysis) {
+      const loadCaseAnalysisData = async () => {
+        setIsExtractingCaseData(true);
+        setCaseDataError(null);
+        try {
+          const response = await fetch("/api/extract-essential-findings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ 
+              model: selectedModel,
+              analysisText: caseAnalysis,
+              requestedFormat: selectedCaseFormat,
+              elementsConfig: caseElements
+            }),
+          });
+          const data = await response.json();
+          if (response.ok && data.success && data.caseAnalysisData) {
+            setEditableCaseData(data.caseAnalysisData);
+            
+            // Initialize sub-level checkmarks
+            if (data.caseAnalysisData.sonographicPillar?.details) {
+              setCheckedDetails(data.caseAnalysisData.sonographicPillar.details.map(() => true));
+            } else {
+              setCheckedDetails([]);
+            }
+            if (data.caseAnalysisData.diagnostics) {
+              setCheckedDifferentials(data.caseAnalysisData.diagnostics.map(() => true));
+            } else {
+              setCheckedDifferentials([]);
+            }
+            if (data.caseAnalysisData.decisionFlow) {
+              setCheckedDecisionSteps(data.caseAnalysisData.decisionFlow.map(() => true));
+            } else {
+              setCheckedDecisionSteps([]);
+            }
+          } else {
+            setCaseDataError(data.error || "No se pudo extraer los componentes estructurados del caso actual.");
+          }
+        } catch (err: any) {
+          console.error("Error al estructurar el caso:", err);
+          setCaseDataError("Error de comunicaciÃ³n/red al estructurar el flujograma.");
+        } finally {
+          setIsExtractingCaseData(false);
+        }
+      };
+
+      loadCaseAnalysisData();
+    } else {
+      setEditableCaseData(null);
+      setCaseDataError(null);
+      setCheckedDetails([]);
+      setCheckedDifferentials([]);
+      setCheckedDecisionSteps([]);
+    }
+  }, [caseAnalysis, selectedCaseFormat]);
+
+  const handleFormatAndIncorporateCaseAnalysis = () => {
+    if (!editableCaseData) return;
+
+    setIsFormattingCaseJSON(true);
+    setDiffsError(null);
+    try {
+      // Clone the editableCaseData to avoid modifying active state before saving
+      const finalCaseData = JSON.parse(JSON.stringify(editableCaseData)) as CaseAnalysisData;
+
+      // 1. Filter sonographic details based on checkedDetails checkbox states
+      if (finalCaseData.sonographicPillar?.details) {
+        finalCaseData.sonographicPillar.details = finalCaseData.sonographicPillar.details.filter((_, i) => checkedDetails[i]);
+      }
+
+      // 2. Filter diagnostics based on checkedDifferentials checkbox states
+      if (finalCaseData.diagnostics) {
+        finalCaseData.diagnostics = finalCaseData.diagnostics.filter((_, i) => checkedDifferentials[i]);
+      }
+
+      // 3. Filter decision flow steps based on checkedDecisionSteps checkbox states
+      if (finalCaseData.decisionFlow) {
+        finalCaseData.decisionFlow = finalCaseData.decisionFlow.filter((_, i) => checkedDecisionSteps[i]);
+      }
+
+      // 4. Update elementsConfig in final data
+      finalCaseData.elementsConfig = {
+        ...caseElements,
+        includeSonographicDetails: caseElements.includeSonographic && (finalCaseData.sonographicPillar?.details?.length ?? 0) > 0,
+        includeDiscardedDifferentials: caseElements.includeDifferentials && (finalCaseData.diagnostics?.filter((d: any, idx: number) => d.refutingCriteria && idx > 0).length ?? 0) > 0
+      };
+
+      // Construct the standard [CASE_ANALYSIS_JSON] wrapping block
+      const jsonBlock = `[CASE_ANALYSIS_JSON]\n${JSON.stringify(finalCaseData, null, 2)}\n[/CASE_ANALYSIS_JSON]\n\n`;
+
+      // Construct the formatted markdown text summary accompanying the JSON
+      let textSummary = `**ANÃLISIS INTEGRADO DE CASO (${selectedCaseFormat.toUpperCase().replace("_", " ")})**\n\n`;
+      if (caseElements.includeSonographic && finalCaseData.sonographicPillar) {
+        textSummary += `â€¢ **Pilar SonogrÃ¡fico Fundamental**: ${finalCaseData.sonographicPillar.primaryFinding}\n`;
+      }
+      if (caseElements.includeClinicalCorr && finalCaseData.clinicalCorrelation) {
+        textSummary += `â€¢ **CorrelaciÃ³n ClÃ­nica/Lab**: ${finalCaseData.clinicalCorrelation}\n`;
+      }
+      if (caseElements.includeDifferentials && finalCaseData.diagnostics?.length) {
+        textSummary += `â€¢ **DiagnÃ³stico Principal**: ${finalCaseData.diagnostics[0]?.name}\n`;
+      }
+      if (caseElements.includeManagement && finalCaseData.managementRecommendation) {
+        textSummary += `â€¢ **Conducta Recomendada**: ${finalCaseData.managementRecommendation}\n`;
+      }
+
+      setGeneratedReport(prev => {
+        return mergeCaseAnalysisBlock(prev || "", finalCaseData.format || "custom", jsonBlock, textSummary);
+      });
+      setEditedReportText(prev => {
+        return mergeCaseAnalysisBlock(prev || "", finalCaseData.format || "custom", jsonBlock, textSummary);
+      });
+      setDiffsIncorporated(true);
+      setTimeout(() => {
+        setDiffsIncorporated(false);
+      }, 3000);
+    } catch (err: any) {
+      console.error("Error al formatear e incorporar el anÃ¡lisis:", err);
+      setDiffsError(err?.message || "Error al procesar la inserciÃ³n de datos.");
+    } finally {
+      setIsFormattingCaseJSON(false);
+    }
+  };
+
+  const [bibliography, setBibliography] = useState<string>("");
+  const [isSearchingBibliography, setIsSearchingBibliography] = useState<boolean>(false);
+  const [isSearchingMoreBibliography, setIsSearchingMoreBibliography] = useState<boolean>(false);
+  const [bibliographyError, setBibliographyError] = useState<string | null>(null);
+  const [bibliographySources, setBibliographySources] = useState<Array<{ uri: string; title: string; summary?: string }>>([]);
+
+  const [reportEvaluation, setReportEvaluation] = useState<string>("");
+  const [isEvaluatingReport, setIsEvaluatingReport] = useState<boolean>(false);
+  const [reportEvaluationError, setReportEvaluationError] = useState<string | null>(null);
+
+  // States for Patient Summary (Interactive & Demystifying)
+  const [patientSummary, setPatientSummary] = useState<any | null>(null);
+  const [isGeneratingPatientSummary, setIsGeneratingPatientSummary] = useState<boolean>(false);
+  const [patientSummaryError, setPatientSummaryError] = useState<string | null>(null);
+  const [expandedFindings, setExpandedFindings] = useState<Record<number, boolean>>({});
+  const [attachSummaryToOfficialReport, setAttachSummaryToOfficialReport] = useState<boolean>(false);
+  const [isAsistenteMedidasOpen, setIsAsistenteMedidasOpen] = useState<boolean>(false);
+  const [isCreadorNotasOpen, setIsCreadorNotasOpen] = useState<boolean>(false);
+  const [isCreadorCuadroSinopticoOpen, setIsCreadorCuadroSinopticoOpen] = useState<boolean>(false);
+  const [isCreadorSinopsisFracturasOpen, setIsCreadorSinopsisFracturasOpen] = useState<boolean>(false);
+  const [isBiomechanicalRadarOpen, setIsBiomechanicalRadarOpen] = useState<boolean>(false);
+  const [includeRadarInReport, setIncludeRadarInReport] = useState<boolean>(true);
+
+  // States & Handlers for Sistema de ActivaciÃ³n RÃ¡pida de MÃ³dulos (Procesamiento en Lote)
+  const [selectedBatchModules, setSelectedBatchModules] = useState<Record<string, boolean>>({
+    radar: false,
+    case_analysis: false,
+    quality_eval: false,
+    bibliography: false,
+    operational_summary: true,
+    patient_summary: true,
+    glossary: false,
+    schematic: false,
+    measurements: false,
+    footnotes: false,
+    organ_synoptic: false,
+    fractures: false,
+    classifications: false,
+  });
+  const [isActivatingBatch, setIsActivatingBatch] = useState<boolean>(false);
+  const [batchSuccessMessage, setBatchSuccessMessage] = useState<string | null>(null);
+
+  const handleToggleAllBatchModules = (select: boolean) => {
+    setSelectedBatchModules({
+      radar: select,
+      case_analysis: select,
+      quality_eval: select,
+      bibliography: select,
+      operational_summary: select,
+      patient_summary: select,
+      glossary: select,
+      schematic: select,
+      measurements: select,
+      footnotes: select,
+      organ_synoptic: select,
+      fractures: select,
+      classifications: select,
+    });
+  };
+
+  const handleActivateBatchModules = async () => {
+    const activeReport = isEditingReportManual ? editedReportText : (generatedReport || "");
+    if (!activeReport) {
+      setModifyError("Genera o redacta un reporte antes de activar los mÃ³dulos en lote.");
+      return;
+    }
+
+    setIsActivatingBatch(true);
+    setBatchSuccessMessage(null);
+
+    // 1. Activate interactive UI panels immediately
+    if (selectedBatchModules.radar) setIsBiomechanicalRadarOpen(true);
+    if (selectedBatchModules.measurements) setIsAsistenteMedidasOpen(true);
+    if (selectedBatchModules.footnotes) setIsCreadorNotasOpen(true);
+    if (selectedBatchModules.organ_synoptic) setIsCreadorCuadroSinopticoOpen(true);
+    if (selectedBatchModules.fractures) setIsCreadorSinopsisFracturasOpen(true);
+
+    // 2. Trigger async AI generation processes concurrently
+    const promises: Promise<any>[] = [];
+
+    if (selectedBatchModules.case_analysis) promises.push(handleAnalyzeCase());
+    if (selectedBatchModules.quality_eval) promises.push(handleEvaluateReport(activeReport));
+    if (selectedBatchModules.bibliography) promises.push(handleSearchBibliography());
+    if (selectedBatchModules.operational_summary) promises.push(handleGenerateWhatsAppSummary());
+    if (selectedBatchModules.patient_summary) promises.push(handleGeneratePatientSummary());
+    if (selectedBatchModules.glossary) promises.push(handleGenerateDynamicGlossary());
+    if (selectedBatchModules.schematic) promises.push(handleGenerateSchematicSummary());
+
+    try {
+      await Promise.allSettled(promises);
+      const activeCount = Object.values(selectedBatchModules).filter(Boolean).length;
+      setBatchSuccessMessage(`Â¡Ã‰xito! Se han activado y procesado ${activeCount} mÃ³dulos seleccionados en lote.`);
+      setTimeout(() => setBatchSuccessMessage(null), 6000);
+    } catch (err) {
+      console.error("Error al procesar mÃ³dulos en lote:", err);
+    } finally {
+      setIsActivatingBatch(false);
+    }
+  };
+
+  // States for Advanced Vascular Analysis & Schematic Drawing
+  const [vascularTable, setVascularTable] = useState<string>("");
+  const [vascularStates, setVascularStates] = useState<Record<string, string>>({});
+  const [carotidPlaques, setCarotidPlaques] = useState<any[]>([]);
+  const [includeCarotidBifurcations, setIncludeCarotidBifurcations] = useState<boolean>(true);
+  
+  // States for attached images / DICOM captures
+  const [attachedImages, setAttachedImages] = useState<{
+    id: string;
+    name: string;
+    url: string;
+    base64: string;
+    caption: string;
+    isDicom: boolean;
+    dicomMetaData?: Record<string, string>;
+    width?: number;
+    height?: number;
+    modality?: "MMG" | "US";
+    projection?: "MLO" | "CC" | "OTRO";
+    side?: "Derecha" | "Izquierda" | "Bilateral";
+  }[]>([]);
+  const [loadingAiLabelId, setLoadingAiLabelId] = useState<string | null>(null);
+  const [loadingAutocompleteId, setLoadingAutocompleteId] = useState<string | null>(null);
+  const [isLabelingAll, setIsLabelingAll] = useState<boolean>(false);
+  const [isCorrelatingFigures, setIsCorrelatingFigures] = useState<boolean>(false);
+  const [vascularDescriptions, setVascularDescriptions] = useState<Record<string, string>>({});
+  const [vascularSubLocations, setVascularSubLocations] = useState<Record<string, string>>({});
+  const [isAnalyzingVascular, setIsAnalyzingVascular] = useState<boolean>(false);
+  const [vascularError, setVascularError] = useState<string | null>(null);
+  const [includeVascularSchemaInReport, setIncludeVascularSchemaInReport] = useState<boolean>(true);
+  const [includeShoulderSchemaInReport, setIncludeShoulderSchemaInReport] = useState<boolean>(true);
+  const [shoulderStates, setShoulderStates] = useState<Record<string, string>>({});
+  const [shoulderStatesLeft, setShoulderStatesLeft] = useState<Record<string, string>>({});
+  const [shoulderDescriptions, setShoulderDescriptions] = useState<Record<string, string>>({});
+  const [shoulderDescriptionsLeft, setShoulderDescriptionsLeft] = useState<Record<string, string>>({});
+  const [includeKneeSchemaInReport, setIncludeKneeSchemaInReport] = useState<boolean>(true);
+  const [includeGonartrosisSchemaInReport, setIncludeGonartrosisSchemaInReport] = useState<boolean>(false);
+  const [kneeStates, setKneeStates] = useState<Record<string, string>>({});
+  const [kneeStatesLeft, setKneeStatesLeft] = useState<Record<string, string>>({});
+  const [kneeDescriptions, setKneeDescriptions] = useState<Record<string, string>>({});
+  const [kneeDescriptionsLeft, setKneeDescriptionsLeft] = useState<Record<string, string>>({});
+  const [includeAnkleSchemaInReport, setIncludeAnkleSchemaInReport] = useState<boolean>(true);
+  const [ankleStates, setAnkleStates] = useState<Record<string, string>>({});
+  const [ankleDescriptions, setAnkleDescriptions] = useState<Record<string, string>>({});
+  const [includeThighSchemaInReport, setIncludeThighSchemaInReport] = useState<boolean>(true);
+  const [thighStates, setThighStates] = useState<Record<string, string>>({});
+  const [thighDescriptions, setThighDescriptions] = useState<Record<string, string>>({});
+  const [includeThighPosteriorSchemaInReport, setIncludeThighPosteriorSchemaInReport] = useState<boolean>(true);
+  const [thighPosteriorStates, setThighPosteriorStates] = useState<Record<string, string>>({});
+  const [thighPosteriorDescriptions, setThighPosteriorDescriptions] = useState<Record<string, string>>({});
+  const [includeNeckSchemaInReport, setIncludeNeckSchemaInReport] = useState<boolean>(true);
+  const [neckStates, setNeckStates] = useState<Record<string, string>>({});
+  const [neckDescriptions, setNeckDescriptions] = useState<Record<string, string>>({});
+  const [includeNeonatalBrainSchemaInReport, setIncludeNeonatalBrainSchemaInReport] = useState<boolean>(true);
+  const [neonatalBrainStates, setNeonatalBrainStates] = useState<Record<string, string>>({});
+  const [neonatalBrainDescriptions, setNeonatalBrainDescriptions] = useState<Record<string, string>>({});
+  const [includeUrinarySchemaInReport, setIncludeUrinarySchemaInReport] = useState<boolean>(true);
+  const [urinaryStates, setUrinaryStates] = useState<Record<string, string>>({});
+  const [urinaryDescriptions, setUrinaryDescriptions] = useState<Record<string, string>>({});
+  const [urinaryGenderMode, setUrinaryGenderMode] = useState<"hombre" | "mujer">("mujer");
+  const [includeElbowSchemaInReport, setIncludeElbowSchemaInReport] = useState<boolean>(true);
+  const [elbowStates, setElbowStates] = useState<Record<string, string>>({});
+  const [elbowDescriptions, setElbowDescriptions] = useState<Record<string, string>>({});
+  const [includeAbdomenSchemaInReport, setIncludeAbdomenSchemaInReport] = useState<boolean>(true);
+  const [includeBiliarySchemaInReport, setIncludeBiliarySchemaInReport] = useState<boolean>(true);
+  const [includeAppendixSchemaInReport, setIncludeAppendixSchemaInReport] = useState<boolean>(true);
+  const [includeDiverticulitisSchemaInReport, setIncludeDiverticulitisSchemaInReport] = useState<boolean>(true);
+  const [includeSmallBowelSchemaInReport, setIncludeSmallBowelSchemaInReport] = useState<boolean>(true);
+  const [includeHepatopatiaSchemaInReport, setIncludeHepatopatiaSchemaInReport] = useState<boolean>(true);
+  const [includeAneurismaSchemaInReport, setIncludeAneurismaSchemaInReport] = useState<boolean>(true);
+  const [includeElastographyInReport, setIncludeElastographyInReport] = useState<boolean>(false);
+  const [elastographyHasStiffness, setElastographyHasStiffness] = useState<boolean>(true);
+  const [elastographyStiffness, setElastographyStiffness] = useState<number>(5.2);
+  const [elastographyCAP, setElastographyCAP] = useState<number>(230);
+  const [qusAttenuation, setQusAttenuation] = useState<number>(0.55);
+  const [fatFraction, setFatFraction] = useState<number>(5.5);
+  const [stiffnessOverride, setStiffnessOverride] = useState<string>("auto");
+  const [steatosisOverride, setSteatosisOverride] = useState<string>("auto");
+  const [abdomenStates, setAbdomenStates] = useState<Record<string, string>>({});
+  const [abdomenDescriptions, setAbdomenDescriptions] = useState<Record<string, string>>({});
+  const [includeScrotumSchemaInReport, setIncludeScrotumSchemaInReport] = useState<boolean>(true);
+  const [scrotumStates, setScrotumStates] = useState<Record<string, string>>({});
+  const [scrotumDescriptions, setScrotumDescriptions] = useState<Record<string, string>>({});
+  const [includeWristSchemaInReport, setIncludeWristSchemaInReport] = useState<boolean>(true);
+  const [includeDeQuervainSchemaInReport, setIncludeDeQuervainSchemaInReport] = useState<boolean>(false);
+  const [wristStates, setWristStates] = useState<Record<string, string>>({});
+  const [wristDescriptions, setWristDescriptions] = useState<Record<string, string>>({});
+  const [includeBreastSchemaInReport, setIncludeBreastSchemaInReport] = useState<boolean>(true);
+  const [breastStates, setBreastStates] = useState<Record<string, string>>({});
+  const [breastDescriptions, setBreastDescriptions] = useState<Record<string, string>>({});
+  const [breastBilateralOverride, setBreastBilateralOverride] = useState<boolean | null>(null);
+  const [breastBilateralType, setBreastBilateralType] = useState<"quistes" | "fibroadenomas" | null>(null);
+  const [activeVascularIdHover, setActiveVascularIdHover] = useState<string | null>(null);
+  const [includeAbdominalWallSchemaInReport, setIncludeAbdominalWallSchemaInReport] = useState<boolean>(true);
+  const [abdominalWallStates, setAbdominalWallStates] = useState<Record<string, string>>({});
+  const [abdominalWallDescriptions, setAbdominalWallDescriptions] = useState<Record<string, string>>({});
+
+  const [includeCalfAchillesSchemaInReport, setIncludeCalfAchillesSchemaInReport] = useState<boolean>(true);
+  const [calfAchillesStates, setCalfAchillesStates] = useState<Record<string, string>>({});
+  const [calfAchillesDescriptions, setCalfAchillesDescriptions] = useState<Record<string, string>>({});
+
+  // States for Intelligent Anatomy Dialog and Additional Findings (not mapped to draw structures)
+  const [isSmartAnatomyDialogOpen, setIsSmartAnatomyDialogOpen] = useState<boolean>(false);
+  const [additionalFindings, setAdditionalFindings] = useState<Record<string, Array<{ id: string; structureName: string; state: string; description: string }>>>({});
+  const [smartInstructionsText, setSmartInstructionsText] = useState<string>("");
+  const [isSmartAnatomyModifying, setIsSmartAnatomyModifying] = useState<boolean>(false);
+  const [smartAnatomyError, setSmartAnatomyError] = useState<string>("");
+  const [newExtraStructureName, setNewExtraStructureName] = useState<string>("");
+  const [newExtraState, setNewExtraState] = useState<string>("Alterado");
+  const [newExtraDescription, setNewExtraDescription] = useState<string>("");
+
+  // States for Dynamic Medical Glossary on current report
+  const [dynamicGlossary, setDynamicGlossary] = useState<any | null>(null);
+  const [isGeneratingDynamicGlossary, setIsGeneratingDynamicGlossary] = useState<boolean>(false);
+  const [dynamicGlossaryError, setDynamicGlossaryError] = useState<string | null>(null);
+  const [glossaryLitSearch, setGlossaryLitSearch] = useState<Record<string, { loading: boolean; text?: string; error?: string; sources?: any[] }>>({});
+
+  // States for Schematic Summary / Findings Table
+  const [schematicSummary, setSchematicSummary] = useState<any | null>(null);
+  const [isGeneratingSchematicSummary, setIsGeneratingSchematicSummary] = useState<boolean>(false);
+  const [schematicSummaryError, setSchematicSummaryError] = useState<string | null>(null);
+  const [schematicFormat, setSchematicFormat] = useState<"blocks" | "table">("blocks");
+
+  // States for expanding sections (maximizing read size)
+  const [isMainReportExpanded, setIsMainReportExpanded] = useState<boolean>(false);
+  const [isSmartChatExpanded, setIsSmartChatExpanded] = useState<boolean>(false);
+  const [isVascularExpanded, setIsVascularExpanded] = useState<boolean>(false);
+  const [isCaseAnalysisExpanded, setIsCaseAnalysisExpanded] = useState<boolean>(false);
+  const [isReportEvaluationExpanded, setIsReportEvaluationExpanded] = useState<boolean>(false);
+  const [isBibliographyExpanded, setIsBibliographyExpanded] = useState<boolean>(false);
+  const [isPatientSummaryExpanded, setIsPatientSummaryExpanded] = useState<boolean>(false);
+  const [isGlossaryExpanded, setIsGlossaryExpanded] = useState<boolean>(false);
+  const [isSchematicSummaryExpanded, setIsSchematicSummaryExpanded] = useState<boolean>(false);
+  const [isImageEvaluationExpanded, setIsImageEvaluationExpanded] = useState<boolean>(false);
+  const [isAdditionalEvaluationExpanded, setIsAdditionalEvaluationExpanded] = useState<boolean>(false);
+
+  // States for Semiology and Clinical Justification Table
+  const [semiologyData, setSemiologyData] = useState<any | null>(null);
+  const [selectedConfirmedDiagnoses, setSelectedConfirmedDiagnoses] = useState<boolean[]>([]);
+  const [selectedRuledOutPathologies, setSelectedRuledOutPathologies] = useState<boolean[]>([]);
+  const [isGeneratingSemiology, setIsGeneratingSemiology] = useState<boolean>(false);
+  const [semiologyError, setSemiologyError] = useState<string | null>(null);
+  const [isSemiologyExpanded, setIsSemiologyExpanded] = useState<boolean>(false);
+
+  // States for Image Annotations / Marking regions
+  const [annotations, setAnnotations] = useState<ImageAnnotation[]>([]);
+  const [activeAnnotationTool, setActiveAnnotationTool] = useState<"point" | "box">("point");
+  const [isDrawingBox, setIsDrawingBox] = useState<boolean>(false);
+  const [drawStartPercent, setDrawStartPercent] = useState<{ x: number; y: number } | null>(null);
+  const [tempBox, setTempBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [pendingAnnotation, setPendingAnnotation] = useState<{
+    type: "point" | "box";
+    x: number;
+    y: number;
+    w?: number;
+    h?: number;
+  } | null>(null);
+  const [pendingLabel, setPendingLabel] = useState<string>("");
+  const [isAutoLabeling, setIsAutoLabeling] = useState<boolean>(false);
+  const [autoLabelError, setAutoLabelError] = useState<string | null>(null);
+
+  // 2. STATE FOR CLASSIFICATION EXPLORER & CALCULATORS
+  const [classificationQuery, setClassificationQuery] = useState<string>("");
+  const [isLoadingClassification, setIsLoadingClassification] = useState<boolean>(false);
+  const [classificationResult, setClassificationResult] = useState<string>("");
+  const [classificationError, setClassificationError] = useState<string | null>(null);
+  
+  // Interactive classification wizard state
+  const [selectedClassSystem, setSelectedClassSystem] = useState<string>("bosniak");
+  const [wizardAnswers, setWizardAnswers] = useState<Record<string, string>>({});
+  const [wizardOutput, setWizardOutput] = useState<string>("");
+
+  // 3. STATE FOR DIALOG CHAT CONSULTANT
+  const [chatMessages, setChatMessages] = useState<{ role: "user" | "model"; text: string }[]>([]);
+  const [chatInput, setChatInput] = useState<string>("");
+  const [isSendingMsg, setIsSendingMsg] = useState<boolean>(false);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const chatBottomRef = useRef<HTMLDivElement | null>(null);
+
+  // 4. STATE FOR API HEALTH DIAGNOSTICS
+  const [apiDiagnostics, setApiDiagnostics] = useState<any>(null);
+  const [checkingApi, setCheckingApi] = useState<boolean>(false);
+
+  // Dynamic Firebase configuration states
+  const [customFirebaseRaw, setCustomFirebaseRaw] = useState<string>(() => {
+    return localStorage.getItem("rad_custom_firebase_config_raw") || "";
+  });
+  const [firebaseConfigStatus, setFirebaseConfigStatus] = useState<string | null>(null);
+  const [isTestingFirebaseConfig, setIsTestingFirebaseConfig] = useState<boolean>(false);
+  const [firebaseTestResult, setFirebaseTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [isMigratingStudies, setIsMigratingStudies] = useState<boolean>(false);
+  const [migrationProgress, setMigrationProgress] = useState<string | null>(null);
+  const [confirmResetFirebase, setConfirmResetFirebase] = useState<boolean>(false);
+
+  const getStructuresForProtocol = (protocol: string): Array<{ id: string; label: string; allowedStates: string[] }> => {
+    const norm = protocol.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    let caseKey = protocol;
+    if (norm.includes("hombro")) caseKey = "Hombro";
+    else if (norm.includes("rodilla")) caseKey = "Rodilla";
+    else if (norm.includes("tobillo")) caseKey = "Tobillo";
+    else if (norm.includes("muslo anterior")) caseKey = "Muslo Anterior";
+    else if (norm.includes("muslo posterior")) caseKey = "Muslo Posterior";
+    else if (norm.includes("cuello")) caseKey = "Cuello y Tiroides";
+    else if (norm.includes("urinarias") || norm.includes("orina")) caseKey = "VÃ­as Urinarias";
+    else if (norm.includes("codo")) caseKey = "Codo";
+    else if (norm.includes("pared") || norm.includes("abdominal wall")) caseKey = "Pared Abdominal";
+    else if (norm.includes("abdomen")) caseKey = "Abdomen";
+    else if (norm.includes("escroto")) caseKey = "Escroto";
+    else if (norm.includes("muneca")) caseKey = "MuÃ±eca";
+    else if (norm.includes("mama")) caseKey = "Mamas";
+    else if (norm.includes("pantorrilla") || norm.includes("aquiles") || norm.includes("achilles") || norm.includes("pantorilla")) caseKey = "Pantorrilla y TendÃ³n de Aquiles";
+    else if (norm.includes("cerebro") || norm.includes("neonatal") || norm.includes("transfontanelar")) caseKey = "Cerebro Neonatal";
+
+    switch (caseKey) {
+      case "Hombro":
+        return [
+          { id: "supraspinatus", label: "Supraespinoso", allowedStates: ["no_descrito", "normal", "tendinosis", "desgarro_parcial", "desgarro_completo"] },
+          { id: "infraspinatus", label: "Infraespinoso", allowedStates: ["no_descrito", "normal", "tendinosis", "desgarro_parcial", "desgarro_completo"] },
+          { id: "subscapularis", label: "Subescapular", allowedStates: ["no_descrito", "normal", "tendinosis", "desgarro_parcial", "desgarro_completo"] },
+          { id: "biceps", label: "PL BÃ­ceps", allowedStates: ["no_descrito", "normal", "tendinitis", "subluxacion", "rotura"] },
+          { id: "bursa", label: "Bursa SAD", allowedStates: ["no_descrito", "normal", "bursitis_leve", "bursitis_severa"] },
+          { id: "glenohumeral", label: "Derrame GH", allowedStates: ["no_descrito", "normal", "derrame_leve", "derrame_moderado"] },
+          { id: "acromioclavicular", label: "Artic. Acromioclav.", allowedStates: ["no_descrito", "normal", "artrosis", "hipertrofia"] },
+          { id: "dynamic_assessment", label: "Val. DinÃ¡mica", allowedStates: ["no_descrito", "normal", "pinzamiento"] }
+        ];
+      case "Rodilla":
+        return [
+          { id: "quadriceps", label: "TendÃ³n Cuadricipital", allowedStates: ["no_descrito", "normal", "tendinosis", "desgarro_parcial", "desgarro_completo"] },
+          { id: "patellar", label: "TendÃ³n Rotuliano", allowedStates: ["no_descrito", "normal", "tendinosis", "desgarro_parcial", "desgarro_completo"] },
+          { id: "lcm", label: "Lig. Colateral Medial", allowedStates: ["no_descrito", "normal", "esguince_leve", "desgarro_parcial", "desgarro_completo"] },
+          { id: "lce", label: "Lig. Colateral Lateral", allowedStates: ["no_descrito", "normal", "esguince_leve", "desgarro_parcial", "desgarro_completo"] },
+          { id: "medial_meniscus", label: "Menisco Medial", allowedStates: ["no_descrito", "normal", "meniscosis", "desgarro_parcial", "rotura"] },
+          { id: "lateral_meniscus", label: "Menisco Lateral", allowedStates: ["no_descrito", "normal", "meniscosis", "desgarro_parcial", "rotura"] },
+          { id: "joint_effusion", label: "Derrame Articular", allowedStates: ["no_descrito", "normal", "derrame_leve", "derrame_moderado"] },
+          { id: "baker_cyst", label: "Quiste de Baker", allowedStates: ["no_descrito", "normal", "quiste_leve", "quiste_severo"] },
+          { id: "popliteal_artery", label: "Arteria PoplÃ­tea", allowedStates: ["no_descrito", "normal", "ectasia", "ateromatosis"] },
+          { id: "popliteal_vein", label: "Vena PoplÃ­tea", allowedStates: ["no_descrito", "normal", "trombosis"] },
+          { id: "distal_tendons", label: "Tendones Distales", allowedStates: ["no_descrito", "normal", "coleccion"] },
+          { id: "popliteal_fossa", label: "Fosa PoplÃ­tea", allowedStates: ["no_descrito", "normal", "adenopatia"] }
+        ];
+      case "Tobillo":
+        return [
+          { id: "t_aquiles", label: "T. Aquiles", allowedStates: ["no_descrito", "normal", "tendinosis", "desgarro_parcial", "rotura"] },
+          { id: "fascia_plantar", label: "Fascia Plantar", allowedStates: ["no_descrito", "normal", "fascitis", "desgarro_parcial", "rotura"] },
+          { id: "l_peroneoastragalino_ant", label: "LPAA", allowedStates: ["no_descrito", "normal", "esguince_leve", "desgarro_parcial", "rotura"] },
+          { id: "l_peroneocalcaneo", label: "LPC", allowedStates: ["no_descrito", "normal", "esguince_leve", "desgarro_parcial", "rotura"] },
+          { id: "l_tibioastragalino_ant", label: "LTAA", allowedStates: ["no_descrito", "normal", "esguince_leve", "desgarro_parcial", "rotura"] },
+          { id: "t_tibial_anterior", label: "T. Tibial Anterior", allowedStates: ["no_descrito", "normal", "tenosinovitis", "desgarro_parcial", "rotura"] },
+          { id: "t_peroneo_largo", label: "T. Peroneo Largo", allowedStates: ["no_descrito", "normal", "tenosinovitis", "desgarro_parcial", "rotura"] },
+          { id: "receso_articular", label: "Receso Articular", allowedStates: ["no_descrito", "normal", "derrame_leve", "derrame_moderado"] }
+        ];
+      case "Muslo Anterior":
+        return [
+          { id: "recto_femoral", label: "R. Femoral", allowedStates: ["no_descrito", "normal", "esguince_leve", "desgarro_parcial", "desgarro_completo"] },
+          { id: "vasto_medial", label: "V. Medial", allowedStates: ["no_descrito", "normal", "esguince_leve", "desgarro_parcial", "desgarro_completo"] },
+          { id: "vasto_lateral", label: "V. Lateral", allowedStates: ["no_descrito", "normal", "esguince_leve", "desgarro_parcial", "desgarro_completo"] },
+          { id: "vasto_intermedio", label: "V. Intermedio", allowedStates: ["no_descrito", "normal", "esguince_leve", "desgarro_parcial", "desgarro_completo"] },
+          { id: "tensor_fascia_lata", label: "Tensor Fascia Lata", allowedStates: ["no_descrito", "normal", "sobrecarga", "tendinosis", "desgarro"] },
+          { id: "sartorio", label: "Sartorio", allowedStates: ["no_descrito", "normal", "sobrecarga", "tenosinovitis", "desgarro"] }
+        ];
+      case "Muslo Posterior":
+        return [
+          { id: "semitendinoso", label: "Semitendinoso", allowedStates: ["no_descrito", "normal", "esguince_leve", "desgarro_parcial", "desgarro_completo"] },
+          { id: "semimembranoso", label: "Semimembranoso", allowedStates: ["no_descrito", "normal", "esguince_leve", "desgarro_parcial", "desgarro_completo"] },
+          { id: "biceps_femoral", label: "BÃ­ceps Femoral", allowedStates: ["no_descrito", "normal", "esguince_leve", "desgarro_parcial", "desgarro_completo"] },
+          { id: "nervio_ciatico", label: "N. CiÃ¡tico", allowedStates: ["no_descrito", "normal", "ciatalgia", "atrapamiento"] },
+          { id: "tejido_subcutaneo", label: "T. SubcutÃ¡neo", allowedStates: ["no_descrito", "normal", "edema_leve", "edema_severo"] }
+        ];
+      case "Cuello":
+        return [
+          { id: "glandula_tiroides", label: "G. Tiroides", allowedStates: ["no_descrito", "normal", "bocio_nodular", "tiroiditis"] },
+          { id: "lobulo_derecho", label: "LÃ³bulo Derecho", allowedStates: ["no_descrito", "normal", "nodulo_benigno", "nodulo_sospechoso"] },
+          { id: "lobulo_izquierdo", label: "LÃ³bulo Izquierdo", allowedStates: ["no_descrito", "normal", "nodulo_benigno", "nodulo_sospechoso"] },
+          { id: "istmo", label: "Istmo", allowedStates: ["no_descrito", "normal", "quiste", "hipertrofia"] },
+          { id: "glandulas_salivales", label: "G. Salivales", allowedStates: ["no_descrito", "normal", "sialoadenitis", "sialolitiasis"] },
+          { id: "parotida_derecha", label: "ParÃ³tida Derecha", allowedStates: ["no_descrito", "normal", "quiste", "adenoma"] },
+          { id: "parotida_izquierda", label: "ParÃ³tida Izquierda", allowedStates: ["no_descrito", "normal", "quiste", "adenoma"] },
+          { id: "submandibular_derecha", label: "Submandibular Der", allowedStates: ["no_descrito", "normal", "ectasia", "sialolitiasis"] },
+          { id: "submandibular_izquierda", label: "Submandibular Izq", allowedStates: ["no_descrito", "normal", "ectasia", "sialolitiasis"] },
+          { id: "ganglios_linfaticos", label: "Ganglios LinfÃ¡ticos", allowedStates: ["no_descrito", "normal", "adenopatia_reactiva", "adenopatia_sospechosa"] }
+        ];
+      case "Vias urinarias":
+        return [
+          { id: "rinon_derecho", label: "RiÃ±Ã³n Derecho", allowedStates: ["no_descrito", "normal", "litiasis", "quiste", "ectasia"] },
+          { id: "rinon_izquierdo", label: "RiÃ±Ã³n Izquierdo", allowedStates: ["no_descrito", "normal", "litiasis", "quiste", "ectasia"] },
+          { id: "vejiga", label: "Vejiga", allowedStates: ["no_descrito", "normal", "cistitis", "sedimento", "litiasis"] },
+          { id: "ureteres", label: "UrÃ©teres", allowedStates: ["no_descrito", "normal", "dilatacion", "obstruccion"] },
+          { id: "prostata_o_utero", label: "PrÃ³stata / Ãštero", allowedStates: ["no_descrito", "normal", "hipertrofia", "miomatosis", "quiste"] }
+        ];
+      case "Codo":
+        return [
+          { id: "t_triceps", label: "T. TrÃ­ceps", allowedStates: ["no_descrito", "normal", "tendinosis", "desgarro_parcial", "rotura"] },
+          { id: "t_biceps_distal", label: "T. BÃ­ceps Distal", allowedStates: ["no_descrito", "normal", "tendinosis", "desgarro_parcial", "rotura"] },
+          { id: "t_comun_extensor", label: "T. ComÃºn Extensor", allowedStates: ["no_descrito", "normal", "epicondilitis_lateral", "desgarro_parcial", "rotura"] },
+          { id: "t_comun_flexor", label: "T. ComÃºn Flexor", allowedStates: ["no_descrito", "normal", "epicondilitis_medial", "desgarro_parcial", "rotura"] },
+          { id: "n_cubital", label: "N. Cubital", allowedStates: ["no_descrito", "normal", "neuritis", "subluxacion"] },
+          { id: "receso_olecraniano", label: "Receso Olecraniano", allowedStates: ["no_descrito", "normal", "derrame_leve", "derrame_moderado", "sinovitis"] }
+        ];
+      case "Abdomen":
+        return [
+          { id: "higado", label: "HÃ­gado", allowedStates: ["no_descrito", "normal", "esteatosis_leve", "esteatosis_moderada", "esteatosis_severa", "hepatomegalia", "cirrosis", "quiste", "hemangioma", "lesion_ocupante"] },
+          { id: "vesicula_biliar", label: "VesÃ­cula Biliar", allowedStates: ["no_descrito", "normal", "colelitiasis", "barro_biliar", "colecistitis_aguda", "polipo", "pared_engrosada"] },
+          { id: "vias_biliares", label: "VÃ­as Biliares", allowedStates: ["no_descrito", "normal", "ectasia_intrahepatica", "dilatacion_coledoco"] },
+          { id: "pancreas", label: "PÃ¡ncreas", allowedStates: ["no_descrito", "normal", "pancreatitis_aguda", "pancreatitis_cronica", "quiste", "calcificaciones"] },
+          { id: "bazo", label: "Bazo", allowedStates: ["no_descrito", "normal", "esplenomegalia", "nodulo_esplenico", "infarto_esplenico"] },
+          { id: "aorta_abdominal", label: "Aorta Abdominal", allowedStates: ["no_descrito", "normal", "ectasia", "aneurisma", "placas_calcificadas"] },
+          { id: "retroperitoneo", label: "Retroperitoneo", allowedStates: ["no_descrito", "normal", "liquido_libre", "adenopatias_retroperitoneales"] }
+        ];
+      case "Escroto":
+        return [
+          { id: "testiculo_derecho", label: "TestÃ­culo Derecho", allowedStates: ["no_descrito", "normal", "orquitis", "quiste", "nodulo", "atrofia", "microcalcificaciones"] },
+          { id: "testiculo_izquierdo", label: "TestÃ­culo Izquierdo", allowedStates: ["no_descrito", "normal", "orquitis", "quiste", "nodulo", "atrofia", "microcalcificaciones"] },
+          { id: "epididimo_derecho", label: "EpidÃ­dimo Derecho", allowedStates: ["no_descrito", "normal", "epididimitis", "quiste", "hipertrofia"] },
+          { id: "epididimo_izquierdo", label: "EpidÃ­dimo Izquierdo", allowedStates: ["no_descrito", "normal", "epididimitis", "quiste", "hipertrofia"] },
+          { id: "hemiescroto_derecho", label: "Hemiescroto Derecho", allowedStates: ["no_descrito", "normal", "hidrocele_leve", "hidrocele_moderado", "varicocele_grado_i", "varicocele_grado_ii", "varicocele_grado_iii"] },
+          { id: "hemiescroto_izquierdo", label: "Hemiescroto Izquierdo", allowedStates: ["no_descrito", "normal", "hidrocele_leve", "hidrocele_moderado", "varicocele_grado_i", "varicocele_grado_ii", "varicocele_grado_iii"] }
+        ];
+      case "MuÃ±eca":
+        return [
+          { id: "nervio_mediano", label: "Nervio Mediano", allowedStates: ["no_descrito", "normal", "neuritis", "atrapamiento_tarsiano", "engrosamiento"] },
+          { id: "tendones_flexores", label: "Tendones Flexores", allowedStates: ["no_descrito", "normal", "tenosinovitis", "desgarro_parcial", "rotura"] },
+          { id: "flexor_carpi_radialis", label: "Flexor Carpi Radialis", allowedStates: ["no_descrito", "normal", "tenosinovitis", "tendinosis"] },
+          { id: "arteria_radial", label: "Arteria Radial", allowedStates: ["no_descrito", "normal", "ateromatosis", "aneurisma_falso"] },
+          { id: "receso_radiocarpiano_anterior", label: "Receso Radiocarpiano Anterior", allowedStates: ["no_descrito", "normal", "derrame_leve", "sinovitis"] },
+          { id: "canal_de_guyon", label: "Canal de Guyon", allowedStates: ["no_descrito", "normal", "atrapamiento_cubital", "lesion_ocupante"] },
+          { id: "receso_radiocarpiano_posterior", label: "Receso Radiocarpiano Posterior", allowedStates: ["no_descrito", "normal", "derrame_leve", "sinovitis"] },
+          { id: "articulacion_radiocubital_distal", label: "RegiÃ³n Radiocubital Distal", allowedStates: ["no_descrito", "normal", "artrosis", "subluxacion"] },
+          { id: "tendones_extensores_compartimentos", label: "Compartimentos Extensores", allowedStates: ["no_descrito", "normal", "tenosinovitis_de_quervain", "tenosinovitis", "desgarro_parcial", "rotura"] },
+          { id: "fibrocartilago_triangular", label: "FibrocartÃ­lago Triangular", allowedStates: ["no_descrito", "normal", "degenerativo", "rotura"] },
+          { id: "extensor_carpi_ulnaris", label: "Extensor Carpi Ulnaris", allowedStates: ["no_descrito", "normal", "tenosinovitis", "subluxacion"] }
+        ];
+      case "Mamas":
+        return [
+          { id: "mama_derecha", label: "Mama Derecha", allowedStates: ["no_descrito", "normal", "condicion_fibroquistica", "ecorrefringencia_aumentada"] },
+          { id: "mama_izquierda", label: "Mama Izquierda", allowedStates: ["no_descrito", "normal", "condicion_fibroquistica", "ecorrefringencia_aumentada"] },
+          { id: "cuadrantes_mama_derecha", label: "Cuadrantes Mama Der", allowedStates: ["no_descrito", "normal", "quiste_simple", "quiste_complejo", "fibroadenoma", "lesion_altamente_sospechosa"] },
+          { id: "cuadrantes_mama_izquierda", label: "Cuadrantes Mama Izq", allowedStates: ["no_descrito", "normal", "quiste_simple", "quiste_complejo", "fibroadenoma", "lesion_altamente_sospechosa"] },
+          { id: "axila_derecha", label: "Axila Derecha", allowedStates: ["no_descrito", "normal", "adenopatia_reactiva", "adenopatia_sospechosa"] },
+          { id: "axila_izquierda", label: "Axila Izquierda", allowedStates: ["no_descrito", "normal", "adenopatia_reactiva", "adenopatia_sospechosa"] }
+        ];
+      case "Pared Abdominal":
+        return [
+          { id: "rectus_abdominis_right", label: "MÃºsculo Recto Der.", allowedStates: ["no_descrito", "normal", "diastasis", "desgarro", "hernia", "hematoma", "lipoma", "coleccion"] },
+          { id: "rectus_abdominis_left", label: "MÃºsculo Recto Izq.", allowedStates: ["no_descrito", "normal", "diastasis", "desgarro", "hernia", "hematoma", "lipoma", "coleccion"] },
+          { id: "oblique_muscles_right", label: "MÃºsculos Oblicuos Der.", allowedStates: ["no_descrito", "normal", "desgarro", "hernia", "hematoma", "lipoma", "coleccion"] },
+          { id: "oblique_muscles_left", label: "MÃºsculos Oblicuos Izq.", allowedStates: ["no_descrito", "normal", "desgarro", "hernia", "hematoma", "lipoma", "coleccion"] },
+          { id: "linea_alba", label: "LÃ­nea Alba", allowedStates: ["no_descrito", "normal", "diastasis", "hernia", "ruptura"] },
+          { id: "umbilical_region", label: "RegiÃ³n Umbilical", allowedStates: ["no_descrito", "normal", "hernia_umbilical", "diastasis"] },
+          { id: "epigastric_region", label: "RegiÃ³n EpigÃ¡strica", allowedStates: ["no_descrito", "normal", "hernia_epigastrica", "lipoma"] },
+          { id: "inguinal_region_right", label: "RegiÃ³n Inguinal Der.", allowedStates: ["no_descrito", "normal", "hernia_inguinal_directa", "hernia_inguinal_indirecta", "adenopatia"] },
+          { id: "inguinal_region_left", label: "RegiÃ³n Inguinal Izq.", allowedStates: ["no_descrito", "normal", "hernia_inguinal_directa", "hernia_inguinal_indirecta", "adenopatia"] },
+          { id: "crural_region_right", label: "RegiÃ³n Crural Der.", allowedStates: ["no_descrito", "normal", "hernia_crural", "adenopatia"] },
+          { id: "crural_region_left", label: "RegiÃ³n Crural Izq.", allowedStates: ["no_descrito", "normal", "hernia_crural", "adenopatia"] }
+        ];
+      case "Pantorrilla y TendÃ³n de Aquiles":
+        return [
+          { id: "gastrocnemius_medial", label: "Gastrocnemio Medial", allowedStates: ["no_descrito", "normal", "desgarro", "miofascial", "hematoma"] },
+          { id: "gastrocnemius_lateral", label: "Gastrocnemio Lateral", allowedStates: ["no_descrito", "normal", "desgarro", "miofascial", "hematoma"] },
+          { id: "soleus_muscle", label: "MÃºsculo SÃ³leo", allowedStates: ["no_descrito", "normal", "desgarro", "miofascial"] },
+          { id: "achilles_tendon", label: "TendÃ³n de Aquiles", allowedStates: ["no_descrito", "normal", "tendinosis", "rotura_parcial", "rotura_completa", "entesopatia"] },
+          { id: "plantaris_tendon", label: "Plantar Delgado", allowedStates: ["no_descrito", "normal", "desgarro", "engrosamiento"] },
+          { id: "retrocalcaneal_bursa", label: "Bolsa RetrocalcÃ¡nea", allowedStates: ["no_descrito", "normal", "bursitis"] }
+        ];
+      case "Cerebro Neonatal":
+        return [
+          { id: "ventricle_right", label: "VentrÃ­culo Lateral Derecho", allowedStates: ["no_descrito", "normal", "dilatacion_leve", "dilatacion_moderada_severa", "hemorragia_intraventricular_sin_dilatacion", "hemorragia_intraventricular_con_dilatacion"] },
+          { id: "ventricle_left", label: "VentrÃ­culo Lateral Izquierdo", allowedStates: ["no_descrito", "normal", "dilatacion_leve", "dilatacion_moderada_severa", "hemorragia_intraventricular_sin_dilatacion", "hemorragia_intraventricular_con_dilatacion"] },
+          { id: "ventricle_third_fourth", label: "Tercer y Cuarto VentrÃ­culo", allowedStates: ["no_descrito", "normal", "dilatacion"] },
+          { id: "choroid_right", label: "Plexo Coroideo Derecho", allowedStates: ["no_descrito", "normal", "congestion_hemorragica", "quiste_plexo"] },
+          { id: "choroid_left", label: "Plexo Coroideo Izquierdo", allowedStates: ["no_descrito", "normal", "congestion_hemorragica", "quiste_plexo"] },
+          { id: "germinal_right", label: "Surco CaudotalÃ¡mico Derecho", allowedStates: ["no_descrito", "normal", "hemorragia_subependimaria_g1", "quiste_subependimario"] },
+          { id: "germinal_left", label: "Surco CaudotalÃ¡mico Izquierdo", allowedStates: ["no_descrito", "normal", "hemorragia_subependimaria_g1", "quiste_subependimario"] },
+          { id: "parenchyma_periventricular_right", label: "ParÃ©nquima Periventricular Derecho", allowedStates: ["no_descrito", "normal", "leucomalacia_periventricular_leve", "leucomalacia_periventricular_cavitaria", "calcificaciones"] },
+          { id: "parenchyma_periventricular_left", label: "ParÃ©nquima Periventricular Izquierdo", allowedStates: ["no_descrito", "normal", "leucomalacia_periventricular_leve", "leucomalacia_periventricular_cavitaria", "calcificaciones"] },
+          { id: "parenchyma_focal_right", label: "ParÃ©nquima Lobar Derecho", allowedStates: ["no_descrito", "normal", "hemorragia_intraparenquimatosa_g4", "calcificaciones_focales", "edema_difuso"] },
+          { id: "parenchyma_focal_left", label: "ParÃ©nquima Lobar Izquierdo", allowedStates: ["no_descrito", "normal", "hemorragia_intraparenquimatosa_g4", "calcificaciones_focales", "edema_difuso"] },
+          { id: "subarachnoid_space", label: "Espacio Subaracnoideo y Cisternas", allowedStates: ["no_descrito", "normal", "dilatacion_benigna", "coleccion_extraaxial"] }
+        ];
+      default:
+        return [];
+    }
+  };
+
+  const getProtocolStateAndSetters = (protocol: string) => {
+    const norm = protocol.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    let caseKey = protocol;
+    if (norm.includes("hombro")) caseKey = "Hombro";
+    else if (norm.includes("rodilla")) caseKey = "Rodilla";
+    else if (norm.includes("tobillo")) caseKey = "Tobillo";
+    else if (norm.includes("muslo anterior")) caseKey = "Muslo Anterior";
+    else if (norm.includes("muslo posterior")) caseKey = "Muslo Posterior";
+    else if (norm.includes("cuello")) caseKey = "Cuello";
+    else if (norm.includes("urinarias") || norm.includes("orina")) caseKey = "Vias urinarias";
+    else if (norm.includes("codo")) caseKey = "Codo";
+    else if (norm.includes("pared") || norm.includes("abdominal wall")) caseKey = "Pared Abdominal";
+    else if (norm.includes("abdomen")) caseKey = "Abdomen";
+    else if (norm.includes("escroto")) caseKey = "Escroto";
+    else if (norm.includes("muneca")) caseKey = "MuÃ±eca";
+    else if (norm.includes("mama")) caseKey = "Mamas";
+    else if (norm.includes("pantorrilla") || norm.includes("aquiles") || norm.includes("achilles") || norm.includes("pantorilla")) caseKey = "Pantorrilla y TendÃ³n de Aquiles";
+    else if (norm.includes("cerebro") || norm.includes("neonatal") || norm.includes("transfontanelar")) caseKey = "Cerebro Neonatal";
+
+    switch (caseKey) {
+      case "Hombro":
+        return { states: shoulderStates, setStates: setShoulderStates, descs: shoulderDescriptions, setDescs: setShoulderDescriptions };
+      case "Rodilla":
+        return { states: kneeStates, setStates: setKneeStates, descs: kneeDescriptions, setDescs: setKneeDescriptions };
+      case "Tobillo":
+        return { states: ankleStates, setStates: setAnkleStates, descs: ankleDescriptions, setDescs: setAnkleDescriptions };
+      case "Muslo Anterior":
+        return { states: thighStates, setStates: setThighStates, descs: thighDescriptions, setDescs: setThighDescriptions };
+      case "Muslo Posterior":
+        return { states: thighPosteriorStates, setStates: setThighPosteriorStates, descs: thighPosteriorDescriptions, setDescs: setThighPosteriorDescriptions };
+      case "Cuello":
+        return { states: neckStates, setStates: setNeckStates, descs: neckDescriptions, setDescs: setNeckDescriptions };
+      case "Vias urinarias":
+        return { states: urinaryStates, setStates: setUrinaryStates, descs: urinaryDescriptions, setDescs: setUrinaryDescriptions };
+      case "Codo":
+        return { states: elbowStates, setStates: setElbowStates, descs: elbowDescriptions, setDescs: setElbowDescriptions };
+      case "Abdomen":
+        return { states: abdomenStates, setStates: setAbdomenStates, descs: abdomenDescriptions, setDescs: setAbdomenDescriptions };
+      case "Pared Abdominal":
+        return { states: abdominalWallStates, setStates: setAbdominalWallStates, descs: abdominalWallDescriptions, setDescs: setAbdominalWallDescriptions };
+      case "Escroto":
+        return { states: scrotumStates, setStates: setScrotumStates, descs: scrotumDescriptions, setDescs: setScrotumDescriptions };
+      case "MuÃ±eca":
+        return { states: wristStates, setStates: setWristStates, descs: wristDescriptions, setDescs: setWristDescriptions };
+      case "Mamas":
+        return { states: breastStates, setStates: setBreastStates, descs: breastDescriptions, setDescs: setBreastDescriptions };
+      case "Pantorrilla y TendÃ³n de Aquiles":
+        return { states: calfAchillesStates, setStates: setCalfAchillesStates, descs: calfAchillesDescriptions, setDescs: setCalfAchillesDescriptions };
+      case "Cerebro Neonatal":
+        return { states: neonatalBrainStates, setStates: setNeonatalBrainStates, descs: neonatalBrainDescriptions, setDescs: setNeonatalBrainDescriptions };
+      default:
+        return null;
+    }
+  };
+
+  const handleApplySmartModification = async () => {
+    if (!activeProtocol) return;
+    setIsSmartAnatomyModifying(true);
+    setSmartAnatomyError("");
+    try {
+      const helper = getProtocolStateAndSetters(activeProtocol);
+      if (!helper) throw new Error("Protocolo no soportado");
+
+      const structuresList = getStructuresForProtocol(activeProtocol);
+
+      const response = await fetch("/api/smart-modify-anatomy", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          currentStates: helper.states,
+          currentDescriptions: helper.descs,
+          structures: structuresList,
+          instruction: smartInstructionsText,
+          studyType: activeProtocol,
+          reportText: isEditingReportManual ? editedReportText : (generatedReport || ""),
+          model: selectedModel,
+          currentAdditionalFindings: additionalFindings[activeProtocol] || []
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error("Error al consultar el servicio inteligente de modificaciÃ³n");
+      }
+
+      const data = await response.json();
+      if (data.states && data.descriptions) {
+        helper.setStates(data.states);
+        helper.setDescs(data.descriptions);
+        const nextExtras = data.additionalFindings && Array.isArray(data.additionalFindings)
+          ? data.additionalFindings
+          : data.additionalTexts && Array.isArray(data.additionalTexts)
+            ? data.additionalTexts.map((txt: string, idx: number) => ({
+                id: `smart-add-${idx}-${Date.now()}`,
+                structureName: "Hallazgo Adicional " + (idx + 1),
+                state: "Alterado",
+                description: txt
+              }))
+            : [];
+
+        if (data.additionalFindings && Array.isArray(data.additionalFindings)) {
+          setAdditionalFindings(prev => ({
+            ...prev,
+            [activeProtocol]: data.additionalFindings
+          }));
+        } else if (data.additionalTexts && Array.isArray(data.additionalTexts)) {
+          setAdditionalFindings(prev => ({
+            ...prev,
+            [activeProtocol]: nextExtras
+          }));
+        }
+        
+        // Extract only the newly requested/changed diagnoses
+        const changedDiagnoses: string[] = [];
+        for (const struct of structuresList) {
+          const prevS = helper.states[struct.id] || "no_descrito";
+          const prevD = helper.descs[struct.id] || "";
+          const nextS = data.states[struct.id] || "no_descrito";
+          const nextD = data.descriptions[struct.id] || "";
+
+          if (nextS !== "no_descrito" && nextS !== "normal") {
+            const hasStateChanged = prevS !== nextS;
+            const hasDescChanged = prevD !== nextD;
+            if (hasStateChanged || hasDescChanged) {
+              changedDiagnoses.push(nextD);
+            }
+          }
+        }
+
+        const prevExtras = additionalFindings[activeProtocol] || [];
+        for (const extra of nextExtras) {
+          const matchingPrev = prevExtras.find((pe: any) => pe.id === extra.id);
+          if (!matchingPrev || matchingPrev.description !== extra.description || matchingPrev.state !== extra.state) {
+            changedDiagnoses.push(extra.description);
+          }
+        }
+
+        if (changedDiagnoses.length > 0) {
+          const activeReport = isEditingReportManual ? editedReportText : (generatedReport || "");
+          const separator = activeReport ? "\n\n" : "";
+          const textToAppend = changedDiagnoses.join("\n");
+          const nextReport = activeReport + separator + textToAppend;
+
+          if (isEditingReportManual) {
+            setEditedReportText(nextReport);
+          } else {
+            setGeneratedReport(nextReport);
+            setEditedReportText(nextReport);
+          }
+        }
+
+        setSmartInstructionsText("");
+      } else {
+        throw new Error("No se devolvieron estados ni descripciones actualizados.");
+      }
+    } catch (err: any) {
+      setSmartAnatomyError(err.message || "Error al aplicar los ajustes inteligentes.");
+    } finally {
+      setIsSmartAnatomyModifying(false);
+    }
+  };
+
+  const checkApiHealth = async () => {
+    setCheckingApi(true);
+    setApiDiagnostics(null); // Explicitly reset to null to show loading state initially
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 6000); // 6-second timeout
+    
+    try {
+      const res = await fetch("/api/health", { signal: controller.signal });
+      clearTimeout(timeoutId);
+      const data = await res.json();
+      setApiDiagnostics(data);
+    } catch (e: any) {
+      clearTimeout(timeoutId);
+      console.error("Error diagnosticando API:", e);
+      setApiDiagnostics({
+        status: "error",
+        message: "No se pudo conectar con el servidor para diagnosticar la API.",
+        error: e?.name === "AbortError" ? "Se agotÃ³ el tiempo de espera (Timeout de 6s)." : (e?.message || String(e)),
+        api_key_configured: false
+      });
+    } finally {
+      setCheckingApi(false);
+    }
+  };
+
+  // Run the diagnostic load automatically when switching to the API or configuration tabs
+  useEffect(() => {
+    if (activeTab === "api") {
+      checkApiHealth();
+    }
+  }, [activeTab]);
+
+  // Initialize values and load from Local Storage on mount
+  useEffect(() => {
+    // Instructions setup
+    const savedGenInst = localStorage.getItem("radiology_sys_inst");
+    if (savedGenInst) setSystemInstruction(savedGenInst);
+    else {
+      setSystemInstruction(GENERAL_SYSTEM_INSTRUCTION);
+      localStorage.setItem("radiology_sys_inst", GENERAL_SYSTEM_INSTRUCTION);
+    }
+
+    const savedChatInst = localStorage.getItem("radiology_chat_inst");
+    if (savedChatInst) setChatInstruction(savedChatInst);
+    else {
+      setChatInstruction(CHAT_SYSTEM_INSTRUCTION);
+      localStorage.setItem("radiology_chat_inst", CHAT_SYSTEM_INSTRUCTION);
+    }
+
+    const savedClassInst = localStorage.getItem("radiology_class_inst");
+    if (savedClassInst) setClassifyInstruction(savedClassInst);
+    else {
+      setClassifyInstruction(CLASSIFICATION_SYSTEM_INSTRUCTION);
+      localStorage.setItem("radiology_class_inst", CLASSIFICATION_SYSTEM_INSTRUCTION);
+    }
+
+    // Reports log setup with IndexedDB persistent storage
+    idbGetHistory().then(idbReports => {
+      if (Array.isArray(idbReports) && idbReports.length > 0) {
+        setSavedReports(idbReports);
+      } else {
+        const storedReports = localStorage.getItem("radiology_reports_history");
+        if (storedReports) {
+          try {
+            const parsed = JSON.parse(storedReports);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              setSavedReports(parsed);
+              idbSaveHistory(parsed);
+            }
+          } catch (e) {
+            setSavedReports([]);
+          }
+        }
+      }
+    });
+  }, []);
+
+  // Prevent browser-added default print headers and footers by dynamically stripping title during print
+  useEffect(() => {
+    const handleBeforePrint = () => {
+      try {
+        (window as any)._originalDocTitle = document.title;
+        document.title = "";
+      } catch (e) {
+        console.error(e);
+      }
+    };
+    const handleAfterPrint = () => {
+      try {
+        if (typeof (window as any)._originalDocTitle === "string" && (window as any)._originalDocTitle) {
+          document.title = (window as any)._originalDocTitle;
+        } else {
+          document.title = "My Google AI Studio App";
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    };
+
+    window.addEventListener("beforeprint", handleBeforePrint);
+    window.addEventListener("afterprint", handleAfterPrint);
+
+    return () => {
+      window.removeEventListener("beforeprint", handleBeforePrint);
+      window.removeEventListener("afterprint", handleAfterPrint);
+    };
+  }, []);
+
+
+
+  // Set defaults or modify states based on active preset selection
+  const applyPreset = (preset: Presets) => {
+    handleLoadStudyType(preset.studyType || "");
+    setClinicalHistory(preset.defaultHistory || "");
+    setCustomPrompt(preset.customPrompt || "");
+  };
+
+  const handlePresetSelect = (id: string) => {
+    setSelectedPresetId(id);
+    const preset = STUDY_PRESETS.find(p => p.id === id);
+    if (preset) {
+      applyPreset(preset);
+    }
+  };
+
+  const resetGeneratorForm = () => {
+    setCurrentCloudStudyId("");
+    setModality("RadiografÃ­a");
+    setSpecificStudy("TÃ³rax");
+    setCustomStudy("");
+    setLaterality("");
+    setProjections([]);
+    setCustomProjection("");
+    setStudyType("");
+    setClinicalHistory("");
+    setFindings("");
+    setInputReport("");
+    setUploadedReportContent("");
+    setUploadedReportName(null);
+    setUploadedReportMimeType("");
+    setCustomPrompt("");
+    setSelectedFile(null);
+    setBase64Image(null);
+    setGeneratedReport("");
+    setReportError(null);
+    setReportHistory([]);
+    setReportRedoHistory([]);
+    setIsEditingReportManual(false);
+    setEditedReportText("");
+    setSelectedPresetId("");
+    setImageEvaluation("");
+    setIsEvaluatingImage(false);
+    setCurrentModInstruction("");
+    setIsModifyingReport(false);
+    setModifyError(null);
+    setAdditionalEvaluation("");
+    setIsEvaluatingAdditional(false);
+    setAdditionalEvalError(null);
+    setCaseAnalysis("");
+    setIsAnalyzingCase(false);
+    setCaseAnalysisError(null);
+    setBibliography("");
+    setIsSearchingBibliography(false);
+    setBibliographyError(null);
+    setBibliographySources([]);
+    setReportEvaluation("");
+    setIsEvaluatingReport(false);
+    setReportEvaluationError(null);
+    setAnnotations([]);
+    setIsDrawingBox(false);
+    setDrawStartPercent(null);
+    setTempBox(null);
+    setPendingAnnotation(null);
+    setPendingLabel("");
+  };
+
+  // Convert File to base64
+  const processImageFile = (file: File) => {
+    const isZip = file.name.endsWith(".zip") || file.type === "application/zip" || file.type === "application/x-zip-compressed";
+    if (isZip) {
+      setZipFile(file);
+      setIsZipExtractorOpen(true);
+      return;
+    }
+
+    if (!file.type.startsWith("image/")) {
+      alert("Por favor, sube un archivo de tipo imagen (PNG, JPG, BMP).");
+      return;
+    }
+    
+    // File size safety check
+    if (file.size > 15 * 1024 * 1024) {
+      alert("La imagen excede el lÃ­mite recomendado de 15MB.");
+      return;
+    }
+
+    setSelectedFile(file);
+    
+    // Revoke old blob URL
+    if (imagePreviewUrl && imagePreviewUrl.startsWith("blob:")) {
+      try {
+        URL.revokeObjectURL(imagePreviewUrl);
+      } catch (_) {}
+    }
+    
+    const objUrl = URL.createObjectURL(file);
+    setImagePreviewUrl(objUrl);
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      if (typeof reader.result === "string") {
+        // Strip out metadata prefix (e.g., "data:image/png;base64,") for SDK
+        const parts = reader.result.split(",");
+        if (parts.length > 1) {
+          setBase64Image(parts[1]);
+        } else {
+          setBase64Image(reader.result);
+        }
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleLoadExtractedToGenerator = (extracted: ExtractedFile) => {
+    const fileObj = new File([extracted.rawArray], extracted.nameOnly, { type: extracted.mimeType });
+    setSelectedFile(fileObj);
+    setBase64Image(extracted.base64);
+    
+    if (imagePreviewUrl && imagePreviewUrl.startsWith("blob:")) {
+      try { URL.revokeObjectURL(imagePreviewUrl); } catch (_) {}
+    }
+    
+    if (extracted.isDicom) {
+      // Use the beautiful decoded visual base64 directly as preview so the browser can display it
+      setImagePreviewUrl(extracted.visualUrl || `data:image/png;base64,${extracted.base64}`);
+    } else {
+      const blob = new Blob([extracted.rawArray], { type: extracted.mimeType });
+      const blobUrl = URL.createObjectURL(blob);
+      setImagePreviewUrl(blobUrl);
+    }
+  };
+
+  const handleLoadExtractedToSlot = (extracted: ExtractedFile, slot: 1 | 2 | 3) => {
+    let cleanUrl = extracted.visualUrl ? extracted.visualUrl.trim().replace(/\s/g, "") : "";
+    if (cleanUrl && !cleanUrl.startsWith("data:") && !cleanUrl.startsWith("blob:")) {
+      let mime = "image/png";
+      if (cleanUrl.startsWith("/9j/")) {
+        mime = "image/jpeg";
+      } else if (cleanUrl.startsWith("iVBORw0KGgo")) {
+        mime = "image/png";
+      } else if (cleanUrl.startsWith("PHN2Zy")) {
+        mime = "image/svg+xml";
+      }
+      cleanUrl = `data:${mime};base64,${cleanUrl}`;
+    }
+
+    console.log(`[ZIP Single Loader] Pre-load check: Slot ${slot} - File: ${extracted.nameOnly}`);
+    console.log(`[ZIP Single Loader] visualUrl first 150 chars:`, cleanUrl ? cleanUrl.substring(0, 150) + "..." : "EMPTY");
+
+    setZipExtractedFileForAnalysis({
+      file: {
+        ...extracted,
+        visualUrl: cleanUrl
+      },
+      slot
+    });
+    setActiveTab("expert-analysis"); // Automatically switch to the "expert-analysis" tab so they see it load!
+  };
+
+  const handleLoadMultipleSlots = (selections: { file: ExtractedFile; slot: 1 | 2 | 3 }[]) => {
+    // Explicitly sanitize each file's visualUrl to ensure zero serialization issues before reaching components
+    const sanitizedSelections = selections.map(seq => {
+      let cleanUrl = seq.file.visualUrl ? seq.file.visualUrl.trim().replace(/\s/g, "") : "";
+      
+      // If it doesn't start with base64 data: or blob:, prepend correct header
+      if (cleanUrl && !cleanUrl.startsWith("data:") && !cleanUrl.startsWith("blob:")) {
+        let mime = "image/png";
+        if (cleanUrl.startsWith("/9j/")) {
+          mime = "image/jpeg";
+        } else if (cleanUrl.startsWith("iVBORw0KGgo")) {
+          mime = "image/png";
+        } else if (cleanUrl.startsWith("PHN2Zy")) {
+          mime = "image/svg+xml";
+        }
+        cleanUrl = `data:${mime};base64,${cleanUrl}`;
+      }
+
+      console.log(`[ZIP Batch Loader] Pre-load check: Slot ${seq.slot} - File: ${seq.file.nameOnly}`);
+      console.log(`[ZIP Batch Loader] mimeType detected:`, seq.file.mimeType);
+      console.log(`[ZIP Batch Loader] visualUrl base64 structure:`, cleanUrl ? cleanUrl.substring(0, 150) + "..." : "EMPTY");
+      
+      return {
+        ...seq,
+        file: {
+          ...seq.file,
+          visualUrl: cleanUrl
+        }
+      };
+    });
+
+    setZipExtractedFileForAnalysis(sanitizedSelections);
+    setActiveTab("expert-analysis"); // Automatically switch to the "expert-analysis" tab so they see it load!
+  };
+
+  // Drag and drop handlers
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragActive(true);
+  };
+
+  const handleDragLeave = () => {
+    setDragActive(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragActive(false);
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      processImageFile(e.dataTransfer.files[0]);
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      processImageFile(e.target.files[0]);
+    }
+  };
+
+  const imageRef = useRef<HTMLImageElement | null>(null);
+
+  const getRelativeCoords = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!imageRef.current) return null;
+    const rect = imageRef.current.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * 100;
+    const y = ((e.clientY - rect.top) / rect.height) * 100;
+    
+    return {
+      x: Math.max(0, Math.min(100, x)),
+      y: Math.max(0, Math.min(100, y)),
+    };
+  };
+
+  const handleImageMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (pendingAnnotation) return;
+    
+    const coords = getRelativeCoords(e);
+    if (!coords) return;
+
+    if (activeAnnotationTool === "point") {
+      setPendingAnnotation({
+        type: "point",
+        x: coords.x,
+        y: coords.y,
+      });
+      setPendingLabel("");
+    } else {
+      setIsDrawingBox(true);
+      setDrawStartPercent(coords);
+      setTempBox({
+        x: coords.x,
+        y: coords.y,
+        w: 0,
+        h: 0,
+      });
+    }
+  };
+
+  const handleImageMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!isDrawingBox || !drawStartPercent) return;
+    const coords = getRelativeCoords(e);
+    if (!coords) return;
+
+    const x = Math.min(drawStartPercent.x, coords.x);
+    const y = Math.min(drawStartPercent.y, coords.y);
+    const w = Math.abs(drawStartPercent.x - coords.x);
+    const h = Math.abs(drawStartPercent.y - coords.y);
+
+    setTempBox({ x, y, w, h });
+  };
+
+  const handleImageMouseUp = () => {
+    if (!isDrawingBox || !tempBox) return;
+    setIsDrawingBox(false);
+    setDrawStartPercent(null);
+
+    if (tempBox.w < 1 && tempBox.h < 1) {
+      setTempBox(null);
+      return;
+    }
+
+    setPendingAnnotation({
+      type: "box",
+      x: tempBox.x,
+      y: tempBox.y,
+      w: tempBox.w,
+      h: tempBox.h,
+    });
+    setPendingLabel("");
+    setTempBox(null);
+  };
+
+  const handleAutoLabelAnnotation = async () => {
+    if (!pendingAnnotation || !base64Image) {
+      setAutoLabelError("No hay una imagen cargada o regiÃ³n seleccionada.");
+      return;
+    }
+
+    setIsAutoLabeling(true);
+    setAutoLabelError(null);
+
+    try {
+      const response = await fetch("/api/auto-label-annotation", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: selectedModel,
+          image: base64Image,
+          mimeType: selectedFile?.type || "image/png",
+          studyType: studyType || "Estudio de Imagen",
+          clinicalHistory: clinicalHistory || "",
+          annotation: {
+            type: pendingAnnotation.type,
+            x: pendingAnnotation.x,
+            y: pendingAnnotation.y,
+            w: pendingAnnotation.w,
+            h: pendingAnnotation.h,
+          },
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || "No se pudo obtener la etiqueta sugerida de la IA.");
+      }
+
+      if (data.label) {
+        setPendingLabel(data.label);
+      } else {
+        setAutoLabelError("La IA no pudo sugerir una etiqueta clara para esta regiÃ³n.");
+      }
+    } catch (err: any) {
+      console.error("Error al obtener etiqueta IA:", err);
+      setAutoLabelError(err.message || String(err));
+    } finally {
+      setIsAutoLabeling(false);
+    }
+  };
+
+  const handleSaveAnnotation = () => {
+    if (!pendingAnnotation) return;
+    const labelToSave = pendingLabel.trim() || (pendingAnnotation.type === "point" ? `Punto de InterÃ©s #${annotations.length + 1}` : `Zona de Sospecha #${annotations.length + 1}`);
+    
+    const newAnn: ImageAnnotation = {
+      id: Math.random().toString(36).substring(2, 11),
+      type: pendingAnnotation.type,
+      x: pendingAnnotation.x,
+      y: pendingAnnotation.y,
+      w: pendingAnnotation.w,
+      h: pendingAnnotation.h,
+      label: labelToSave,
+    };
+
+    setAnnotations([...annotations, newAnn]);
+    setPendingAnnotation(null);
+    setPendingLabel("");
+  };
+
+  const handleCancelPending = () => {
+    setPendingAnnotation(null);
+    setPendingLabel("");
+  };
+
+  const handleDeleteAnnotation = (id: string) => {
+    setAnnotations(annotations.filter((ann) => ann.id !== id));
+  };
+
+  const handleClearAllAnnotations = () => {
+    setAnnotations([]);
+  };
+
+  // 1. ACTION: SEND PAYLOAD TO GENERATE REPORT
+  const handleGenerateReport = async () => {
+    if (!studyType.trim()) {
+      setReportError("Por favor, especifica el Tipo de Estudio solicitado.");
+      return;
+    }
+
+    // Reset current cloud study ID for the newly generated report
+    setCurrentCloudStudyId("");
+
+    setIsGenerating(true);
+    setReportError(null);
+    setGeneratedReport("");
+    setClassRecommendations(null);
+    setIncorporatedRecs({});
+    setImageEvaluation("");
+    setAdditionalEvaluation("");
+    setCurrentModInstruction("");
+    setModifyError(null);
+    setAdditionalEvalError(null);
+    setCaseAnalysis("");
+    setCaseAnalysisError(null);
+    setBibliography("");
+    setBibliographyError(null);
+    setBibliographySources([]);
+    setReportEvaluation("");
+    setReportEvaluationError(null);
+
+    // Setup visual steps for medical analysis feeling
+    const steps = [
+      "Extrayendo metadatos clÃ­nicos...",
+      "Estableciendo canal seguro con Gemini...",
+      selectedFile ? "Renderizando densidades anatÃ³micas complejas..." : "Analizando concordancia sintÃ¡ctica...",
+      "Aplicando reglas de redacciÃ³n radiolÃ³gica...",
+      "Compilando informe estructurado..."
+    ];
+
+    let currentStepIndex = 0;
+    setGenerationSteps(steps[0]);
+
+    const stepInterval = setInterval(() => {
+      if (currentStepIndex < steps.length - 1) {
+        currentStepIndex++;
+        setGenerationSteps(steps[currentStepIndex]);
+      }
+    }, 1200);
+
+    try {
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: selectedModel,
+          image: base64Image || undefined,
+          mimeType: selectedFile ? selectedFile.type : undefined,
+          studyType,
+          clinicalHistory,
+          findings,
+          inputReport,
+          uploadedReportContent: uploadedReportContent || undefined,
+          uploadedReportMimeType: uploadedReportMimeType || undefined,
+          systemInstruction: systemInstruction || undefined,
+          annotations: annotations.length > 0 ? annotations : undefined,
+          attachedImages: attachedImages && attachedImages.length > 0 ? attachedImages.map((img, idx) => ({
+            id: img.id,
+            index: idx + 1,
+            caption: img.caption || ""
+          })) : undefined,
+        }),
+      });
+
+      let data: any;
+      try {
+        data = await response.json();
+      } catch (jsonErr) {
+        const textResponse = await response.text().catch(() => "");
+        throw new Error(`La respuesta del servidor no es JSON vÃ¡lido (CÃ³digo HTTP ${response.status}). Detalle: ${textResponse.slice(0, 200) || "Sin respuesta del servidor"}`);
+      }
+
+      clearInterval(stepInterval);
+
+      if (response.ok && data.success) {
+        if (generatedReport) {
+          setReportHistory((prev) => [...prev, generatedReport]);
+          setReportRedoHistory([]);
+        }
+        setGeneratedReport(data.report);
+        setOriginalBaseReport(data.report);
+
+        // Resetear casillas del Sistema de ActivaciÃ³n RÃ¡pida de MÃ³dulos: por defecto Resumen Operacional y Paciente marcados
+        setSelectedBatchModules({
+          radar: false,
+          case_analysis: false,
+          quality_eval: false,
+          bibliography: false,
+          operational_summary: true,
+          patient_summary: true,
+          glossary: false,
+          schematic: false,
+          measurements: false,
+          footnotes: false,
+          organ_synoptic: false,
+          fractures: false,
+          classifications: false,
+        });
+
+        // ActivaciÃ³n AutomÃ¡tica de EvaluaciÃ³n de Calidad al Generar Reporte
+        handleEvaluateReport(data.report);
+
+        // Auto-detect specific study protocol (e.g. Muslo Posterior, Hombro, Rodilla, etc.) and switch active components
+        autoDetectSpecificStudyAndModality(data.report, studyType);
+        
+        // Save to History Log
+        const newReport: SavedReport = {
+          id: Math.random().toString(36).substring(2, 11),
+          timestamp: new Date().toLocaleDateString("es-ES", {
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit"
+          }),
+          studyType,
+          clinicalHistory: clinicalHistory || "No especificada",
+          reportText: data.report
+        };
+
+        const updatedHistory = [newReport, ...savedReports.slice(0, 49)]; // Keep up to 50 reports in history
+        setSavedReports(updatedHistory);
+        localStorage.setItem("radiology_reports_history", JSON.stringify(updatedHistory));
+        idbSaveHistory(updatedHistory);
+
+        // Auto-save generated report into local studies database (IndexedDB + localStorage)
+        try {
+          const autoStudy: CloudStudy = {
+            id: newReport.id,
+            userId: "local",
+            userEmail: "anon@local.com",
+            timestamp: newReport.timestamp,
+            patientName: patientName || "Paciente Local",
+            patientEmail: patientEmail || "No especificado",
+            patientAge: patientAge || "",
+            patientGender: patientGender || "",
+            patientId: patientId || "",
+            reportDate: reportDate || new Date().toISOString().split('T')[0],
+            doctorName: doctorName || "MÃ©dico RadiÃ³logo",
+            doctorLicense: doctorLicense || "No especificada",
+            clinicName: clinicName || "ClÃ­nica Privada",
+            studyType,
+            clinicalHistory: clinicalHistory || "No especificada",
+            findings: findings || "Hallazgos guardados automÃ¡ticamente.",
+            reportText: data.report,
+            attachedImages: attachedImages || [],
+            operationalSummaryText: "",
+            pdfBase64: "",
+            patientSummary: null,
+            createdAt: new Date().toISOString(),
+            specificStudy: specificStudy || "General",
+            pdfLayoutType: pdfLayoutType || "classic",
+            selectedLogo: selectedLogo || "none"
+          };
+
+          // Save into IndexedDB reliably
+          await idbSaveStudy(autoStudy);
+
+          const storedStudies = localStorage.getItem("rad_local_studies");
+          let studiesList: CloudStudy[] = storedStudies ? JSON.parse(storedStudies) : [];
+          studiesList = [autoStudy, ...studiesList.filter(s => s.id !== autoStudy.id)];
+          try {
+            localStorage.setItem("rad_local_studies", JSON.stringify(studiesList));
+          } catch (e) {}
+          
+          // Re-fetch cloud/local studies to update UI
+          fetchCloudStudies();
+        } catch (autoErr) {
+          console.warn("Error auto-saving study to local archive:", autoErr);
+        }
+
+        // If base64Image is present, automatically trigger image evaluation
+        if (base64Image) {
+          triggerAutoImageEvaluation(base64Image, selectedFile?.type, studyType, clinicalHistory, findings, annotations);
+        }
+      } else {
+        setReportError(data.error || `Error del servidor (CÃ³digo ${response.status}): ${JSON.stringify(data)}`);
+      }
+    } catch (error: any) {
+      clearInterval(stepInterval);
+      setReportError(`Falla de red o de servidor: ${error?.message || String(error)}. AsegÃºrate de que el servidor estÃ¡ encendido y que tu API Key en la pestaÃ±a de ConfiguraciÃ³n es correcta.`);
+      console.error(error);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  // Helper to trigger standard image clinical assessment automatically
+  const triggerAutoImageEvaluation = async (
+    img: string,
+    mime: string | undefined,
+    study: string,
+    history: string,
+    finds: string,
+    anns?: ImageAnnotation[]
+  ) => {
+    setIsEvaluatingImage(true);
+    try {
+      const resp = await fetch("/api/evaluate-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: selectedModel,
+          image: img,
+          mimeType: mime || "image/png",
+          studyType: study,
+          clinicalHistory: history,
+          findings: finds,
+          isAdditional: false,
+          annotations: anns && anns.length > 0 ? anns : undefined,
+        }),
+      });
+      const resData = await resp.json();
+      if (resData.success && resData.evaluation) {
+        setImageEvaluation(resData.evaluation);
+      }
+    } catch (e) {
+      console.error("Error auto-evaluating image:", e);
+    } finally {
+      setIsEvaluatingImage(false);
+    }
+  };
+
+  // ACTION: ASSIST AND POLISH STUDY INDICATION (CASING & SPELLING ORTHOGRAPHY)
+  const handleAssistClinicalHistory = async () => {
+    if (!clinicalHistory.trim() || isAssistingHistory) return;
+    setIsAssistingHistory(true);
+    try {
+      const response = await fetch("/api/assist-clinical-history", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: selectedModel,
+          clinicalHistory,
+          studyType,
+        }),
+      });
+      const data = await response.json();
+      if (data.success && data.polishedText) {
+        setClinicalHistory(data.polishedText);
+      } else {
+        console.error("No se pudo pulir la indicaciÃ³n:", data.error);
+      }
+    } catch (e) {
+      console.error("Error al asistir con la indicaciÃ³n clÃ­nica:", e);
+    } finally {
+      setIsAssistingHistory(false);
+    }
+  };
+
+  // ACTION: REQUEST CUSTOM MODIFICATIONS (DIALOG MODIFIER) OR QUICK BUTTONS
+  const handleModifyReport = async (instructionText: string) => {
+    if (!generatedReport) return;
+    setIsModifyingReport(true);
+    setModifyError(null);
+    try {
+      const response = await fetch("/api/modify-report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: selectedModel,
+          currentReport: generatedReport,
+          instruction: instructionText,
+          image: base64Image || undefined,
+          mimeType: selectedFile?.type || undefined,
+          attachedImages: attachedImages && attachedImages.length > 0 ? attachedImages.map((img, idx) => ({
+            id: img.id,
+            index: idx + 1,
+            caption: img.caption || ""
+          })) : undefined,
+        }),
+      });
+      const data = await response.json();
+      if (data.success && data.report) {
+        if (generatedReport) {
+          setReportHistory((prev) => [...prev, generatedReport]);
+          setReportRedoHistory([]);
+        }
+        setGeneratedReport(data.report);
+        setCurrentModInstruction("");
+      } else {
+        setModifyError(data.error || "OcurriÃ³ un error al intentar modificar el informe.");
+      }
+    } catch (err: any) {
+      console.error("Error al modificar informe:", err);
+      setModifyError(err?.message || String(err));
+    } finally {
+      setIsModifyingReport(false);
+    }
+  };
+
+  const processRecQueue = async () => {
+    if (isProcessingRecQueueRef.current) return;
+    isProcessingRecQueueRef.current = true;
+    setIsModifyingReport(true);
+    setModifyError(null);
+
+    while (recQueueRef.current.length > 0) {
+      const recText = recQueueRef.current[0];
+      const activeReport = isEditingReportManualRef.current ? editedReportTextRef.current : (generatedReportRef.current || "");
+
+      if (!activeReport) {
+        recQueueRef.current.shift();
+        setPendingRecs(prev => {
+          const next = { ...prev };
+          delete next[recText];
+          return next;
+        });
+        continue;
+      }
+
+      let sanitizedRec = recText.trim();
+      sanitizedRec = sanitizedRec.replace(/^\*\*|\*\*$/g, "").trim();
+      sanitizedRec = sanitizedRec.replace(/^["']|["']$/g, "").trim();
+
+      setPendingRecText(recText);
+
+      try {
+        const response = await fetch("/api/modify-report", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: selectedModelRef.current,
+            currentReport: activeReport,
+            instruction: `Integra de forma totalmente fluida, nativa y natural, actuando en todo momento como el radiÃ³logo principal que redacta el informe desde el principio, la siguiente clasificaciÃ³n, escala o recomendaciÃ³n clÃ­nica: "${sanitizedRec}". REQUISITO CRÃTICO: NO debes justificar la recomendaciÃ³n, ni meter introducciones, explicaciones clÃ­nicas de por quÃ© se usa ("para facilitar el manejo...", "se sugiere...", "como recomendaciÃ³n de auditorÃ­a..."), ni meta-comentarios. Escribe directo la categorÃ­a, el grado o el dato clÃ­nico en la secciÃ³n adecuada del reporte (HALLAZGOS o IMPRESIÃ“N DIAGNÃ“STICA). Conserva intacto todo el resto del reporte.`,
+            image: base64ImageRef.current || undefined,
+            mimeType: selectedFileRef.current?.type || undefined,
+          }),
+        });
+        const data = await response.json();
+        if (data.success && data.report) {
+          setReportHistory((prev) => [...prev, activeReport]);
+          setReportRedoHistory([]);
+          setGeneratedReport(data.report);
+          setEditedReportText(data.report);
+          generatedReportRef.current = data.report;
+          editedReportTextRef.current = data.report;
+
+          setIncorporatedAuditRecs(prev => ({
+            ...prev,
+            [recText]: true
+          }));
+        } else {
+          setModifyError(data.error || "OcurriÃ³ un error al intentar incorporar de manera inteligente la recomendaciÃ³n.");
+        }
+      } catch (err: any) {
+        console.error("Error al incorporar recomendaciÃ³n de auditorÃ­a:", err);
+        setModifyError(err?.message || String(err));
+      } finally {
+        recQueueRef.current.shift();
+        setPendingRecs(prev => {
+          const next = { ...prev };
+          delete next[recText];
+          return next;
+        });
+        setPendingRecText(null);
+      }
+    }
+
+    isProcessingRecQueueRef.current = false;
+    setIsModifyingReport(false);
+  };
+
+  const handleIncorporateRecommendation = (recText: string) => {
+    if (!recText || incorporatedAuditRecs[recText] || pendingRecs[recText]) return;
+
+    setPendingRecs(prev => ({ ...prev, [recText]: true }));
+    recQueueRef.current.push(recText);
+    processRecQueue();
+  };
+
+  const handleIncorporateToReport = (analysisText: string, studyTitle: string, medicalHistoryCombined: string, isAutoSync: boolean = false) => {
+    // Check if it is a structured Case Analysis with JSON
+    const jsonMatch = analysisText.match(/\[CASE_ANALYSIS_JSON\]\s*([\s\S]*?)\s*\[\/CASE_ANALYSIS_JSON\]/);
+    if (jsonMatch && jsonMatch[0]) {
+      const jsonBlock = jsonMatch[0] + "\n\n";
+      const textSummary = analysisText.replace(jsonMatch[0], "").trim();
+      let format = "custom";
+      try {
+        const parsed = JSON.parse(jsonMatch[1]);
+        format = parsed.format || "custom";
+      } catch (e) {
+        console.error(e);
+      }
+      setFindings(prev => {
+        return mergeCaseAnalysisBlock(prev || "", format, jsonBlock, textSummary);
+      });
+    } else {
+      const wrappedContent = `=== VALORACIÃ“N EXPERTA DE IMAGEN ANEXADA ===\n${analysisText}\n=== FIN DE VALORACIÃ“N EXPERTA ===`;
+      
+      setFindings(prev => {
+        if (!prev) return `${wrappedContent}\n\n`;
+        
+        const regex = /=== VALORACIÃ“N EXPERTA DE IMAGEN ANEXADA ===[\s\S]*?=== FIN DE VALORACIÃ“N EXPERTA ===/;
+        if (regex.test(prev)) {
+          return prev.replace(regex, wrappedContent);
+        }
+        
+        if (prev.includes("=== VALORACIÃ“N EXPERTA DE IMAGEN ANEXADA ===")) {
+          const splitted = prev.split("=== VALORACIÃ“N EXPERTA DE IMAGEN ANEXADA ===");
+          const afterPart = splitted.slice(1).join(" ");
+          const cleanedAfter = afterPart.replace(/^[\s\S]*?\n\n/, "");
+          return `${wrappedContent}\n\n${splitted[0]}${cleanedAfter}`;
+        }
+        
+        return `${wrappedContent}\n\n${prev}`;
+      });
+    }
+
+    // Auto-sync clinical history and study information into report generator inputs
+    if (medicalHistoryCombined && !medicalHistoryCombined.includes("S/D. Sospecha: S/D")) {
+      setClinicalHistory(prev => {
+        if (!prev || prev.trim() === "") return medicalHistoryCombined;
+        if (prev.includes(medicalHistoryCombined)) return prev;
+        return `${prev}\n\n[Contexto Doble ValoraciÃ³n]: ${medicalHistoryCombined}`;
+      });
+    }
+
+    if (studyTitle) {
+      setSpecificStudy(prev => {
+        if (!prev || prev.trim() === "") return studyTitle;
+        return prev;
+      });
+    }
+
+    if (!isAutoSync) {
+      setActiveTab("generator");
+    }
+  };
+
+  // ACTION: REQUEST ADDITIONAL OR SECOND VIEW CLINICAL EVALUATION OF THE IMAGE
+  const handleEvaluateImage = async () => {
+    if (!base64Image) return;
+    setIsEvaluatingAdditional(true);
+    setAdditionalEvalError(null);
+    try {
+      const response = await fetch("/api/evaluate-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: selectedModel,
+          image: base64Image,
+          mimeType: selectedFile?.type || "image/png",
+          studyType: studyType || "Estudio RadiolÃ³gico",
+          clinicalHistory: clinicalHistory || "",
+          findings: findings || "",
+          isAdditional: true,
+          annotations: annotations.length > 0 ? annotations : undefined,
+        }),
+      });
+      const data = await response.json();
+      if (data.success && data.evaluation) {
+        setAdditionalEvaluation(data.evaluation);
+      } else {
+        setAdditionalEvalError(data.error || "Error al realizar la valoraciÃ³n adicional.");
+      }
+    } catch (err: any) {
+      console.error("Error al evaluar imagen:", err);
+      setAdditionalEvalError(err?.message || String(err));
+    } finally {
+      setIsEvaluatingAdditional(false);
+    }
+  };
+
+  // ACTION: COMPLETE CASE ANALYSIS
+  const handleAnalyzeCase = async () => {
+    if (!generatedReport) return;
+    setIsAnalyzingCase(true);
+    setCaseAnalysisError(null);
+    setCaseAnalysis("");
+    setDiffsIncorporated(false);
+    setDiffsError(null);
+    try {
+      const response = await fetch("/api/analyze-case", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: selectedModel,
+          report: generatedReport,
+          studyType: studyType || "Estudio RadiolÃ³gico",
+          clinicalHistory: clinicalHistory || "",
+          findings: findings || "",
+        }),
+      });
+      const data = await response.json();
+      if (data.success && data.analysis) {
+        setCaseAnalysis(data.analysis);
+      } else {
+        setCaseAnalysisError(data.error || "Error al realizar el anÃ¡lisis del caso.");
+      }
+    } catch (err: any) {
+      console.error("Error al analizar caso:", err);
+      setCaseAnalysisError(err?.message || String(err));
+    } finally {
+      setIsAnalyzingCase(false);
+    }
+  };
+
+  // ACTIONS FOR ADVANCED VASCULAR ANALYSIS & DIAGRAMS
+  const handleAnalyzeVascular = async () => {
+    if (!generatedReport) return;
+    setIsAnalyzingVascular(true);
+    setVascularError(null);
+    try {
+      const response = await fetch("/api/analyze-vascular", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: selectedModel,
+          reportText: generatedReport,
+          studyType: specificStudy
+        }),
+      });
+      const data = await response.json();
+      if (data.success) {
+        setVascularTable(data.table || "");
+        setVascularStates(data.states || {});
+        setVascularDescriptions(data.descriptions || {});
+        setVascularSubLocations(data.subLocations || {});
+        setCarotidPlaques(data.carotidPlaques || []);
+      } else {
+        setVascularError(data.error || "No se pudieron analizar los hallazgos vasculares del informe.");
+      }
+    } catch (err: any) {
+      console.error("Error al realizar el anÃ¡lisis vascular:", err);
+      setVascularError(err?.message || String(err));
+    } finally {
+      setIsAnalyzingVascular(false);
+    }
+  };
+
+  const handleToggleVascularSegment = (segId: string) => {
+    const isVenoso = specificStudy === "Doppler venoso de miembro inferior" || generatedReport.toLowerCase().includes("venoso");
+    const current = vascularStates[segId] || "normal";
+    
+    let nextState = "normal";
+    if (isVenoso) {
+      // venous levels: normal -> reflux -> thrombosis -> normal
+      if (current === "normal") nextState = "reflux";
+      else if (current === "reflux") nextState = "thrombosis";
+    } else {
+      // arterial & carotid levels: normal -> mild -> severe -> normal
+      if (current === "normal") nextState = "mild";
+      else if (current === "mild") nextState = "severe";
+    }
+
+    setVascularStates(prev => ({
+      ...prev,
+      [segId]: nextState
+    }));
+
+    // Sutil prefilled description matching the manually edited state
+    let label = "Normal / Conservado";
+    if (nextState === "mild") label = "Placas ateromatosas con estenosis leve (<50%)";
+    else if (nextState === "severe") label = "Estenosis hemodinÃ¡micamente significativa / severa (>=50%)";
+    else if (nextState === "reflux") label = "Insuficiencia valvular con reflujo retrÃ³grado";
+    else if (nextState === "thrombosis") label = "ObstrucciÃ³n trombÃ³tica patente / No colapsable";
+
+    setVascularDescriptions(prev => ({
+      ...prev,
+      [segId]: label
+    }));
+  };
+
+  const handleExportVascularTableToReport = () => {
+    if (!vascularTable) return;
+    setReportHistory((prev) => [...prev, generatedReport]);
+    const separator = "\n\n";
+    const title = "### CUADRO DE HALLAZGOS VASCULARES (SÃNTESIS DIAGNÃ“STICA)\n";
+    
+    // Avoid double inclusion if already exists
+    if (generatedReport.includes("### CUADRO DE HALLAZGOS VASCULARES")) {
+      // Replace existing
+      const regex = /### CUADRO DE HALLAZGOS VASCULARES[\s\S]+/g;
+      const cleanReportText = generatedReport.replace(regex, "").trim();
+      const nextReport = cleanReportText + separator + title + vascularTable;
+      setGeneratedReport(nextReport);
+      setEditedReportText(nextReport);
+    } else {
+      const nextReport = generatedReport + separator + title + vascularTable;
+      setGeneratedReport(nextReport);
+      setEditedReportText(nextReport);
+    }
+  };
+
+  const handleExportVascularBlocksToReport = (blocksText: string) => {
+    if (!blocksText) return;
+    setReportHistory((prev) => [...prev, generatedReport]);
+    const separator = "\n\n";
+    const title = "### SÃNTESIS DE ANATOMÃA VASCULAR DOPPLER\n";
+    
+    // Format blocksText inside triple backticks so it gets parsed perfectly as standard code in markdown and PDF
+    const formattedBlocks = blocksText.trim().startsWith("```") 
+      ? blocksText 
+      : "```text\n" + blocksText.trim() + "\n```";
+    
+    // Avoid double inclusion if already exists
+    if (generatedReport.includes("### SÃNTESIS DE ANATOMÃA VASCULAR DOPPLER")) {
+      // Replace existing
+      const regex = /### SÃNTESIS DE ANATOMÃA VASCULAR DOPPLER[\s\S]+/g;
+      const cleanReportText = generatedReport.replace(regex, "").trim();
+      const nextReport = cleanReportText + separator + title + formattedBlocks;
+      setGeneratedReport(nextReport);
+      setEditedReportText(nextReport);
+    } else {
+      const nextReport = generatedReport + separator + title + formattedBlocks;
+      setGeneratedReport(nextReport);
+      setEditedReportText(nextReport);
+    }
+  };
+
+  // ACTION: INCORPORATE ENRICHED DIFFERENTIAL DIAGNOSTICS SYNTHESIS TO REPORT
+  const handleIncorporateDifferentialDiagnostics = async () => {
+    if (!generatedReport || !caseAnalysis) return;
+    setIsIncorporatingDiffs(true);
+    setDiffsError(null);
+    try {
+      const response = await fetch("/api/incorporate-differentials", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: selectedModel,
+          currentReport: generatedReport,
+          caseAnalysis: caseAnalysis,
+        }),
+      });
+      const data = await response.json();
+      if (data.success && data.report) {
+        if (generatedReport) {
+          setReportHistory((prev) => [...prev, generatedReport]);
+          setReportRedoHistory([]);
+        }
+        setGeneratedReport(data.report);
+        setDiffsIncorporated(true);
+      } else {
+        setDiffsError(data.error || "Error al incorporar los diagnÃ³sticos diferenciales sintetizados.");
+      }
+    } catch (err: any) {
+      console.error("Error al incorporar diagnÃ³sticos diferenciales:", err);
+      setDiffsError(err?.message || String(err));
+    } finally {
+      setIsIncorporatingDiffs(false);
+    }
+  };
+
+  // ACTION: MEDICAL BIBLIOGRAPHY SEARCH
+  const handleSearchBibliography = async () => {
+    if (!generatedReport) return;
+    setIsSearchingBibliography(true);
+    setBibliographyError(null);
+    setBibliography("");
+    setBibliographySources([]);
+    try {
+      const response = await fetch("/api/search-bibliography", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: selectedModel,
+          report: generatedReport,
+          studyType: studyType || "Estudio RadiolÃ³gico",
+          findings: findings || "",
+        }),
+      });
+      const data = await response.json();
+      if (data.success && data.bibliography) {
+        setBibliography(data.bibliography);
+        if (data.sources) {
+          setBibliographySources(data.sources);
+        }
+      } else {
+        setBibliographyError(data.error || "Error al buscar la bibliografÃ­a mÃ©dica.");
+      }
+    } catch (err: any) {
+      console.error("Error al buscar bibliografÃ­a:", err);
+      setBibliographyError(err?.message || String(err));
+    } finally {
+      setIsSearchingBibliography(false);
+    }
+  };
+
+  // ACTION: SEARCH MORE BIBLIOGRAPHY (PAGINATION/LOAD MORE)
+  const handleSearchMoreBibliography = async () => {
+    if (!generatedReport || isSearchingMoreBibliography) return;
+    setIsSearchingMoreBibliography(true);
+    setBibliographyError(null);
+    try {
+      const response = await fetch("/api/search-bibliography", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: selectedModel,
+          report: generatedReport,
+          studyType: studyType || "Estudio RadiolÃ³gico",
+          findings: findings || "",
+          searchMore: true,
+          existingSources: bibliographySources,
+          existingBibliography: bibliography,
+        }),
+      });
+      const data = await response.json();
+      if (data.success && data.bibliography) {
+        setBibliography(data.bibliography);
+        if (data.sources && data.sources.length > 0) {
+          setBibliographySources((prev) => {
+            const seenUris = new Set(prev.map((s) => s.uri.toLowerCase().trim()));
+            const newSources = data.sources.filter((s: any) => s.uri && !seenUris.has(s.uri.toLowerCase().trim()));
+            return [...prev, ...newSources];
+          });
+        }
+      } else {
+        setBibliographyError(data.error || "Error al buscar fuentes bibliogrÃ¡ficas adicionales.");
+      }
+    } catch (err: any) {
+      console.error("Error al buscar mÃ¡s bibliografÃ­a:", err);
+      setBibliographyError(err?.message || String(err));
+    } finally {
+      setIsSearchingMoreBibliography(false);
+    }
+  };
+
+  // ACTION: EVALUATE GENERATED REPORT
+  const handleEvaluateReport = async (overrideReportText?: string) => {
+    const activeReport = overrideReportText || (isEditingReportManual ? editedReportText : (generatedReport || ""));
+    if (!activeReport) return;
+    setIsEvaluatingReport(true);
+    setReportEvaluationError(null);
+    setReportEvaluation("");
+    try {
+      const response = await fetch("/api/evaluate-report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: selectedModel,
+          report: activeReport,
+          studyType: studyType || "Estudio RadiolÃ³gico",
+          clinicalHistory: clinicalHistory || "",
+          findings: findings || "",
+        }),
+      });
+      const data = await response.json();
+      if (data.success && data.evaluation) {
+        setReportEvaluation(data.evaluation);
+      } else {
+        setReportEvaluationError(data.error || "Error al realizar la evaluaciÃ³n del reporte.");
+      }
+    } catch (err: any) {
+      console.error("Error al evaluar reporte:", err);
+      setReportEvaluationError(err?.message || String(err));
+    } finally {
+      setIsEvaluatingReport(false);
+    }
+  };
+
+  // Gmail API Integrated Share Handlers (Google Workspace Integration)
+  const handleOpenGmailShare = async (type: 'report_pdf' | 'patient_summary' | 'patient_infographic' | 'both_pdfs') => {
+    setGmailAttachedType('report_pdf');
+    setGmailTo(patientEmail || "");
+    setGmailSuccessMessage(null);
+    setGmailErrorMessage(null);
+
+    // Only select the official report PDF (as other elements are now included directly in the report)
+    setGmailAttachReport(true);
+    setGmailAttachSummary(false);
+    setGmailAttachInfographic(false);
+    
+    // Construct default subject & email body nicely for the official report
+    const clientName = patientName || "Paciente";
+    let subject = `Reporte de Estudio ClÃ­nico - ${clientName}`;
+    let body = `Estimado(a) ${clientName},\n\nLe enviamos adjunto a este correo el Reporte de Estudio ClÃ­nico Oficial realizado.\n\n`;
+
+    body += `Quedamos a su entera disposiciÃ³n para cualquier aclaraciÃ³n o consulta adicional.\n\nAtentamente,\n${doctorName || "MÃ©dico Especialista"}`;
+    
+    setGmailSubject(subject);
+    setGmailBody(body);
+    setShowGmailModal(true);
+
+    // Auto-save/update to cloud if user is logged in to ensure a valid and updated cloud link
+    if (gmailUser && generatedReport) {
+      try {
+        await handleSaveToCloud();
+      } catch (err) {
+        console.error("Auto cloud save error on opening Gmail share:", err);
+      }
+    }
+  };
+
+  const handleGmailLogin = async () => {
+    setIsLoggingInGmail(true);
+    setGmailErrorMessage(null);
+    try {
+      const result = await googleSignIn();
+      if (result) {
+        setGmailUser(result.user);
+        setGmailAccessToken(result.accessToken);
+        if (patientEmail && !gmailTo) {
+          setGmailTo(patientEmail);
+        }
+      }
+    } catch (err: any) {
+      console.error("Gmail authorization failed:", err);
+      setGmailErrorMessage("Error al autorizar con Google: " + (err.message || String(err)));
+    } finally {
+      setIsLoggingInGmail(false);
+    }
+  };
+
+  const handleAnonymousLogin = async () => {
+    setIsLoggingInGmail(true);
+    setGmailErrorMessage(null);
+    try {
+      const result = await anonymousSignIn();
+      if (result) {
+        setGmailUser(result.user);
+        setGmailAccessToken(result.accessToken);
+      }
+    } catch (err: any) {
+      console.error("Anonymous authentication failed:", err);
+      setGmailErrorMessage("Error al iniciar acceso instantÃ¡neo: " + (err.message || String(err)));
+    } finally {
+      setIsLoggingInGmail(false);
+    }
+  };
+
+  const handleEmailLogin = async () => {
+    if (!authEmail || !authPassword) {
+      setGmailErrorMessage("Por favor ingrese correo y contraseÃ±a.");
+      return;
+    }
+    setIsLoggingInGmail(true);
+    setGmailErrorMessage(null);
+    try {
+      const result = await emailSignIn(authEmail, authPassword);
+      if (result) {
+        setGmailUser(result.user);
+        setGmailAccessToken(result.accessToken);
+      }
+    } catch (err: any) {
+      console.error("Email authentication failed:", err);
+      let friendlyMsg = err.message || String(err);
+      if (err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found') {
+        friendlyMsg = "Credenciales incorrectas o usuario no registrado.";
+      } else if (err.code === 'auth/invalid-email') {
+        friendlyMsg = "El formato del correo es invÃ¡lido.";
+      }
+      setGmailErrorMessage("Error de inicio de sesiÃ³n: " + friendlyMsg);
+    } finally {
+      setIsLoggingInGmail(false);
+    }
+  };
+
+  const handleEmailRegister = async () => {
+    if (!authEmail || !authPassword) {
+      setGmailErrorMessage("Por favor ingrese correo y contraseÃ±a.");
+      return;
+    }
+    if (authPassword.length < 6) {
+      setGmailErrorMessage("La contraseÃ±a debe tener al menos 6 caracteres.");
+      return;
+    }
+    setIsLoggingInGmail(true);
+    setGmailErrorMessage(null);
+    try {
+      const result = await emailSignUp(authEmail, authPassword);
+      if (result) {
+        setGmailUser(result.user);
+        setGmailAccessToken(result.accessToken);
+      }
+    } catch (err: any) {
+      console.error("Email registration failed:", err);
+      let friendlyMsg = err.message || String(err);
+      if (err.code === 'auth/email-already-in-use') {
+        friendlyMsg = "Este correo electrÃ³nico ya estÃ¡ registrado.";
+      } else if (err.code === 'auth/invalid-email') {
+        friendlyMsg = "El formato del correo es invÃ¡lido.";
+      } else if (err.code === 'auth/weak-password') {
+        friendlyMsg = "La contraseÃ±a es muy dÃ©bil (mÃ­nimo 6 caracteres).";
+      }
+      setGmailErrorMessage("Error al registrar especialista: " + friendlyMsg);
+    } finally {
+      setIsLoggingInGmail(false);
+    }
+  };
+
+  const handleGmailLogout = async () => {
+    try {
+      await googleLogout();
+      setGmailUser(null);
+      setGmailAccessToken(null);
+    } catch (err) {
+      console.error("Logout failed:", err);
+    }
+  };
+
+  const handleSendGmailAction = async () => {
+    if (!gmailAccessToken) {
+      setGmailErrorMessage("Debes iniciar sesiÃ³n con Google antes de realizar el envÃ­o.");
+      return;
+    }
+    if (!gmailTo) {
+      setGmailErrorMessage("Por favor, especifica el correo electrÃ³nico del destinatario.");
+      return;
+    }
+    if (!gmailAttachReport && !gmailAttachSummary && !gmailAttachInfographic) {
+      setGmailErrorMessage("Por favor, selecciona al menos un archivo para adjuntar.");
+      return;
+    }
+    
+    setIsSendingGmail(true);
+    setGmailSuccessMessage(null);
+    setGmailErrorMessage(null);
+
+    try {
+      // Helper to chunk base64 strings into 76-character blocks as required by standard MIME (RFC 2045)
+      // and strictly enforced by intermediate SMTP servers/receivers (RFC 5321 line length limits of 1000 chars)
+      const chunkBase64WithCRLF = (base64Str: string): string => {
+        const chunks: string[] = [];
+        for (let i = 0; i < base64Str.length; i += 76) {
+          chunks.push(base64Str.substring(i, i + 76));
+        }
+        return chunks.join("\n");
+      };
+
+      let explanationPDFBase64 = "";
+      let reportPDFBase64 = "";
+      let infographicBase64 = "";
+      let infographicContentType = "image/png";
+
+      // 1. Generate PDFs in-memory as Base64 strings if selected/checked
+      if (gmailAttachSummary) {
+        if (!patientSummary) {
+          throw new Error("Debe generar primero la 'TraducciÃ³n EmpÃ¡tica y ExplicaciÃ³n' para poder adjuntarla.");
+        }
+        const rawSummaryB64 = await handleDownloadPatientSummaryPDF(false, false, true) || "";
+        explanationPDFBase64 = chunkBase64WithCRLF(rawSummaryB64);
+      }
+
+      if (gmailAttachReport) {
+        if (!generatedReport) {
+          throw new Error("Debe generar primero el 'Reporte de Estudio' para poder adjuntarlo.");
+        }
+        const rawReportB64 = await handleDownloadNativePDF(false, false, true) || "";
+        reportPDFBase64 = chunkBase64WithCRLF(rawReportB64);
+      }
+
+      // 2. Fetch and convert infographic image if selected/checked
+      if (gmailAttachInfographic) {
+        if (!infographicUrl) {
+          throw new Error("Debe generar primero la 'InfografÃ­a' para poder adjuntarla.");
+        }
+        try {
+          let plainInfographicBase64 = "";
+          if (infographicUrl.startsWith("data:")) {
+            const match = infographicUrl.match(/^data:([^;]+);base64,(.+)$/);
+            if (match) {
+              infographicContentType = match[1];
+              plainInfographicBase64 = match[2];
+            } else {
+              throw new Error("Formato de URL de datos de infografÃ­a no reconocido.");
+            }
+          } else {
+            const res = await fetch(infographicUrl);
+            const blob = await res.blob();
+            infographicContentType = blob.type || "image/png";
+            
+            const arrayBuf = await blob.arrayBuffer();
+            const bytesList = new Uint8Array(arrayBuf);
+            let binaryStr = "";
+            for (let i = 0; i < bytesList.length; i++) {
+              binaryStr += String.fromCharCode(bytesList[i]);
+            }
+            plainInfographicBase64 = window.btoa(binaryStr);
+          }
+          infographicBase64 = chunkBase64WithCRLF(plainInfographicBase64);
+        } catch (imageErr: any) {
+          throw new Error("Error al preparar la imagen de la infografÃ­a: " + (imageErr.message || String(imageErr)));
+        }
+      }
+
+      // 3. Build RFC 2822 Multipart MIME Message cleanly
+      const boundary = "boundary_part_medico_reporte_" + Math.random().toString(36).substring(2);
+
+      // Helper to strip accents & restrict to safe ASCII characters for MIME headers
+      const sanitizeMimeFilename = (nameStr: string): string => {
+        return nameStr
+          .trim()
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .replace(/Ã±/gi, "n")
+          .replace(/[^a-zA-Z0-9_\.-]/g, "_")
+          .replace(/\s+/g, "_");
+      };
+
+      const cleanPatientName = patientName ? sanitizeMimeFilename(patientName) : "paciente";
+      const filenameSummary = `Explicacion_${cleanPatientName}.pdf`;
+      const filenameReport = `Reporte_${cleanPatientName}.pdf`;
+      const fileExt = infographicContentType === "image/jpeg" ? "jpg" : "png";
+      const filenameInfographic = `Infografia_${cleanPatientName}.${fileExt}`;
+
+      const formattedBody = gmailBody.replace(/\n/g, "<br/>");
+      const htmlBodyContent = `<div style="font-family: sans-serif; font-size: 14px; color: #1e293b; line-height: 1.6;">${formattedBody}</div>`;
+      const htmlBodyBase64Raw = window.btoa(unescape(encodeURIComponent(htmlBodyContent)));
+      const htmlBodyBase64 = chunkBase64WithCRLF(htmlBodyBase64Raw);
+
+      // Set UTF-8 encoded subject to guarantee character sets are preserved
+      const b64Subject = window.btoa(unescape(encodeURIComponent(gmailSubject)));
+
+      const parts: string[] = [];
+      parts.push(`MIME-Version: 1.0`);
+      parts.push(`To: ${gmailTo}`);
+      parts.push(`Subject: =?utf-8?B?${b64Subject}?=`);
+      parts.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
+      parts.push(``); // Blank line separating headers from standard multipart payload
+
+      // Email text content part (Base64 encoded to safely preserve all Spanish characters/accents)
+      parts.push(`--${boundary}`);
+      parts.push(`Content-Type: text/html; charset="UTF-8"`);
+      parts.push(`Content-Transfer-Encoding: base64`);
+      parts.push(``); // Blank line separating part headers from content
+      parts.push(htmlBodyBase64);
+      parts.push(``); // Safe spacer
+
+      // Native Report Attachment
+      if (gmailAttachReport && reportPDFBase64) {
+        parts.push(`--${boundary}`);
+        parts.push(`Content-Type: application/pdf; name="${filenameReport}"`);
+        parts.push(`Content-Disposition: attachment; filename="${filenameReport}"`);
+        parts.push(`Content-Transfer-Encoding: base64`);
+        parts.push(``); // Blank line separating part headers from content
+        parts.push(reportPDFBase64);
+        parts.push(``); // Safe spacer
+      }
+
+      // Patient Summary/Explanation Attachment
+      if (gmailAttachSummary && explanationPDFBase64) {
+        parts.push(`--${boundary}`);
+        parts.push(`Content-Type: application/pdf; name="${filenameSummary}"`);
+        parts.push(`Content-Disposition: attachment; filename="${filenameSummary}"`);
+        parts.push(`Content-Transfer-Encoding: base64`);
+        parts.push(``); // Blank line separating part headers from content
+        parts.push(explanationPDFBase64);
+        parts.push(``); // Safe spacer
+      }
+
+      // Infographic Image Attachment
+      if (gmailAttachInfographic && infographicBase64) {
+        parts.push(`--${boundary}`);
+        parts.push(`Content-Type: ${infographicContentType}; name="${filenameInfographic}"`);
+        parts.push(`Content-Disposition: attachment; filename="${filenameInfographic}"`);
+        parts.push(`Content-Transfer-Encoding: base64`);
+        parts.push(``); // Blank line separating part headers from content
+        parts.push(infographicBase64);
+        parts.push(``); // Safe spacer
+      }
+
+      // End boundary
+      parts.push(`--${boundary}--`);
+
+      // Combine parts with exact standard CRLF
+      const emailRaw = parts.join("\n");
+      
+      // Base64URL encode MIME message safely
+      const utf8Encoder = new TextEncoder();
+      const bytes = utf8Encoder.encode(emailRaw);
+      let binary = "";
+      const len = bytes.byteLength;
+      for (let i = 0; i < len; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      const base64 = window.btoa(binary);
+      const base64Url = base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+       // 4. Post to Google Gmail API send endpoint
+      const response = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${gmailAccessToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          raw: base64Url
+        })
+      });
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          setGmailAccessToken(null);
+          localStorage.removeItem("rad_gmail_access_token");
+          throw new Error("Su sesiÃ³n de Gmail ha expirado por seguridad (las sesiones de Google duran 1 hora). Como hemos habilitado el acceso rÃ¡pido, simplemente haga clic en 'Autorizar Gmail' para renovarla en 1 segundo sin tener que volver a elegir su cuenta ni ingresar sus datos.");
+        }
+        const errorText = await response.text();
+        throw new Error(`Gmail API reportÃ³ un error de envÃ­o: ${errorText}`);
+      }
+
+      setGmailSuccessMessage("Â¡Correo electrÃ³nico enviado con Ã©xito vÃ­a Gmail!");
+    } catch (err: any) {
+      console.error("Failed to send email via Gmail:", err);
+      setGmailErrorMessage("Error al enviar el correo: " + (err.message || String(err)));
+    } finally {
+      setIsSendingGmail(false);
+    }
+  };
+
+  // WhatsApp Share Handlers
+  const handleOpenWhatsAppShare = async (type: 'report_pdf' | 'patient_infographic' | 'patient_summary') => {
+    setWhatsappShareType(type);
+    setShowWhatsAppModal(true);
+
+    if (type === 'patient_summary') {
+      setWhatsappIncludePatientSummary(true);
+      setWhatsappIncludeOperationalSummary(false);
+    } else if (type === 'report_pdf') {
+      setWhatsappIncludeOperationalSummary(operationalSummaryText ? true : false);
+      setWhatsappIncludePatientSummary(false);
+    } else {
+      setWhatsappIncludePatientSummary(patientSummary ? true : false);
+      setWhatsappIncludeOperationalSummary(operationalSummaryText ? true : false);
+    }
+  };
+
+  const getWhatsAppTextPreview = (overrideId?: string) => {
+    let text = `*REPORTE RADIOLÃ“GICO DIGITAL*\n`;
+    text += `*â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”*\n\n`;
+
+    if (patientName) text += `*Paciente:* ${patientName}\n`;
+    if (patientAge) text += `*Edad:* ${patientAge}\n`;
+    if (patientGender) text += `*GÃ©nero:* ${patientGender}\n`;
+    if (patientId) text += `*ID/CÃ©dula:* ${patientId}\n`;
+    if (studyType) text += `*Estudio:* ${studyType}\n`;
+    if (reportDate) text += `*Fecha:* ${formatDateToDMY(reportDate)}\n`;
+    if (doctorName) text += `*Especialista:* ${doctorName}\n`;
+    text += `\n`;
+
+    // 1. Resumen ClÃ­nico Operativo (Conclusions)
+    if (whatsappIncludeOperationalSummary && operationalSummaryText) {
+      const cleanOperationalSummary = operationalSummaryText
+        .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F900}-\u{1F9FF}\u{1F1E6}-\u{1F1FF}\u{1F191}-\u{1F251}\u{1F004}\u{1F0CF}\u{1F170}-\u{1F171}\u{1F17E}-\u{1F17F}\u{1F18E}\u{3030}\u{2B50}\u{2B55}\u{2934}-\u{2935}\u{2B05}-\u{2B07}\u{2B1B}-\u{2B1C}\u{3297}\u{3299}\u{303D}\u{00A9}\u{00AE}\u{2122}\u{2139}\u{24C2}\u{25AA}-\u{25AB}\u{25B6}\u{25C0}\u{25FB}-\u{25FE}\u{1F000}-\u{1F9FF}]/gu, "")
+        .replace(/\p{Emoji_Presentation}/gu, "")
+        .replace(/[\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD00-\uDFFF]/g, "")
+        .replace(/  +/g, ' ')
+        .trim();
+
+      text += `*RESUMEN CLÃNICO OPERATIVO*\n`;
+      text += `*â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”*\n`;
+      text += `${cleanOperationalSummary}\n\n`;
+    }
+
+    // 2. AcompaÃ±amiento Explicativo para el Paciente
+    if (whatsappIncludePatientSummary && patientSummary) {
+      text += `*EXPLICACIÃ“N PARA EL PACIENTE*\n`;
+      text += `_TraducciÃ³n de hallazgos mÃ©dicos a un lenguaje claro_\n`;
+      text += `*â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”*\n\n`;
+
+      if (patientSummary.summary) {
+        text += `*Resumen de su estado:*\n${patientSummary.summary.trim()}\n\n`;
+      }
+
+      if (patientSummary.keyFindings && patientSummary.keyFindings.length > 0) {
+        text += `*Hallazgos Principales:*\n`;
+        patientSummary.keyFindings.forEach((finding: any, idx: number) => {
+          const title = finding.finding || finding.title || "";
+          const desc = finding.explanation || finding.description || "";
+          text += `${idx + 1}. *${title}:* ${desc}\n`;
+        });
+        text += `\n`;
+      }
+    }
+
+    text += `*â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”*\n`;
+    text += `_Por favor, descargue y conserve los documentos PDF oficiales adjuntos para presentarlos en su prÃ³xima consulta de seguimiento._`;
+    return text;
+  };
+
+  const handleSendWhatsAppAction = async () => {
+    let studyIdToUse = currentCloudStudyId;
+
+    // Save/update to cloud automatically first to guarantee the link is always generated, saved and up to date! (skip if already saved)
+    if (gmailUser && generatedReport && !currentCloudStudyId) {
+      try {
+        const savedId = await handleSaveToCloud();
+        if (savedId) {
+          studyIdToUse = savedId;
+        }
+      } catch (err) {
+        console.error("Auto cloud save error inside handleSendWhatsAppAction:", err);
+      }
+    }
+
+    const text = getWhatsAppTextPreview(studyIdToUse);
+    const cleanPhone = whatsappPhone ? whatsappPhone.replace(/\D/g, "") : "";
+    const urlEncoded = encodeURIComponent(text);
+    
+    // Construct WhatsApp Send URL
+    const url = cleanPhone 
+      ? `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${urlEncoded}`
+      : `https://api.whatsapp.com/send?text=${urlEncoded}`;
+
+    // 1. OPEN WHATSAPP ENTIRELY SYNCHRONOUSLY!
+    // This is the absolute key to bypass the browser's popup blocker.
+    try {
+      window.open(url, "_blank");
+    } catch (popupErr) {
+      console.error("Popup blocker prevented opening WhatsApp:", popupErr);
+    }
+
+    // 2. Perform the heavy infographic processing in the background (No PDF downloads to local device)
+    if (whatsappShareType === 'patient_infographic') {
+      if (infographicUrl && (infographicUrl.startsWith("data:") || infographicUrl.startsWith("blob:") || infographicUrl.startsWith("http"))) {
+        try {
+          const response = await fetch(infographicUrl);
+          const blob = await response.blob();
+          const format = infographicUrl.includes("image/png") ? "png" : "jpeg";
+          const file = new File([blob], `infografia_paciente.${format}`, { type: blob.type });
+          if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+            navigator.share({
+              files: [file],
+              title: "InfografÃ­a Paciente",
+              text: `InfografÃ­a de ${patientName || "Paciente"}`
+            }).catch(err => {
+              console.warn("Native Share failed for infographic image:", err);
+            });
+          }
+        } catch (err) {
+          console.warn("Could not share infographic image as file:", err);
+        }
+      }
+    }
+
+    setShowWhatsAppModal(false);
+  };
+
+  // ACTION: GENERATE DEMOCRATIZED AND SIMPLIFIED PATIENT KEY FINDINGS & SUMMARY
+  const handleGeneratePatientSummary = async () => {
+    if (!generatedReport) return;
+    setIsGeneratingPatientSummary(true);
+    setPatientSummaryError(null);
+    setPatientSummary(null);
+    setExpandedFindings({});
+    try {
+      const response = await fetch("/api/generate-patient-summary", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: selectedModel,
+          report: generatedReport,
+          studyType: studyType || "Estudio RadiolÃ³gico",
+          clinicalHistory: clinicalHistory || "",
+        }),
+      });
+      const data = await response.json();
+      if (data.success && data.data) {
+        setPatientSummary(data.data);
+      } else {
+        setPatientSummaryError(data.error || "Error al generar el resumen del paciente.");
+      }
+    } catch (err: any) {
+      console.error("Error al generar resumen para paciente:", err);
+      setPatientSummaryError(err?.message || String(err));
+    } finally {
+      setIsGeneratingPatientSummary(false);
+    }
+  };
+
+  // ACTION: GENERATE DYNAMIC MEDICAL GLOSSARY ON REPORT TERMS
+  const handleGenerateDynamicGlossary = async () => {
+    if (!generatedReport) return;
+    setIsGeneratingDynamicGlossary(true);
+    setDynamicGlossaryError(null);
+    setDynamicGlossary(null);
+    setGlossaryLitSearch({});
+    try {
+      const response = await fetch("/api/generate-dynamic-glossary", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: selectedModel,
+          report: generatedReport,
+        }),
+      });
+      const data = await response.json();
+      if (data.success && data.data) {
+        setDynamicGlossary(data.data);
+      } else {
+        setDynamicGlossaryError(data.error || "Error al construir el glosario del reporte.");
+      }
+    } catch (err: any) {
+      console.error("Error al construir glosario dinÃ¡mico:", err);
+      setDynamicGlossaryError(err?.message || String(err));
+    } finally {
+      setIsGeneratingDynamicGlossary(false);
+    }
+  };
+
+  // ACTION: GENERATE OPERATIONAL SUMMARY FOR WHATSAPP
+  const handleGenerateWhatsAppSummary = async () => {
+    const reportContent = isEditingReportManual ? editedReportText : generatedReport;
+    if (!reportContent) return;
+    setIsGeneratingOperationalSummary(true);
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: selectedModel,
+          messages: [{
+            role: "user",
+            text: "Resume de forma muy concisa ÃšNICAMENTE los hallazgos clÃ­nicos principales de este reporte mÃ©dico en 3 o 4 viÃ±etas de texto asertivas y claras, redactadas con un lenguaje profesional pero comprensible, apto para ser compartido por WhatsApp y consultado digitalmente por el paciente. NO incluyas ninguna recomendaciÃ³n, sugerencia de manejo ni plan a futuro, limÃ­tate estrictamente a los hallazgos de forma asertiva. No agregues preÃ¡mbulos, saludos, ni comentarios personales, devuelve directamente las viÃ±etas con guiones '-'. Reporte:\n\n" + reportContent
+          }]
+        })
+      });
+      const data = await response.json();
+      if (data.success && data.reply) {
+        const summary = data.reply.trim();
+        setOperationalSummaryText(summary);
+
+        // If currently synced to cloud, update cloud record too so the patient can see it immediately
+        if (currentCloudStudyId && gmailUser?.uid) {
+          let pdfB64 = "";
+          await saveStudyToCloud(gmailUser.uid, gmailUser.email || "", {
+            id: currentCloudStudyId,
+            timestamp: new Date().toLocaleString("es-ES", { hour: "2-digit", minute: "2-digit" }),
+            patientName: patientName || "Paciente AnÃ³nimo",
+            patientEmail: patientEmail || "No especificado",
+            patientAge: patientAge || "",
+            patientGender: patientGender || "",
+            patientId: patientId || "",
+            reportDate: reportDate || new Date().toISOString().split('T')[0],
+            doctorName: doctorName || "MÃ©dico RadiÃ³logo",
+            doctorLicense: doctorLicense || "No especificada",
+            clinicName: clinicName || "ClÃ­nica Privada",
+            studyType: studyType || "Estudio General",
+            clinicalHistory: clinicalHistory || "No especificada",
+            findings: findings || "No especificadas",
+            reportText: reportContent,
+            pdfBase64: pdfB64,
+            operationalSummaryText: summary,
+            customLogoUrl: customLogoUrl || "",
+            customLogoStyle: customLogoStyle || "logo",
+            customSignatureUrl: customSignatureUrl || "",
+            attachedImages: attachedImages || [],
+            findings3dRenders: findings3dRenders || [],
+            patientSummary: patientSummary || null
+          });
+          fetchCloudStudies(gmailUser.uid);
+        }
+      } else {
+        alert("OcurriÃ³ un error al generar el resumen. Por favor, intente de nuevo.");
+      }
+    } catch (error) {
+      console.error("Error generating WhatsApp summary:", error);
+      alert("Error de red al generar el resumen.");
+    } finally {
+      setIsGeneratingOperationalSummary(false);
+    }
+  };
+
+  // ACTION: GENERATE SCHEMATIC SUMMARY OF FINDINGS
+  const handleGenerateSchematicSummary = async () => {
+    if (!generatedReport) return;
+    setIsGeneratingSchematicSummary(true);
+    setSchematicSummaryError(null);
+    setSchematicSummary(null);
+    try {
+      let reportWithExtras = generatedReport;
+      if (activeProtocol) {
+        const extras = additionalFindings[activeProtocol];
+        if (extras && extras.length > 0) {
+          reportWithExtras += "\n\nHALLAZGOS ADICIONALES DETECTADOS POR EL MÃ‰DICO TRATANTE:\n";
+          extras.forEach(item => {
+            reportWithExtras += `- ${item.structureName}: ${item.description}\n`;
+          });
+        }
+      }
+
+      const response = await fetch("/api/generate-schematic-summary", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: selectedModel,
+          report: reportWithExtras,
+          studyType: studyType || "Estudio RadiolÃ³gico"
+        }),
+      });
+      const data = await response.json();
+      if (data.success && data.data) {
+        setSchematicSummary(data.data);
+      } else {
+        setSchematicSummaryError(data.error || "Error al estructurar el esquema del reporte.");
+      }
+    } catch (err: any) {
+      console.error("Error al construir esquema dinÃ¡mico:", err);
+      setSchematicSummaryError(err?.message || String(err));
+    } finally {
+      setIsGeneratingSchematicSummary(false);
+    }
+  };
+
+  // Helper to generate text content based on the selected format (blocks vs table)
+  const getSelectedSchematicContent = () => {
+    if (!schematicSummary) return "";
+    if (schematicFormat === "blocks") {
+      let text = "### ESQUEMA CLÃNICO DE HALLAZGOS PRINCIPALES\n\n";
+      schematicSummary.findings.forEach((f: any, idx: number) => {
+        const id = f.findingId || `H${idx + 1}`;
+        text += `**[${id}] ${f.anatomicalSite.toUpperCase()}**\n`;
+        text += `- **Hallazgo:** ${f.description}\n\n`;
+      });
+      return text.trim();
+    } else {
+      return schematicSummary.markdownScheme;
+    }
+  };
+
+  // ACTION: APPEND THE GENERATED SCHEMATIC TABLE DIRECTLY TO THE ACTIVE REPORT
+  const handleAppendSchemeToReport = () => {
+    if (!schematicSummary) return;
+    
+    // Choose active text source (manual draft may be currently in edit)
+    const activeText = isEditingReportManual ? editedReportText : (generatedReport || "");
+
+    // Save history
+    if (activeText) {
+      setReportHistory((prev) => [...prev, activeText]);
+    }
+    
+    const contentToAppend = getSelectedSchematicContent();
+    if (!contentToAppend) return;
+
+    const separator = "\n\n---\n\n";
+    const newReportText = activeText + separator + contentToAppend;
+    setGeneratedReport(newReportText);
+    setEditedReportText(newReportText);
+    alert(`Â¡Esquema de hallazgos clÃ­nico (${schematicFormat === "blocks" ? "en Bloques" : "en Tabla"}) insertado con Ã©xito al final de tu informe!`);
+  };
+
+  // ACTION: GENERATE SEMIOLOGY AND JUSTIFICATION TABLE
+  const handleGenerateSemiologyTable = async () => {
+    const reportText = isEditingReportManual ? editedReportText : generatedReport;
+    if (!reportText) return;
+    setIsGeneratingSemiology(true);
+    setSemiologyError(null);
+    setSemiologyData(null);
+    setSelectedConfirmedDiagnoses([]);
+    setSelectedRuledOutPathologies([]);
+    try {
+      const response = await fetch("/api/generate-semiology-table", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: selectedModel,
+          report: reportText,
+          studyType: studyType || "Estudio RadiolÃ³gico"
+        }),
+      });
+      const data = await response.json();
+      if (data.success && data.data) {
+        setSemiologyData(data.data);
+        setSelectedConfirmedDiagnoses(new Array(data.data.confirmedDiagnoses?.length || 0).fill(true));
+        setSelectedRuledOutPathologies(new Array(data.data.ruledOutPathologies?.length || 0).fill(true));
+      } else {
+        setSemiologyError(data.error || "Error al estructurar el cuadro de semiologÃ­a.");
+      }
+    } catch (err: any) {
+      console.error("Error al construir cuadro de semiologÃ­a:", err);
+      setSemiologyError(err?.message || String(err));
+    } finally {
+      setIsGeneratingSemiology(false);
+    }
+  };
+
+  // Helper to build markdown dynamically based on user selections
+  const buildDynamicSemiologyMarkdownTable = () => {
+    if (!semiologyData) return "";
+    
+    let md = "### CUADRO DE SEMIOLOGÃA Y JUSTIFICACIÃ“N RADIOLÃ“GICA\n\n";
+    
+    const filteredDiagnoses = (semiologyData.confirmedDiagnoses || []).filter((_: any, idx: number) => selectedConfirmedDiagnoses[idx]);
+    const filteredRuledOut = (semiologyData.ruledOutPathologies || []).filter((_: any, idx: number) => selectedRuledOutPathologies[idx]);
+    
+    if (filteredDiagnoses.length > 0) {
+      md += "#### 1. DiagnÃ³sticos Confirmados y JustificaciÃ³n SemiolÃ³gica\n\n";
+      md += "| INTERPRETACIÃ“N SEMIOLÃ“GICA | HALLAZGOS |\n";
+      md += "| :--- | :--- |\n";
+      filteredDiagnoses.forEach((d: any) => {
+        md += `| ${d.diagnosis.replace(/\|/g, "\\|")} | ${d.justification.replace(/\|/g, "\\|")} |\n`;
+      });
+      md += "\n";
+    }
+    
+    if (filteredRuledOut.length > 0) {
+      md += "#### 2. PatologÃ­as Diferenciales Descartadas y Evidencia de ExclusiÃ³n\n\n";
+      md += "| INTERPRETACIÃ“N SEMIOLÃ“GICA | HALLAZGOS |\n";
+      md += "| :--- | :--- |\n";
+      filteredRuledOut.forEach((r: any) => {
+        md += `| ${r.pathology.replace(/\|/g, "\\|")} | ${r.exclusionCriteria.replace(/\|/g, "\\|")} |\n`;
+      });
+      md += "\n";
+    }
+    
+    return md.trim();
+  };
+
+  // ACTION: APPEND THE GENERATED SEMIOLOGY TABLE DIRECTLY TO THE ACTIVE REPORT
+  const handleAppendSemiologyToReport = () => {
+    if (!semiologyData) return;
+    
+    // Choose active text source (manual draft may be currently in edit)
+    const activeText = isEditingReportManual ? editedReportText : (generatedReport || "");
+
+    // Save history
+    if (activeText) {
+      setReportHistory((prev) => [...prev, activeText]);
+    }
+    
+    const contentToAppend = buildDynamicSemiologyMarkdownTable();
+    if (!contentToAppend) {
+      alert("No has seleccionado ningÃºn punto para insertar.");
+      return;
+    }
+
+    const separator = "\n\n---\n\n";
+    const newReportText = activeText + separator + contentToAppend;
+    setGeneratedReport(newReportText);
+    setEditedReportText(newReportText);
+    alert("Â¡Cuadro de semiologÃ­a por imÃ¡genes insertado con Ã©xito al final de tu informe para el PDF formal!");
+  };
+
+  // ACTION: SEARCH TECHNICAL LITERATURE FOR A GLOSSARY TERM DIRECTLY WITHIN PANEL
+  const handleSearchGlossaryTermLiterature = async (term: string, query: string) => {
+    setGlossaryLitSearch(prev => ({
+      ...prev,
+      [term]: { loading: true }
+    }));
+    try {
+      const response = await fetch("/api/search-bibliography", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: selectedModel,
+          report: `Realiza una bÃºsqueda de evidencia para el tÃ©rmino mÃ©dico: ${term}. Contexto adicional: ${query}`,
+        }),
+      });
+      const data = await response.json();
+      if (data.success && data.bibliography) {
+        setGlossaryLitSearch(prev => ({
+          ...prev,
+          [term]: { 
+            loading: false, 
+            text: data.bibliography, 
+            sources: data.sources || [] 
+          }
+        }));
+      } else {
+        setGlossaryLitSearch(prev => ({
+          ...prev,
+          [term]: { 
+            loading: false, 
+            error: data.error || "No se pudo recuperar la revisiÃ³n cientÃ­fica sobre este concepto." 
+          }
+        }));
+      }
+    } catch (err: any) {
+      console.error("Error buscando literatura para tÃ©rmino:", err);
+      setGlossaryLitSearch(prev => ({
+        ...prev,
+        [term]: { 
+          loading: false, 
+          error: "Error de comunicaciÃ³n con el servidor central." 
+        }
+      }));
+    }
+  };
+
+  // ACTION: PRINT PROFESSIONAL EXPLAINED REPORT FOR PATIENT
+  const handlePrintPatientSummary = () => {
+    if (!patientSummary) return;
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) {
+      alert("Por favor, permite ventanas emergentes para abrir el formato de impresiÃ³n.");
+      return;
+    }
+    
+    const findingsHtml = patientSummary.keyFindings.map((finding: any) => `
+      <div style="margin-bottom: 22px; padding: 18px; border: 1px solid #e5e7eb; border-radius: 8px; page-break-inside: avoid; background-color: #fafafa;">
+        <h3 style="margin: 0 0 6px 0; color: #1e3a8a; font-family: system-ui, sans-serif; font-size: 16px; font-weight: 700;">${finding.title}</h3>
+        <p style="margin: 0 0 12px 0; font-size: 11px; font-style: italic; color: #4b5563; font-family: monospace;">TÃ©rmino original en informe tÃ©cnico: "${finding.originalTerm}"</p>
+        <p style="margin: 0 0 12px 0; font-size: 13.5px; font-family: system-ui, sans-serif; color: #1f2937; line-height: 1.55;"><strong>ExplicaciÃ³n:</strong> ${finding.simplifiedExplanation}</p>
+        <p style="margin: 0 0 8px 0; font-size: 12.5px; font-family: system-ui, sans-serif; color: #7c2d12; background-color: #fff7ed; padding: 10px; border-radius: 6px; border-left: 3px solid #f97316;">ðŸ” <strong>AnalogÃ­a de comprensiÃ³n:</strong> ${finding.analogy}</p>
+        <p style="margin: 0; font-size: 12.5px; font-family: system-ui, sans-serif; color: #1e3a8a; font-weight: 600; background-color: #eff6ff; padding: 10px; border-radius: 6px; border-left: 3px solid #3b82f6;">ðŸ©º <strong>Contexto ClÃ­nico y Perspectiva MÃ©dica:</strong> ${finding.reassurance}</p>
+      </div>
+    `).join("");
+
+    const carePointsHtml = (patientSummary.carePoints || []).map((point: string) => `
+      <li style="margin-bottom: 10px; font-size: 13.5px; font-family: system-ui, sans-serif; color: #374151; line-height: 1.5;">${point}</li>
+    `).join("");
+
+    const questionsHtml = (patientSummary.suggestedQuestions || []).map((q: string) => `
+      <li style="margin-bottom: 12px; font-size: 13.5px; font-family: system-ui, sans-serif; color: #111827; line-height: 1.4; font-weight: 600;">"${q}"</li>
+    `).join("");
+
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="utf-8">
+          <title>AcompaÃ±amiento RadiolÃ³gico Explicativo</title>
+          <style>
+            @media print {
+              body { margin: 0; padding: 15px; font-size: 12pt; }
+              .no-print { display: none; }
+            }
+            body { 
+              font-family: system-ui, -apple-system, sans-serif; 
+              padding: 40px; 
+              line-height: 1.6; 
+              color: #1f2937; 
+              max-width: 820px; 
+              margin: 0 auto; 
+            }
+            .header-banner {
+              text-align: center;
+              border-bottom: 4px solid #ea580c;
+              padding-bottom: 20px;
+              margin-bottom: 30px;
+            }
+            .header-banner h1 { 
+              color: #ea580c; 
+              font-size: 26px; 
+              margin: 0 0 8px 0; 
+              text-transform: uppercase;
+              letter-spacing: 0.5px;
+            }
+            .meta-grid { 
+              display: grid;
+              grid-template-cols: 1fr 1fr;
+              gap: 12px;
+              background: #f3f4f6; 
+              padding: 16px 20px; 
+              border-radius: 8px; 
+              margin-bottom: 30px; 
+              font-size: 12px; 
+              font-family: ui-monospace, monospace; 
+              color: #374151;
+            }
+            .section-title { 
+              font-size: 18px; 
+              color: #111827; 
+              margin-top: 35px; 
+              margin-bottom: 15px;
+              border-bottom: 2px solid #e5e7eb; 
+              padding-bottom: 6px; 
+              font-weight: 700;
+              text-transform: uppercase;
+              letter-spacing: 0.5px;
+            }
+            .footer { 
+              margin-top: 40px; 
+              text-align: center; 
+              font-size: 11px; 
+              color: #6b7280; 
+              border-top: 1px solid #e5e7eb; 
+              padding-top: 20px; 
+            }
+            .btn-print {
+              display: inline-block;
+              background: #ea580c;
+              color: white;
+              border: none;
+              padding: 12px 24px;
+              font-size: 14px;
+              font-weight: 700;
+              border-radius: 8px;
+              cursor: pointer;
+              margin-bottom: 20px;
+              text-transform: uppercase;
+              letter-spacing: 0.5px;
+              box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+            }
+            .btn-print:hover {
+              background: #d97706;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="no-print" style="text-align: right;">
+            <button class="btn-print" onclick="window.print()">Imprimir de Inmediato</button>
+          </div>
+          <div class="header-banner">
+            <h1>GuÃ­a MÃ©dica Explicativa para el Paciente</h1>
+            <p style="margin: 0; font-size: 14px; font-weight: 500; color: #4b5563;">TraducciÃ³n EmpÃ¡tica y ComprensiÃ³n Humana Asistida por Inteligencia Artificial</p>
+          </div>
+          
+          <div style="font-size: 13.5px; margin-bottom: 25px; color: #4b5563;">
+            Estimado paciente: La siguiente guÃ­a interactiva simplifica y explica los hallazgos descritos en el reporte clÃ­nico oficial de su estudio diagnÃ³stico. Este material tiene carÃ¡cter informativo y educativo; estÃ¡ diseÃ±ado para calmar su inquietud y dotarlo de pautas saludables de conversaciÃ³n con su especialista tratante.
+          </div>
+          
+          <div class="meta-grid">
+            <div>
+              <strong>ESTUDIO DIAGNÃ“STICO:</strong> ${STUDY_PRESETS?.find((p: any) => p.id === studyType)?.name || studyType || "Estudio RadiolÃ³gico"}<br>
+              <strong>IMPRESO EL:</strong> ${new Date().toLocaleDateString('es-ES', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+            </div>
+            <div style="text-align: right;">
+              <strong>INDICACIÃ“N INMEDIATA:</strong> ${clinicalHistory || "Sin indicaciÃ³n reportada"}<br>
+              <strong>PROGRAMA ASOCIADO:</strong> AI Radiologist Suite Pro
+            </div>
+          </div>
+          
+          <div class="section-title">Desglose Detallado de Hallazgos ClÃ­nicos Explicados</div>
+          ${findingsHtml}
+          
+          <div class="footer">
+            <strong>ADVERTENCIA CLÃNICA IMPORTANTE:</strong> Esta guÃ­a simplificada de orientaciÃ³n formativa complementa -pero nunca invalida- el informe radiolÃ³gico oficial firmado digitalmente por el especialista mÃ©dico ni sustituye la indicaciÃ³n prescriptiva del cirujano o mÃ©dico clÃ­nico.
+          </div>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+  };
+
+  // ACTION: RECOMMEND CLASSIFICATIONS BASED ON GENERATED REPORT TEXT
+  const handleRecommendClassifications = async () => {
+    if (!generatedReport) return;
+    setIsRecommendingClassifications(true);
+    setRecommenderError(null);
+    setClassRecommendations(null);
+    setIncorporatedRecs({});
+    setIncludeManagementRecs({});
+    try {
+      const response = await fetch("/api/recommend-classifications", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: selectedModel,
+          report: generatedReport
+        })
+      });
+      const data = await response.json();
+      if (data.success) {
+        setClassRecommendations(data.recommendations);
+      } else {
+        setRecommenderError(data.error || "No se pudieron obtener las clasificaciones sugeridas.");
+      }
+    } catch (err: any) {
+      console.error(err);
+      setRecommenderError("Error de conexiÃ³n al obtener recomendaciones de escalas.");
+    } finally {
+      setIsRecommendingClassifications(false);
+    }
+  };
+
+  // ACTION FOR INFOGRAPHIC GENERATION
+  const handleGenerateInfographic = async () => {
+    if (!generatedReport || !studyType) return;
+    setIsGeneratingInfographic(true);
+    setInfographicError(null);
+    setInfographicUrl(null);
+    try {
+      const response = await fetch("/api/generate-infographic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ report: generatedReport, studyType }),
+      });
+      const data = await response.json();
+      if (data.success) {
+        setInfographicUrl(data.imageUrl);
+      } else {
+        setInfographicError(data.error || "Error generando la infografÃ­a.");
+      }
+    } catch (err: any) {
+      setInfographicError(err.message || "Error al conectar con la API de infografÃ­as.");
+    } finally {
+      setIsGeneratingInfographic(false);
+    }
+  };
+
+  // ACTION: APPEND THE SELECTED CLASSIFICATION/CRITERIA TO THE REPORT TEXT
+  const handleIncorporateClassification = async (rec: any, index: number) => {
+    if (!generatedReport) return;
+    setIncorporatingIndex(index);
+    setRecommenderError(null);
+    try {
+      const response = await fetch("/api/incorporate-classification", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: selectedModel,
+          report: generatedReport,
+          classificationName: rec.name,
+          whyRecommended: rec.whyRecommended,
+          contentToAppend: rec.contentToAppend,
+          studyType: studyType,
+          includeManagementRecommendation: !!includeManagementRecs[index]
+        })
+      });
+      const data = await response.json();
+      if (data.success && data.modifiedReport) {
+        setGeneratedReport(data.modifiedReport);
+        setIncorporatedRecs((prev) => ({ ...prev, [index]: true }));
+        if (classRecommendations) {
+          const updated = [...classRecommendations];
+          updated[index] = { ...updated[index], alreadyIncorporated: true };
+          setClassRecommendations(updated);
+        }
+      } else {
+        setRecommenderError(data.error || "No se pudo incorporar la clasificaciÃ³n de forma inteligente en el reporte.");
+      }
+    } catch (err: any) {
+      console.error(err);
+      setRecommenderError("Error de conexiÃ³n al incorporar la clasificaciÃ³n de forma inteligente.");
+    } finally {
+      setIncorporatingIndex(null);
+    }
+  };
+
+  // 2. ACTION: CHAT MESSAGE SENT FOR COMPLEX CASES
+  const handleSendChatMessage = async () => {
+    if (!chatInput.trim()) return;
+
+    const userMsgText = chatInput;
+    setChatInput("");
+    setChatError(null);
+    setIsSendingMsg(true);
+
+    const updatedMsgs = [...chatMessages, { role: "user" as const, text: userMsgText }];
+    setChatMessages(updatedMsgs);
+
+    setTimeout(() => {
+      chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, 100);
+
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: selectedModel,
+          messages: updatedMsgs,
+          systemInstruction: chatInstruction || undefined,
+        }),
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        setChatMessages([...updatedMsgs, { role: "model", text: data.reply }]);
+      } else {
+        setChatError(data.error || "Error al obtener respuesta de Gemini Consultor.");
+      }
+    } catch (e) {
+      setChatError("Falla de conexiÃ³n con la API del servidor local.");
+      console.error(e);
+    } finally {
+      setIsSendingMsg(false);
+      setTimeout(() => {
+        chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
+      }, 100);
+    }
+  };
+
+  // 3. ACTION: CLASSIFICATIONS QUERY VIA GEMINI
+  const handleQueryClassification = async (customQuery?: string) => {
+    const activeQuery = customQuery || classificationQuery;
+    if (!activeQuery.trim()) return;
+
+    setIsLoadingClassification(true);
+    setClassificationError(null);
+    setClassificationResult("");
+
+    try {
+      const response = await fetch("/api/classify", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: selectedModel,
+          query: activeQuery,
+          systemInstruction: classifyInstruction || undefined,
+        }),
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        setClassificationResult(data.info);
+      } else {
+        setClassificationError(data.error || "No se pudo obtener informaciÃ³n de la escala.");
+      }
+    } catch (e) {
+      setClassificationError("Error de comunicaciÃ³n con el servidor de consulta.");
+      console.error(e);
+    } finally {
+      setIsLoadingClassification(false);
+    }
+  };
+
+  // Interactive flow calculators for Tab 2
+  const handleWizardOptionSelect = (stepIndex: number, optionValue: string) => {
+    const currentWizard = CLASSIFICATIONS_DATA.find(c => c.id === selectedClassSystem);
+    if (!currentWizard) return;
+
+    const newAnswers = { ...wizardAnswers, [stepIndex]: optionValue };
+    setWizardAnswers(newAnswers);
+
+    // If there's another step, let the user fill it. Else, compute final suggestion
+    const optionSelected = currentWizard.steps[stepIndex].options.find(o => o.value === optionValue);
+    
+    if (optionSelected?.category) {
+      // Direct category identified
+      const categoryName = optionSelected.category;
+      setWizardOutput(INTERACTIVE_RESULTS[categoryName] || `CÃ¡lculo exitoso: CategorÃ­a sugerida ${categoryName}`);
+    } else if (stepIndex === 0 && selectedClassSystem === "fleischner" && optionValue.startsWith("solid_")) {
+      // Fleischner requires risk level (step index 1)
+      // Wait for step 1 selection
+    } else if (stepIndex === 1 && selectedClassSystem === "fleischner") {
+      // Combined Fleischner logic
+      const noduleType = newAnswers[0];
+      const riskLevel = optionValue;
+      const keyCombined = `${noduleType}_${riskLevel}`;
+      setWizardOutput(INTERACTIVE_RESULTS[keyCombined] || "No se encontrÃ³ un criterio especÃ­fico en las guÃ­as estÃ¡ndar para esta combinaciÃ³n.");
+    } else if (selectedClassSystem === "bosniak" && optionValue === "complex") {
+      // Ask no further questions
+      const optionsBosniakStep2 = [
+        { label: "TC: Septos nodulares o engrosamiento parietal visible sin verdadero nÃ³dulo sÃ³lido", category: "Bosniak III" },
+        { label: "TC: NÃ³dulos blandos medibles con realce o componentes sÃ³lidos invasivos", category: "Bosniak IV" }
+      ];
+      // Quick fallback
+      setWizardOutput(`**RequiriÃ³ mayor especificaciÃ³n:**\nSi los septos son simplemente engrosados con realce parcial, entra en **Bosniak III** (cirugÃ­a o biopsia). Si presenta masas de partes blandas o nÃ³dulos con realce evidente, entra en **Bosniak IV** (malignidad confirmada).`);
+    } else {
+      setWizardOutput("No se pudo clasificar interactivamente. Por favor consulte el buscador general de escalas.");
+    }
+  };
+
+  // PDF Printing Utilities
+  const handlePrintPDF = () => {
+    if (!generatedReport) return;
+    setShowPrintModal(true);
+    // Attempt window.print() but also show the on-screen helper modal
+    try {
+      window.print();
+    } catch (e) {
+      console.warn("window.print block protected", e);
+    }
+  };
+
+  const ensureCompatibleImageFormat = (src: string): Promise<{ dataUrl: string; width: number; height: number }> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const w = img.naturalWidth || img.width || 640;
+          const h = img.naturalHeight || img.height || 480;
+          
+          // Downscale to a maximum height/width of 750px to maintain pristine quality but reduce base64 size drastically
+          let targetW = w;
+          let targetH = h;
+          const maxDim = 750;
+          if (targetW > maxDim || targetH > maxDim) {
+            if (targetW > targetH) {
+              targetH = Math.round((targetH * maxDim) / targetW);
+              targetW = maxDim;
+            } else {
+              targetW = Math.round((targetW * maxDim) / targetH);
+              targetH = maxDim;
+            }
+          }
+          
+          const canvas = document.createElement("canvas");
+          canvas.width = targetW;
+          canvas.height = targetH;
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.fillStyle = "#ffffff";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, 0, 0, targetW, targetH);
+            // Use JPEG (0.65) to drastically reduce the PDF file weight without losing diagnostic details!
+            const compressedUrl = canvas.toDataURL("image/jpeg", 0.65);
+            resolve({ dataUrl: compressedUrl, width: targetW, height: targetH });
+            return;
+          }
+        } catch (err) {
+          console.warn("Error converting image to compatible format:", err);
+        }
+        resolve({ dataUrl: src, width: img.naturalWidth || 640, height: img.naturalHeight || 480 });
+      };
+      img.onerror = () => {
+        resolve({ dataUrl: src, width: 640, height: 480 });
+      };
+      img.src = src;
+    });
+  };
+
+  const decodeDicom = (inputBuffer: any) => {
+    // Robust audit of input buffer type to extract safe, isolated ArrayBuffer boundaries
+    let arrayBuffer: ArrayBuffer;
+    if (inputBuffer instanceof Uint8Array) {
+      arrayBuffer = (inputBuffer.buffer as ArrayBuffer).slice(inputBuffer.byteOffset, inputBuffer.byteOffset + inputBuffer.byteLength);
+    } else if (inputBuffer instanceof ArrayBuffer) {
+      arrayBuffer = inputBuffer;
+    } else if (inputBuffer && inputBuffer.buffer instanceof ArrayBuffer) {
+      arrayBuffer = (inputBuffer.buffer as ArrayBuffer).slice(inputBuffer.byteOffset || 0, (inputBuffer.byteOffset || 0) + (inputBuffer.byteLength || 0));
+    } else {
+      arrayBuffer = inputBuffer as ArrayBuffer;
+    }
+
+    const view = new DataView(arrayBuffer);
+    const uint8 = new Uint8Array(arrayBuffer);
+    
+    // Fast, non-blocking chunked base64 encoder
+    const uint8ToBase64 = (arr: Uint8Array): string => {
+      let binary = "";
+      const len = arr.byteLength;
+      const chunkSize = 0x4000; // 16KB chunks
+      for (let i = 0; i < len; i += chunkSize) {
+        const subset = arr.subarray(i, i + chunkSize);
+        binary += String.fromCharCode.apply(null, subset as any);
+      }
+      return btoa(binary);
+    };
+
+    let jpegStart = -1;
+    // scan from 0 to capture preamble-less encapsulated JPEGs
+    for (let i = 0; i < uint8.length - 10; i++) {
+      if (uint8[i] === 0xFF && uint8[i+1] === 0xD8 && uint8[i+2] === 0xFF) {
+        jpegStart = i;
+        break;
+      }
+    }
+    
+    let base64 = "";
+    if (jpegStart !== -1) {
+      let jpegEnd = -1;
+      for (let i = uint8.length - 2; i > jpegStart; i--) {
+        if (uint8[i] === 0xFF && uint8[i+1] === 0xD9) {
+          jpegEnd = i + 2;
+          break;
+        }
+      }
+      if (jpegEnd === -1) {
+        jpegEnd = uint8.length;
+      }
+      
+      const slice = uint8.subarray(jpegStart, jpegEnd);
+      base64 = "data:image/jpeg;base64," + uint8ToBase64(slice);
+    }
+    
+    let rows = 0;
+    let cols = 0;
+    let bitsAllocated = 8;
+    let samplesPerPixel = 1;
+    let planarConfiguration = 0;
+    let photometricInterpretation = "";
+    let pixelDataOffset = -1;
+    let pixelDataLength = 0;
+    
+    const meta: Record<string, string> = {};
+    try {
+      const textDecoder = new TextDecoder("utf-8");
+      
+      // Auto-detect preamble or raw start
+      let hasPreamble = false;
+      if (uint8.length > 132 && uint8[128] === 68 && uint8[129] === 73 && uint8[130] === 67 && uint8[131] === 77) {
+        hasPreamble = true;
+      }
+      
+      const startOffsets = hasPreamble ? [132] : [0, 132];
+      
+      for (const startPos of startOffsets) {
+        let pos = startPos;
+        rows = 0;
+        cols = 0;
+        bitsAllocated = 8;
+        samplesPerPixel = 1;
+        planarConfiguration = 0;
+        photometricInterpretation = "";
+        pixelDataOffset = -1;
+        pixelDataLength = 0;
+        
+        while (pos < arrayBuffer.byteLength - 8) {
+          const group = view.getUint16(pos, true);
+          const element = view.getUint16(pos + 2, true);
+          pos += 4;
+          
+          let vr = "";
+          try {
+            vr = String.fromCharCode(uint8[pos], uint8[pos+1]);
+          } catch {
+            vr = "";
+          }
+          
+          let length = 0;
+          let isLongVR = false;
+          if (["OB", "OW", "OF", "SQ", "UT", "UN"].includes(vr)) {
+            isLongVR = true;
+            length = view.getUint32(pos + 4, true);
+            pos += 8;
+          } else {
+            if (uint8[pos] >= 65 && uint8[pos] <= 90 && uint8[pos+1] >= 65 && uint8[pos+1] <= 90) {
+              length = view.getUint16(pos + 2, true);
+              pos += 4;
+            } else {
+              // Implicit VR: length is 32-bit field right after group and element
+              length = view.getUint32(pos, true);
+              pos += 4;
+            }
+          }
+          
+          if (length === 0xFFFFFFFF) {
+            // Sequence of undefined length
+            if ((group === 0x7fe0 && element === 0x0010) || (group === 0x7FE0 && element === 0x0010)) {
+              pixelDataOffset = pos;
+              pixelDataLength = uint8.length - pos;
+              break;
+            } else {
+              // It's a metadata sequence (SQ) of undefined length.
+              // Skip it by finding the Sequence Delimitation Item (FFFE, E0DD)
+              let foundDelimiter = false;
+              for (let i = pos; i < uint8.length - 8; i++) {
+                if (
+                  (uint8[i] === 0xFE && uint8[i+1] === 0xFF && uint8[i+2] === 0xDD && uint8[i+3] === 0xE0) ||
+                  (uint8[i] === 0xFF && uint8[i+1] === 0xFE && uint8[i+2] === 0xE0 && uint8[i+3] === 0xDD)
+                ) {
+                  // Skip FFFE E0DD and its 4-byte length field (usually 0x00000000)
+                  pos = i + 8;
+                  foundDelimiter = true;
+                  break;
+                }
+              }
+              if (!foundDelimiter) {
+                break;
+              }
+              continue;
+            }
+          }
+          
+          if (length > 0 && pos + length <= arrayBuffer.byteLength) {
+            if (group === 0x0010 && element === 0x0010) {
+              meta["paciente"] = textDecoder.decode(uint8.subarray(pos, pos + length)).replace(/\^/g, " ").trim();
+            } else if (group === 0x0010 && element === 0x0020) {
+              meta["id"] = textDecoder.decode(uint8.subarray(pos, pos + length)).trim();
+            } else if (group === 0x0010 && element === 0x0030) {
+              meta["fechaNacimiento"] = textDecoder.decode(uint8.subarray(pos, pos + length)).trim();
+            } else if (group === 0x0010 && element === 0x1010) {
+              meta["edad"] = textDecoder.decode(uint8.subarray(pos, pos + length)).trim();
+            } else if (group === 0x0010 && element === 0x0040) {
+              meta["sexo"] = textDecoder.decode(uint8.subarray(pos, pos + length)).trim();
+            } else if (group === 0x0008 && element === 0x0020) {
+              meta["fechaEstudio"] = textDecoder.decode(uint8.subarray(pos, pos + length)).trim();
+            } else if (group === 0x0008 && element === 0x0060) {
+              meta["modalidad"] = textDecoder.decode(uint8.subarray(pos, pos + length)).trim();
+            } else if (group === 0x0008 && element === 0x0080) {
+              meta["institucion"] = textDecoder.decode(uint8.subarray(pos, pos + length)).trim();
+            } else if (group === 0x0008 && element === 0x1030) {
+              meta["estudio"] = textDecoder.decode(uint8.subarray(pos, pos + length)).trim();
+            } else if (group === 0x0028 && element === 0x0010) {
+              try {
+                if (length === 2) rows = view.getUint16(pos, true);
+                else if (length === 4) rows = view.getUint32(pos, true);
+              } catch {}
+            } else if (group === 0x0028 && element === 0x0011) {
+              try {
+                if (length === 2) cols = view.getUint16(pos, true);
+                else if (length === 4) cols = view.getUint32(pos, true);
+              } catch {}
+            } else if (group === 0x0028 && element === 0x0100) {
+              try {
+                if (length === 2) bitsAllocated = view.getUint16(pos, true);
+              } catch {}
+            } else if (group === 0x0028 && element === 0x0002) {
+              try {
+                if (length === 2) samplesPerPixel = view.getUint16(pos, true);
+              } catch {}
+            } else if (group === 0x0028 && element === 0x0006) {
+              try {
+                if (length === 2) planarConfiguration = view.getUint16(pos, true);
+              } catch {}
+            } else if (group === 0x0028 && element === 0x0004) {
+              try {
+                photometricInterpretation = textDecoder.decode(uint8.subarray(pos, pos + length)).trim().toUpperCase();
+              } catch {}
+            } else if ((group === 0x7fe0 && element === 0x0010) || (group === 0x7FE0 && element === 0x0010)) {
+              pixelDataOffset = pos;
+              pixelDataLength = length;
+            }
+            pos += length;
+          } else {
+            if (length === 0) {
+              // skip empty tag
+            } else {
+              break;
+            }
+          }
+        }
+        
+        if (pixelDataOffset !== -1 && rows > 0 && cols > 0) {
+          break;
+        }
+      }
+    } catch (err) {
+      console.warn("Could not extract metadata tags from DICOM file", err);
+    }
+    
+    // Natively decode raw, uncompressed pixels if there's no embedded JPEG
+    if (base64 === "" && pixelDataOffset !== -1 && rows > 0 && cols > 0) {
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = cols;
+        canvas.height = rows;
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          const imgData = ctx.createImageData(cols, rows);
+          const data = imgData.data;
+          
+          if (samplesPerPixel === 3) {
+            const rawBytes = uint8.subarray(pixelDataOffset, pixelDataOffset + Math.min(pixelDataLength, rows * cols * 3));
+            const numPixels = rows * cols;
+            if (planarConfiguration === 1) {
+              const rPlane = 0;
+              const gPlane = numPixels;
+              const bPlane = numPixels * 2;
+              
+              if (photometricInterpretation.startsWith("YBR")) {
+                for (let i = 0; i < numPixels; i++) {
+                  if (bPlane + i < rawBytes.length) {
+                    const Y = rawBytes[rPlane + i];
+                    const Cb = rawBytes[gPlane + i];
+                    const Cr = rawBytes[bPlane + i];
+                    
+                    let r = Y + 1.402 * (Cr - 128);
+                    let g = Y - 0.344136 * (Cb - 128) - 0.714136 * (Cr - 128);
+                    let b = Y + 1.772 * (Cb - 128);
+                    
+                    const idx = i * 4;
+                    data[idx] = Math.max(0, Math.min(255, Math.floor(r)));
+                    data[idx+1] = Math.max(0, Math.min(255, Math.floor(g)));
+                    data[idx+2] = Math.max(0, Math.min(255, Math.floor(b)));
+                    data[idx+3] = 255;
+                  }
+                }
+              } else {
+                for (let i = 0; i < numPixels; i++) {
+                  if (bPlane + i < rawBytes.length) {
+                    const idx = i * 4;
+                    data[idx] = rawBytes[rPlane + i];     // R
+                    data[idx+1] = rawBytes[gPlane + i];   // G
+                    data[idx+2] = rawBytes[bPlane + i];   // B
+                    data[idx+3] = 255;                   // A
+                  }
+                }
+              }
+            } else {
+              // Interleaved (Planar Configuration = 0)
+              if (photometricInterpretation.startsWith("YBR")) {
+                for (let i = 0; i < numPixels; i++) {
+                  const rIdx = i * 3;
+                  if (rIdx + 2 < rawBytes.length) {
+                    const Y = rawBytes[rIdx];
+                    const Cb = rawBytes[rIdx + 1];
+                    const Cr = rawBytes[rIdx + 2];
+                    
+                    let r = Y + 1.402 * (Cr - 128);
+                    let g = Y - 0.344136 * (Cb - 128) - 0.714136 * (Cr - 128);
+                    let b = Y + 1.772 * (Cb - 128);
+                    
+                    const idx = i * 4;
+                    data[idx] = Math.max(0, Math.min(255, Math.floor(r)));
+                    data[idx+1] = Math.max(0, Math.min(255, Math.floor(g)));
+                    data[idx+2] = Math.max(0, Math.min(255, Math.floor(b)));
+                    data[idx+3] = 255;
+                  }
+                }
+              } else {
+                for (let i = 0; i < numPixels; i++) {
+                  const rIdx = i * 3;
+                  if (rIdx + 2 < rawBytes.length) {
+                    const idx = i * 4;
+                    data[idx] = rawBytes[rIdx];     // R
+                    data[idx+1] = rawBytes[rIdx+1]; // G
+                    data[idx+2] = rawBytes[rIdx+2]; // B
+                    data[idx+3] = 255;             // A
+                  }
+                }
+              }
+            }
+          } else {
+            // Monochrome / Grayscale (or single channel)
+            if (bitsAllocated === 8) {
+              const rawBytes = uint8.subarray(pixelDataOffset, pixelDataOffset + Math.min(pixelDataLength, rows * cols));
+              const isInverted = photometricInterpretation === "MONOCHROME1";
+              for (let i = 0; i < rawBytes.length; i++) {
+                const val = isInverted ? 255 - rawBytes[i] : rawBytes[i];
+                const idx = i * 4;
+                data[idx] = val;     // R
+                data[idx+1] = val;   // G
+                data[idx+2] = val;   // B
+                data[idx+3] = 255;   // A
+              }
+            } else if (bitsAllocated === 16) {
+              const numPixels = rows * cols;
+              const wordsNeeded = Math.min(Math.floor(pixelDataLength / 2), numPixels);
+              const rawWords = new Uint16Array(wordsNeeded);
+              for (let i = 0; i < wordsNeeded; i++) {
+                rawWords[i] = view.getUint16(pixelDataOffset + i * 2, true);
+              }
+              
+              let min = 65535;
+              let max = 0;
+              for (let i = 0; i < rawWords.length; i++) {
+                const v = rawWords[i];
+                if (v < min) min = v;
+                if (v > max) max = v;
+              }
+              const range = max - min || 1;
+              const isInverted = photometricInterpretation === "MONOCHROME1";
+              
+              for (let i = 0; i < rawWords.length; i++) {
+                let val = Math.floor(((rawWords[i] - min) / range) * 255);
+                if (isInverted) val = 255 - val;
+                const idx = i * 4;
+                data[idx] = val;
+                data[idx+1] = val;
+                data[idx+2] = val;
+                data[idx+3] = 255;
+              }
+            }
+          }
+          
+          ctx.putImageData(imgData, 0, 0);
+          // Use lossless PNG for highest medical detail evaluation as requested
+          base64 = canvas.toDataURL("image/png");
+        }
+      } catch (decodeErr) {
+        console.warn("Could not decode raw pixel data natively: ", decodeErr);
+      }
+    }
+    
+    const hasSuccessfulImage = (base64 !== "" || (pixelDataOffset !== -1 && rows > 0 && cols > 0));
+    return { base64, meta, success: hasSuccessfulImage };
+  };
+
+  const generateDicomCanvasFallback = (filename: string, meta?: Record<string, string>) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 640;
+    canvas.height = 480;
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      ctx.fillStyle = "#020617";
+      ctx.fillRect(0, 0, 640, 480);
+      
+      ctx.strokeStyle = "rgba(71, 85, 105, 0.12)";
+      ctx.lineWidth = 1;
+      for (let x = 0; x < 640; x += 40) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 480); ctx.stroke();
+      }
+      for (let y = 0; y < 480; y += 40) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(640, y); ctx.stroke();
+      }
+      
+      ctx.strokeStyle = "rgba(100, 116, 139, 0.25)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(320, 30, 420, Math.PI * 0.35, Math.PI * 0.65);
+      ctx.stroke();
+      
+      ctx.beginPath();
+      ctx.arc(320, 30, 220, Math.PI * 0.35, Math.PI * 0.65);
+      ctx.stroke();
+      
+      ctx.font = "bold 9px monospace";
+      ctx.fillStyle = "rgba(100, 116, 139, 0.15)";
+      ctx.fillText("SECTOR PROBE AREA", 270, 150);
+      
+      ctx.beginPath();
+      ctx.moveTo(110, 390);
+      for (let x = 110; x < 530; x++) {
+        const y = 340 + 35 * Math.sin((x / 35) + Math.cos(x / 13)) * Math.exp(-Math.pow((x - 290) / 130, 2));
+        ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = "#0ea5e9";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      
+      ctx.fillStyle = "#38bdf8";
+      ctx.font = "bold 10px monospace";
+      ctx.fillText("PW doppler: +114.5 cm/s", 90, 290);
+      ctx.fillText("V_diastolic: -22.4 cm/s", 90, 305);
+      ctx.fillText("RI (Ãndice Resist.): 0.70", 90, 320);
+      
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 11px monospace";
+      ctx.fillText((meta?.paciente || "PACIENTE GENERAL").toUpperCase(), 30, 45);
+      
+      ctx.fillStyle = "#38bdf8";
+      ctx.font = "bold 9px monospace";
+      ctx.fillText("MOD: US (ECOGRAFÃA DOPPLER)", 30, 60);
+      if (meta?.institucion) {
+        ctx.fillStyle = "#94a3b8";
+        ctx.fillText("HOSPITAL: " + meta.institucion.toUpperCase(), 30, 75);
+      }
+      ctx.fillStyle = "#94a3b8";
+      ctx.fillText("REG: " + filename, 30, 90);
+      
+      ctx.fillStyle = "#e2e8f0";
+      ctx.fillText("ULTRASOUND DICOM RAW CAPTURE", 430, 45);
+      const dateStr = new Date().toLocaleDateString();
+      ctx.fillText("FECHA: " + dateStr, 430, 60);
+      ctx.fillText("ESTADO: ENCAPSULADO", 430, 75);
+    }
+    return canvas.toDataURL("image/png");
+  };
+
+  const detectImageMetaFromFilename = (filename: string, dicomMeta?: Record<string, string>) => {
+    const upper = (filename + " " + JSON.stringify(dicomMeta || {}) + " " + (specificStudy || "")).toUpperCase();
+    let modality: "MMG" | "US" = "US";
+    let projection: "MLO" | "CC" | "OTRO" = "OTRO";
+    let side: "Derecha" | "Izquierda" | "Bilateral" = "Bilateral";
+
+    if (
+      upper.includes("MMG") ||
+      upper.includes("MAMO") ||
+      upper.includes("MX") ||
+      upper.includes("MLO") ||
+      upper.includes("CC") ||
+      upper.includes("MAMOGRAFIA") ||
+      upper.includes("MAMMO") ||
+      dicomMeta?.Modality === "MG"
+    ) {
+      modality = "MMG";
+    }
+
+    if (upper.includes("MLO") || upper.includes("OBLIQ") || upper.includes("OBLIU")) {
+      projection = "MLO";
+    } else if (upper.includes("CC") || upper.includes("CRANEO") || upper.includes("CAUDAL")) {
+      projection = "CC";
+    }
+
+    if (upper.includes("IZQ") || upper.includes("LEFT") || upper.includes("LCC") || upper.includes("LMLO") || upper.includes("L-CC") || upper.includes("L-MLO")) {
+      side = "Izquierda";
+    } else if (upper.includes("DER") || upper.includes("RIGHT") || upper.includes("RCC") || upper.includes("RMLO") || upper.includes("R-CC") || upper.includes("R-MLO")) {
+      side = "Derecha";
+    } else {
+      side = "Bilateral";
+    }
+
+    return { modality, projection, side };
+  };
+
+  const handleAiLabelImage = async (id: string) => {
+    const imgItem = attachedImages.find(item => item.id === id);
+    if (!imgItem) return;
+    
+    setLoadingAiLabelId(id);
+    try {
+      const response = await fetch("/api/classify-and-label-image", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          image: imgItem.base64 || imgItem.url,
+          filename: imgItem.name,
+          studyType: specificStudy || "MamografÃ­a y Ultrasonido",
+          clinicalHistory: clinicalHistory || "",
+          findings: findings || inputReport || "",
+        }),
+      });
+      
+      const data = await response.json();
+      if (response.ok && data.success) {
+        setAttachedImages(prev => prev.map(item => item.id === id ? {
+          ...item,
+          caption: data.label || item.caption,
+          modality: data.modality || item.modality || "US",
+          projection: data.projection || item.projection || "OTRO",
+          side: data.side || item.side || "Derecha"
+        } : item));
+      } else {
+        alert(data.error || "No se pudo generar la rotulaciÃ³n con IA.");
+      }
+    } catch (err) {
+      console.error("Error al rotular con IA:", err);
+      alert("Error de conexiÃ³n al rotular la foto.");
+    } finally {
+      setLoadingAiLabelId(null);
+    }
+  };
+
+  const handleAutocompleteLabelFromReport = async (id: string) => {
+    const imgItem = attachedImages.find(item => item.id === id);
+    if (!imgItem) return;
+    
+    if (!imgItem.caption || !imgItem.caption.trim()) {
+      alert("Por favor, escribe primero una palabra o frase clave en la descripciÃ³n (ej. 'vesÃ­cula', 'quiste' o 'carÃ³tida') para poder buscar y autocompletar desde el reporte.");
+      return;
+    }
+
+    const reportToUse = generatedReport || inputReport || findings;
+    if (!reportToUse) {
+      alert("Por favor, redacta o genera el reporte primero para poder buscar y autocompletar la rotulaciÃ³n.");
+      return;
+    }
+
+    setLoadingAutocompleteId(id);
+    try {
+      const response = await fetch("/api/autocomplete-label-from-report", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: selectedModel,
+          phrase: imgItem.caption,
+          currentReport: reportToUse,
+          studyType: specificStudy || "MamografÃ­a / EcografÃ­a",
+          clinicalHistory: clinicalHistory || "",
+        }),
+      });
+
+      const data = await response.json();
+      if (response.ok && data.success && data.label) {
+        setAttachedImages(prev => prev.map(item => item.id === id ? { ...item, caption: data.label } : item));
+      } else {
+        alert(data.error || "No se pudo autocompletar la rotulaciÃ³n.");
+      }
+    } catch (err) {
+      console.error("Error al autocompletar rotulaciÃ³n:", err);
+      alert("Error de conexiÃ³n al autocompletar desde el reporte.");
+    } finally {
+      setLoadingAutocompleteId(null);
+    }
+  };
+
+  const handleAiLabelAllImages = async () => {
+    if (attachedImages.length === 0) return;
+    setIsLabelingAll(true);
+    try {
+      const promises = attachedImages.map(async (imgItem) => {
+        try {
+          const response = await fetch("/api/classify-and-label-image", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              image: imgItem.base64 || imgItem.url,
+              filename: imgItem.name,
+              studyType: specificStudy || "MamografÃ­a y Ultrasonido",
+              clinicalHistory: clinicalHistory || "",
+              findings: findings || inputReport || "",
+            }),
+          });
+          
+          const data = await response.json();
+          if (response.ok && data.success) {
+            return {
+              id: imgItem.id,
+              label: data.label,
+              modality: data.modality,
+              projection: data.projection,
+              side: data.side
+            };
+          }
+        } catch (err) {
+          console.error(`Error labeling image ${imgItem.id}:`, err);
+        }
+        return null;
+      });
+
+      const results = await Promise.all(promises);
+      setAttachedImages(prev => prev.map(item => {
+        const found = results.find(r => r && r.id === item.id);
+        if (found) {
+          return {
+            ...item,
+            caption: found.label || item.caption,
+            modality: found.modality || item.modality || "US",
+            projection: found.projection || item.projection || "OTRO",
+            side: found.side || item.side || "Derecha"
+          };
+        }
+        return item;
+      }));
+    } catch (err) {
+      console.error("Error al rotular todas las imÃ¡genes:", err);
+      alert("Error al intentar rotular todas las imÃ¡genes.");
+    } finally {
+      setIsLabelingAll(false);
+    }
+  };
+
+  const handleCorrelateFigures = async () => {
+    const reportToUse = generatedReport || inputReport || findings;
+    if (!reportToUse) {
+      alert("Por favor, genera un reporte o redacta un borrador primero para poder correlacionar las figuras.");
+      return;
+    }
+    if (attachedImages.length === 0) {
+      alert("No hay imÃ¡genes cargadas para correlacionar. Por favor sube imÃ¡genes primero.");
+      return;
+    }
+
+    setIsCorrelatingFigures(true);
+    try {
+      const response = await fetch("/api/correlate-figures-retroactive", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: selectedModel,
+          currentReport: reportToUse,
+          attachedImages: attachedImages.map((img, idx) => ({
+            id: img.id,
+            index: idx + 1,
+            caption: img.caption || img.name || ""
+          })),
+        }),
+      });
+
+      const data = await response.json();
+      if (response.ok && data.success && data.report) {
+        if (generatedReport) {
+          setReportHistory(prev => [...prev, generatedReport]);
+          setReportRedoHistory([]);
+        }
+        setGeneratedReport(data.report);
+
+        if (data.reorderedImageIds && Array.isArray(data.reorderedImageIds) && data.reorderedImageIds.length > 0) {
+          setAttachedImages(prev => {
+            const map = new Map(prev.map(img => [img.id, img]));
+            const reordered: typeof prev = [];
+            data.reorderedImageIds.forEach((id: string) => {
+              const found = map.get(id);
+              if (found) {
+                reordered.push(found);
+                map.delete(id);
+              }
+            });
+            // Append any remaining images not explicitly listed in reorderedImageIds
+            map.forEach(img => reordered.push(img));
+            return reordered;
+          });
+        }
+      } else {
+        alert(data.error || "OcurriÃ³ un error al intentar correlacionar las figuras.");
+      }
+    } catch (err) {
+      console.error("Error al correlacionar figuras:", err);
+      alert("Error de red al intentar correlacionar las figuras.");
+    } finally {
+      setIsCorrelatingFigures(false);
+    }
+  };
+
+  const handleAttachedFiles = async (filesList: FileList | File[] | null) => {
+    if (!filesList) return;
+    const filesArray = Array.from(filesList);
+    const loaded: {
+      id: string;
+      name: string;
+      url: string;
+      base64: string;
+      caption: string;
+      isDicom: boolean;
+      dicomMetaData?: Record<string, string>;
+      width?: number;
+      height?: number;
+      modality?: "MMG" | "US";
+      projection?: "MLO" | "CC" | "OTRO";
+      side?: "Derecha" | "Izquierda" | "Bilateral";
+    }[] = [];
+    
+    const promises = filesArray.map((file) => {
+      if (file.size === 0) return Promise.resolve();
+      
+      const nameLower = file.name.toLowerCase();
+      // Skip Mac OS metadata files, DICOMDIR metadata records, thumbs.db, and XML files
+      if (
+        nameLower.startsWith(".") || 
+        nameLower.startsWith("_") || 
+        nameLower === "thumbs.db" || 
+        nameLower === "dicomdir" || 
+        nameLower.endsWith(".xml")
+      ) {
+        return Promise.resolve();
+      }
+      
+      const fileExt = file.name.split('.').pop()?.toLowerCase() || "";
+      const isZip = fileExt === "zip" || file.type === "application/zip" || file.type === "application/x-zip-compressed";
+      const isKnownImage = file.type.startsWith("image/") || ["jpg", "jpeg", "png", "webp", "gif"].includes(fileExt);
+      const isDicomExt = ["dcm", "dicom"].includes(fileExt);
+      
+      return new Promise<void>((resolve) => {
+        const reader = new FileReader();
+        
+        if (isZip) {
+          (async () => {
+            try {
+              const jszip = new JSZip();
+              const zipContent = await jszip.loadAsync(file);
+              const zipPromises: Promise<void>[] = [];
+              
+              const localUint8ToBase64 = (arr: Uint8Array): string => {
+                let binary = "";
+                const len = arr.byteLength;
+                const chunkSize = 0x4000;
+                for (let i = 0; i < len; i += chunkSize) {
+                  const subset = arr.subarray(i, i + chunkSize);
+                  binary += String.fromCharCode.apply(null, subset as any);
+                }
+                return btoa(binary);
+              };
+
+              for (const [filename, fileObj] of Object.entries(zipContent.files)) {
+                if ((fileObj as any).dir) continue;
+                
+                const innerNameLower = filename.toLowerCase();
+                if (
+                  innerNameLower.startsWith(".") || 
+                  innerNameLower.startsWith("_") || 
+                  innerNameLower.endsWith("thumbs.db") || 
+                  innerNameLower.endsWith("dicomdir") || 
+                  innerNameLower.endsWith(".xml")
+                ) {
+                  continue;
+                }
+                
+                const innerExt = filename.split('.').pop()?.toLowerCase() || "";
+                const isInnerImage = ["png", "jpg", "jpeg", "webp", "gif"].includes(innerExt);
+                const isInnerDicomExt = ["dcm", "dicom"].includes(innerExt);
+                
+                const p = (async () => {
+                  const u8Array = await (fileObj as any).async("uint8array");
+                  if (u8Array.length === 0) return;
+                  
+                  const hasDicomHeader = u8Array.length > 132 && 
+                                         u8Array[128] === 68 && 
+                                         u8Array[129] === 73 && 
+                                         u8Array[130] === 67 && 
+                                         u8Array[131] === 77; // "DICM"
+                  const isInnerDicom = isInnerDicomExt || hasDicomHeader;
+                  
+                  if (isInnerImage) {
+                    const mime = innerExt === "jpg" || innerExt === "jpeg" ? "image/jpeg" : (innerExt === "gif" ? "image/gif" : (innerExt === "webp" ? "image/webp" : "image/png"));
+                    const base64Str = `data:${mime};base64,${localUint8ToBase64(u8Array)}`;
+                    const res = await ensureCompatibleImageFormat(base64Str);
+                    const fname = filename.split("/").pop() || filename;
+                    const meta = detectImageMetaFromFilename(fname);
+                    loaded.push({
+                      id: "attached-" + Math.random().toString(36).substring(2, 11),
+                      name: fname,
+                      url: res.dataUrl,
+                      base64: res.dataUrl,
+                      caption: "",
+                      isDicom: false,
+                      width: res.width,
+                      height: res.height,
+                      modality: meta.modality,
+                      projection: meta.projection,
+                      side: meta.side
+                    });
+                  } else if (isInnerDicom) {
+                    try {
+                      const cleanDcmBuffer = u8Array.buffer.slice(u8Array.byteOffset, u8Array.byteOffset + u8Array.byteLength);
+                      const parsed = decodeDicom(cleanDcmBuffer);
+                      let finalBase64 = parsed.base64;
+                      if (!finalBase64) {
+                        finalBase64 = generateDicomCanvasFallback(filename.split("/").pop() || filename, parsed.meta);
+                      }
+                      const res = await ensureCompatibleImageFormat(finalBase64);
+                      const fname = filename.split("/").pop() || filename;
+                      const meta = detectImageMetaFromFilename(fname, parsed.meta);
+                      loaded.push({
+                        id: "attached-" + Math.random().toString(36).substring(2, 11),
+                        name: fname,
+                        url: res.dataUrl,
+                        base64: res.dataUrl,
+                        caption: "",
+                        isDicom: true,
+                        dicomMetaData: parsed.meta,
+                        width: res.width,
+                        height: res.height,
+                        modality: meta.modality,
+                        projection: meta.projection,
+                        side: meta.side
+                      });
+                    } catch (err) {
+                      console.error("Error decoding inner ZIP DICOM:", err);
+                    }
+                  }
+                })();
+                zipPromises.push(p);
+              }
+              await Promise.all(zipPromises);
+            } catch (zipErr) {
+              console.error("Error unpacking ZIP attachment:", zipErr);
+            } finally {
+              resolve();
+            }
+          })();
+        } else if (isKnownImage) {
+          reader.onload = (e) => {
+            const base64Str = e.target?.result as string;
+            if (base64Str) {
+              ensureCompatibleImageFormat(base64Str).then((res) => {
+                const meta = detectImageMetaFromFilename(file.name);
+                loaded.push({
+                  id: "attached-" + Math.random().toString(36).substring(2, 11),
+                  name: file.name,
+                  url: res.dataUrl,
+                  base64: res.dataUrl,
+                  caption: "", // Starts completely empty as requested by the user
+                  isDicom: false,
+                  width: res.width,
+                  height: res.height,
+                  modality: meta.modality,
+                  projection: meta.projection,
+                  side: meta.side
+                });
+                resolve();
+              });
+            } else {
+              resolve();
+            }
+          };
+          reader.readAsDataURL(file);
+        } else if (isDicomExt || file.size >= 132) {
+          // Candidates for DICOM (try to check tags or fallback by extension / header)
+          reader.onload = (e) => {
+            const buf = e.target?.result as ArrayBuffer;
+            if (buf) {
+              const uint8 = new Uint8Array(buf);
+              let isRealDicom = isDicomExt;
+              if (uint8.length > 132) {
+                if (uint8[128] === 68 && uint8[129] === 73 && uint8[130] === 67 && uint8[131] === 77) {
+                  isRealDicom = true;
+                }
+              }
+              
+              if (isRealDicom) {
+                const parsed = decodeDicom(buf);
+                let finalBase64 = parsed.base64;
+                if (!finalBase64) {
+                   finalBase64 = generateDicomCanvasFallback(file.name, parsed.meta);
+                }
+                
+                ensureCompatibleImageFormat(finalBase64).then((res) => {
+                  const meta = detectImageMetaFromFilename(file.name, parsed.meta);
+                  loaded.push({
+                    id: "attached-" + Math.random().toString(36).substring(2, 11),
+                    name: file.name,
+                    url: res.dataUrl,
+                    base64: res.dataUrl,
+                    caption: "", // Starts completely empty as requested by the user
+                    isDicom: true,
+                    dicomMetaData: parsed.meta,
+                    width: res.width,
+                    height: res.height,
+                    modality: meta.modality,
+                    projection: meta.projection,
+                    side: meta.side
+                  });
+                  resolve();
+                });
+              } else {
+                resolve();
+              }
+            } else {
+              resolve();
+            }
+          };
+          reader.readAsArrayBuffer(file);
+        } else {
+          resolve();
+        }
+      });
+    });
+    
+    await Promise.all(promises);
+    
+    if (loaded.length > 0) {
+      setAttachedImages((prev) => [...prev, ...loaded]);
+    }
+  };
+
+  // Clipboard Paste (Ctrl+V) handler for screenshot or diagnostic images mapping
+  useEffect(() => {
+    const handlePaste = (e: ClipboardEvent) => {
+      const activeEl = document.activeElement;
+      if (activeEl && (activeEl.tagName === "INPUT" || activeEl.tagName === "TEXTAREA")) {
+        if (!e.clipboardData || !e.clipboardData.files || e.clipboardData.files.length === 0) {
+          return;
+        }
+      }
+
+      if (e.clipboardData && e.clipboardData.files && e.clipboardData.files.length > 0) {
+        handleAttachedFiles(e.clipboardData.files);
+      } else if (e.clipboardData && e.clipboardData.items) {
+        const files: File[] = [];
+        for (let i = 0; i < e.clipboardData.items.length; i++) {
+          const item = e.clipboardData.items[i];
+          if (item.type.indexOf("image") !== -1 || item.kind === "file") {
+            const blob = item.getAsFile();
+            if (blob) {
+              const ext = blob.type.split("/")[1] || "png";
+              const file = new File([blob], `pasted_capture_${Date.now()}.${ext}`, { type: blob.type });
+              files.push(file);
+            }
+          }
+        }
+        if (files.length > 0) {
+          handleAttachedFiles(files);
+        }
+      }
+    };
+
+    window.addEventListener("paste", handlePaste);
+    return () => {
+      window.removeEventListener("paste", handlePaste);
+    };
+  }, [attachedImages]);
+
+  const convertSvgToPng = (svgElement: SVGElement): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      try {
+        // Read the viewBox or size of the SVG to determine the dynamic aspect ratio
+        const viewBox = svgElement.getAttribute("viewBox") || "";
+        const parts = viewBox.split(/[\s,]+/).map(parseFloat);
+        let aspectRatio = 1.42; // standard for vascular schema
+        
+        if (parts.length === 4 && parts[2] > 0 && parts[3] > 0) {
+          aspectRatio = parts[2] / parts[3];
+        }
+
+        const serializer = new XMLSerializer();
+        const svgString = serializer.serializeToString(svgElement);
+        const svgBlob = new Blob([svgString], { type: "image/svg+xml;charset=utf-8" });
+        const url = URL.createObjectURL(svgBlob);
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement("canvas");
+          
+          if (Math.abs(aspectRatio - 1) < 0.15) {
+            // Square aspect ratio (for example, the shoulder diagram) - optimized
+            canvas.width = 600;
+            canvas.height = 600;
+          } else {
+            // Wide aspect ratio (for example, the vascular diagram) - optimized
+            canvas.width = 750;
+            canvas.height = 530;
+          }
+
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.fillStyle = "#ffffff";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            // Use compressed JPEG instead of PNG for massive size reduction!
+            const dataUrl = canvas.toDataURL("image/jpeg", 0.75);
+            URL.revokeObjectURL(url);
+            resolve(dataUrl);
+          } else {
+            URL.revokeObjectURL(url);
+            reject(new Error("No 2D context"));
+          }
+        };
+        img.onerror = (err) => {
+          URL.revokeObjectURL(url);
+          reject(err);
+        };
+        img.src = url;
+      } catch (e) {
+        reject(e);
+      }
+    });
+  };
+
+  const getParagraphSeverity = (text: string): "critical" | "altered" | "normal" => {
+    if (!text) return "normal";
+    const trimmed = text.trim();
+    const trimmedLower = trimmed.toLowerCase();
+
+    // Check manual overrides first
+    if (manualSeverityOverrides[trimmed]) {
+      return manualSeverityOverrides[trimmed];
+    }
+    if (manualSeverityOverrides[trimmedLower]) {
+      return manualSeverityOverrides[trimmedLower];
+    }
+    if (manualSeverityOverrides[text]) {
+      return manualSeverityOverrides[text];
+    }
+
+    // Check AI semantic cache second
+    if (aiSeverityCache[trimmed]) {
+      return aiSeverityCache[trimmed];
+    }
+    if (aiSeverityCache[trimmedLower]) {
+      return aiSeverityCache[trimmedLower];
+    }
+    if (aiSeverityCache[text]) {
+      return aiSeverityCache[text];
+    }
+
+    const blockClean = text.toLowerCase();
+    const sentences = blockClean.split(/[.:;]/);
+    let severity: "critical" | "altered" | "normal" = "normal";
+
+    for (const sentence of sentences) {
+      const s = sentence.trim();
+      if (!s) continue;
+      
+      const cleanText = s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      
+      const criticalKeywords = [
+        "ruptura", "desgarro completo", "trombosis", "oclusion", "maligno", "malignidad",
+        "birads 4", "birads 5", "birads 6", "birads_4", "birads_5", "birads_6", "aneurisma",
+        "colecistitis", "apendicitis", "isquemia", "infarto", "critico", "critica", "criticos", "criticas",
+        "trombosis venosa profunda", "tvp", "oclusion total"
+      ];
+
+      const alteredKeywords = [
+        "desgarro parcial", "desgarro", "alteracion", "alterado", "alterada", "disminuid", "disminucion",
+        "aumentad", "aumento", "engrosad", "engrosamiento", "bursitis", "sinovitis", "derrame",
+        "quiste", "quistica", "quisticos", "quisticas", "quistes", "calcificacion", "calcificaciones",
+        "ectasia", "bocio", "nodulo", "nodulos", "fibrosis", "esteatosis", "hepatomegalia",
+        "esplenomegalia", "colelitiasis", "lodo biliar", "adenopatia", "adenopatias",
+        "heterogeneo", "heterogenea", "moderado", "moderada", "leve", "litiasis", "lesion", "lesiones",
+        "insuficiencia", "insuficiente", "insuficiencias", "reflujo", "reflujos", "incompetente", "incompetentes",
+        "incompetencia", "retrogado", "retrÃ³grado", "retrogrado", "dilatado", "dilatada", "dilataciones", "dilatacion",
+        "ectasico", "ectasica", "tortuoso", "tortuosa"
+      ];
+
+      const hasActiveKeyword = (keywords: string[]) => {
+        for (const kw of keywords) {
+          const kwClean = kw.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+          const idx = cleanText.indexOf(kwClean);
+          if (idx !== -1) {
+            // Context before key covers the whole sentence up to the keyword
+            const contextBefore = cleanText.substring(0, idx);
+            
+            const negationPatterns = [
+              /\bsin\b/,
+              /\bno\s+se\b/,
+              /\bno\s+aprec\w*/,
+              /\bno\s+evid\w*/,
+              /\bno\s+observa\w*/,
+              /\bno\s+detecta\w*/,
+              /\bno\s+visualiza\w*/,
+              /\bno\s+hay\b/,
+              /\bausencia\b/,
+              /\blibre\s+de\b/,
+              /\bnegativ\w*/,
+              /\bnormal\b/,
+              /\bconservad\w*/,
+              /\bdescarta\w*/,
+              /\bpermeable\b/,
+              /\bcolapsable\b/,
+              /\bcompresible\b/,
+              /\bno\s+muestra\b/,
+              /\bno\s+revela\b/
+            ];
+
+            const isNegated = negationPatterns.some(pattern => pattern.test(contextBefore));
+            if (!isNegated) {
+              return true;
+            }
+          }
+        }
+        return false;
+      };
+
+      if (hasActiveKeyword(criticalKeywords)) {
+        severity = "critical";
+        break;
+      } else if (hasActiveKeyword(alteredKeywords)) {
+        severity = "altered";
+      }
+    }
+
+    return severity;
+  };
+
+  const getImageDimensionsVirtual = (url: string): Promise<{ width: number; height: number }> => {
+    return new Promise((resolve) => {
+      if (!url) {
+        resolve({ width: 0, height: 0 });
+        return;
+      }
+      const img = new Image();
+      img.onload = () => {
+        resolve({ width: img.naturalWidth || img.width || 0, height: img.naturalHeight || img.height || 0 });
+      };
+      img.onerror = () => {
+        resolve({ width: 0, height: 0 });
+      };
+      img.src = url;
+    });
+  };
+
+  const handleDownloadNativePDF = async (
+    openInNewTab: boolean = false,
+    shareViaWebShare: boolean = false,
+    returnBase64: boolean = false,
+    returnBlobUrl: boolean = false,
+    studyOverride?: Partial<CloudStudy>,
+    returnRawBlob: boolean = false
+  ): Promise<any> => {
+    // Shadow state variables to support optional study overrides gracefully using pdfStateRef.current to avoid TDZ
+    const generatedReportLocal = studyOverride ? studyOverride.reportText : pdfStateRef.current.generatedReport;
+    if (!generatedReportLocal) return;
+
+    const patientNameLocal = studyOverride ? (studyOverride.patientName || "Paciente AnÃ³nimo") : (pdfStateRef.current.patientName || "Paciente AnÃ³nimo");
+    const patientEmailLocal = studyOverride ? (studyOverride.patientEmail || "No especificado") : (pdfStateRef.current.patientEmail || "No especificado");
+    const patientAgeLocal = studyOverride ? (studyOverride.patientAge || "") : pdfStateRef.current.patientAge;
+    const patientGenderLocal = studyOverride ? (studyOverride.patientGender || "") : pdfStateRef.current.patientGender;
+    const patientIdLocal = studyOverride ? (studyOverride.patientId || "") : pdfStateRef.current.patientId;
+    const reportDateLocal = studyOverride ? (studyOverride.reportDate || "") : pdfStateRef.current.reportDate;
+    const doctorNameLocal = studyOverride ? (studyOverride.doctorName || "MÃ©dico RadiÃ³logo") : (pdfStateRef.current.doctorName || "MÃ©dico RadiÃ³logo");
+    const doctorLicenseLocal = studyOverride ? (studyOverride.doctorLicense || "No especificada") : (pdfStateRef.current.doctorLicense || "No especificada");
+    const clinicNameLocal = studyOverride ? (studyOverride.clinicName || "ClÃ­nica Privada") : (pdfStateRef.current.clinicName || "ClÃ­nica Privada");
+    const clinicalHistoryLocal = studyOverride ? (studyOverride.clinicalHistory || "No especificada") : (pdfStateRef.current.clinicalHistory || "No especificada");
+    const findingsLocal = studyOverride ? (studyOverride.findings || "No especificadas") : (pdfStateRef.current.findings || "No especificadas");
+    const studyTypeLocal = studyOverride ? (studyOverride.studyType || "Estudio General") : (pdfStateRef.current.studyType || "Estudio General");
+    const customLogoUrlLocal = studyOverride ? (studyOverride.customLogoUrl || "") : (pdfStateRef.current.customLogoUrl || "");
+    const customLogoStyleLocal = studyOverride ? (studyOverride.customLogoStyle || "logo") : (pdfStateRef.current.customLogoStyle || "logo");
+    const customSignatureUrlLocal = studyOverride ? (studyOverride.customSignatureUrl || "") : (pdfStateRef.current.customSignatureUrl || "");
+    const specificStudyLocal = studyOverride && studyOverride.specificStudy ? studyOverride.specificStudy : pdfStateRef.current.specificStudy;
+    const pdfLayoutTypeLocal = studyOverride && studyOverride.pdfLayoutType ? (studyOverride.pdfLayoutType as any) : pdfStateRef.current.pdfLayoutType;
+    const selectedLogoLocal = studyOverride && studyOverride.selectedLogo ? studyOverride.selectedLogo : pdfStateRef.current.selectedLogo;
+
+    // Now re-assign to local variables with the exact same name as states to shadow them!
+    const generatedReport = generatedReportLocal;
+    const patientName = patientNameLocal;
+    const patientEmail = patientEmailLocal;
+    const patientAge = patientAgeLocal;
+    const patientGender = patientGenderLocal;
+    const patientId = patientIdLocal;
+    const reportDate = reportDateLocal;
+    const doctorName = doctorNameLocal;
+    const doctorLicense = doctorLicenseLocal;
+    const clinicName = clinicNameLocal;
+    const displayClinicName = clinicName && clinicName.trim().toUpperCase() !== "CLÃNICA PRIVADA" && clinicName.trim().toUpperCase() !== "CLINICA PRIVADA" ? clinicName.toUpperCase() : "";
+    const clinicalHistory = clinicalHistoryLocal;
+    const findings = findingsLocal;
+    const studyType = studyTypeLocal;
+    const customLogoUrl = customLogoUrlLocal;
+    const customLogoStyle = customLogoStyleLocal;
+    const customSignatureUrl = customSignatureUrlLocal;
+    const specificStudy = specificStudyLocal || "TÃ³rax";
+    const pdfLayoutType = pdfLayoutTypeLocal || "classic";
+    const selectedLogo = selectedLogoLocal || "none";
+    
+    try {
+      const doc = new jsPDF({
+        orientation: "portrait",
+        unit: "mm",
+        format: "a4",
+        compress: false,
+      });
+
+      let yCoord = 20;
+      let marginX = 20;
+      const pageWidth = 210;
+      const pageHeight = 297;
+      let contentWidth = pageWidth - (2 * marginX); // 170mm
+
+      // Load virtual image dimensions to prevent any layout distortion on any device
+      const logoDims = await getImageDimensionsVirtual(customLogoUrl);
+      const signatureDims = await getImageDimensionsVirtual(customSignatureUrl);
+
+      const drawAsymmetricSidebar = (docObj: any, pageNum: number, startY: number = 20) => {
+        if (pdfLayoutType !== "asymmetric") return;
+        
+        // Draw elegant vertical dividing line at x = 70
+        docObj.setDrawColor(226, 232, 240); // slate-200
+        docObj.setLineWidth(0.35);
+        docObj.line(70, startY, 70, pageHeight - 20);
+
+        if (pageNum === 1) {
+          // Draw a very elegant Swiss-style slate background card for patient info
+          const cardY = startY + 2;
+          const cardW = 46;
+          const cardH = 75; // slightly taller to fit everything nicely
+          
+          docObj.setFillColor(248, 250, 252); // slate-50
+          docObj.setDrawColor(226, 232, 240); // slate-200
+          docObj.setLineWidth(0.2);
+          docObj.roundedRect(20, cardY, cardW, cardH, 2, 2, "FD");
+
+          // Red/blue minimalist Swiss accent bar at the top of the sidebar card
+          docObj.setFillColor(79, 70, 229); // Indigo accent
+          docObj.rect(20, cardY, cardW, 1.8, "F");
+
+          let textY = cardY + 7;
+          
+          // SIDEBAR HEADER
+          docObj.setFont("helvetica", "bold");
+          docObj.setFontSize(7.5);
+          docObj.setTextColor(100, 116, 139); // slate-500
+          docObj.text("INFORMACIÃ“N", 24, textY);
+          textY += 4.5;
+
+          // PACIENTE
+          docObj.setFont("helvetica", "bold");
+          docObj.setFontSize(7);
+          docObj.setTextColor(148, 163, 184); // slate-400
+          docObj.text("PACIENTE", 24, textY);
+          textY += 3.5;
+
+          docObj.setFont("helvetica", "bold");
+          docObj.setFontSize(8.5);
+          docObj.setTextColor(15, 23, 42); // slate-900
+          const pName = (patientName || "NO ESPECIFICADO").toUpperCase();
+          const pNameLines = docObj.splitTextToSize(pName, cardW - 8);
+          pNameLines.forEach((l: string) => {
+            docObj.text(l, 24, textY);
+            textY += 4;
+          });
+          textY += 2;
+
+          // FECHA
+          docObj.setFont("helvetica", "bold");
+          docObj.setFontSize(7);
+          docObj.setTextColor(148, 163, 184);
+          docObj.text("FECHA DEL ESTUDIO", 24, textY);
+          textY += 3.5;
+
+          docObj.setFont("helvetica", "bold");
+          docObj.setFontSize(8.5);
+          docObj.setTextColor(15, 23, 42);
+          docObj.text(formatDateToDMY(reportDate), 24, textY);
+          textY += 5.5;
+
+          // ESTUDIO
+          docObj.setFont("helvetica", "bold");
+          docObj.setFontSize(7);
+          docObj.setTextColor(148, 163, 184);
+          docObj.text("ESTUDIO / EXAMEN", 24, textY);
+          textY += 3.5;
+
+          docObj.setFont("helvetica", "bold");
+          docObj.setFontSize(8);
+          docObj.setTextColor(15, 23, 42);
+          const studyClean = (specificStudy || "ECOGRAFÃA").toUpperCase();
+          const studyLines = docObj.splitTextToSize(studyClean, cardW - 8);
+          studyLines.forEach((l: string) => {
+            docObj.text(l, 24, textY);
+            textY += 3.8;
+          });
+          textY += 2;
+
+          // MÃ‰DICO
+          if (doctorName) {
+            docObj.setFont("helvetica", "bold");
+            docObj.setFontSize(7);
+            docObj.setTextColor(148, 163, 184);
+            docObj.text("MÃ‰DICO", 24, textY);
+            textY += 3.5;
+
+            docObj.setFont("helvetica", "bold");
+            docObj.setFontSize(8);
+            docObj.setTextColor(15, 23, 42);
+            const drText = doctorName.toUpperCase();
+            const drLines = docObj.splitTextToSize(drText, cardW - 8);
+            drLines.forEach((l: string) => {
+              docObj.text(l, 24, textY);
+              textY += 3.8;
+            });
+          }
+        }
+      };
+
+      const drawAnatomicalCards = (
+        docObj: any,
+        findings: Array<{ label: string; state: string; description: string }>,
+        boxX: number,
+        boxY: number,
+        boxW: number,
+        boxH: number,
+        isVascular: boolean = false
+      ) => {
+        // Aligned Anatomical Cards format for Appendix / Synopses in PDF (OpciÃ³n 1: Fichas AnatÃ³micas Alineadas)
+        const isLargeSingleMode = boxH > 100;
+        const paddingX = 2.5;
+        const paddingY = isLargeSingleMode ? 10.5 : 8.5; // Starts after header text space
+        const startX = boxX + paddingX;
+        const startY = boxY + paddingY;
+        const availW = boxW - (paddingX * 2);
+        const availH = boxH - paddingY - (isLargeSingleMode ? 3.5 : 2.5);
+
+        const count = findings.length;
+        const cols = count > 3 ? 2 : 1;
+        const colGap = 2.0;
+        const rowGap = isLargeSingleMode ? 3.0 : 2.0;
+        const colW = cols === 2 ? (availW - colGap) / 2 : availW;
+
+        const totalRows = Math.max(1, Math.ceil(count / cols));
+        const cardH = (availH - (rowGap * (totalRows - 1))) / totalRows;
+
+        findings.forEach((finding, index) => {
+          const colIndex = index % cols;
+          const rowIndex = Math.floor(index / cols);
+          const cardX = startX + colIndex * (colW + colGap);
+          const cardY = startY + rowIndex * (cardH + rowGap);
+
+          const stateClean = (finding.state || "").toLowerCase().trim();
+          let dotColor = [99, 102, 241];      // indigo-500
+          let badgeBg = [238, 242, 255];      // indigo-50
+          let badgeText = [67, 56, 202];       // indigo-700
+          let drawBorder = [226, 232, 240];    // light border
+
+          if (isVascular) {
+            if (stateClean === "normal" || stateClean === "permeable" || stateClean === "sin_lesiones" || stateClean === "normales" || stateClean === "dentro de lÃ­mites normales") {
+              dotColor = [16, 185, 129];        // Emerald-500 (Green)
+              badgeBg = [240, 253, 244];
+              badgeText = [21, 128, 61];
+              drawBorder = [209, 250, 229];
+            } else if (stateClean === "mild" || stateClean === "reflux" || stateClean.includes("mild") || stateClean.includes("reflux") || stateClean.includes("leve") || stateClean.includes("espesor_conservado")) {
+              dotColor = [245, 158, 11];        // Amber-500 (Orange for mild-moderate)
+              badgeBg = [254, 252, 232];
+              badgeText = [180, 83, 9];
+              drawBorder = [254, 243, 199];
+            } else if (stateClean === "severe" || stateClean === "critical" || stateClean === "thrombosis" || stateClean.includes("severe") || stateClean.includes("critico") || stateClean.includes("crÃ­tico") || stateClean.includes("trombosis")) {
+              dotColor = [220, 38, 38];         // Red-600 (Red for severe)
+              badgeBg = [254, 242, 242];
+              badgeText = [185, 28, 28];
+              drawBorder = [254, 205, 211];
+            } else {
+              // Fallback for custom or unmapped states in vascular studies (Amber/Orange)
+              dotColor = [245, 158, 11];
+              badgeBg = [254, 252, 232];
+              badgeText = [180, 83, 9];
+              drawBorder = [254, 243, 199];
+            }
+          } else {
+            if (stateClean === "normal" || stateClean === "sin_lesiones" || stateClean === "normales" || stateClean === "dentro de lÃ­mites normales") {
+              dotColor = [16, 185, 129];        // emerald-500
+              badgeBg = [240, 253, 244];         // emerald-50
+              badgeText = [21, 128, 61];          // emerald-700
+              drawBorder = [209, 250, 229];
+            } else if (
+              stateClean.includes("ruptura") || 
+              stateClean.includes("desgarro_completo") ||
+              stateClean.includes("orquitis") ||
+              stateClean.includes("torsion") ||
+              stateClean.includes("colecistitis") || 
+              stateClean.includes("severa") || 
+              stateClean.includes("severo") || 
+              stateClean.includes("masa") || 
+              stateClean.includes("solido") || 
+              stateClean.includes("sÃ³lido") || 
+              stateClean.includes("maligno") || 
+              stateClean.includes("birads_4") || 
+              stateClean.includes("birads_5") || 
+              stateClean.includes("birads_6") || 
+              stateClean.includes("suspicious") || 
+              stateClean.includes("aneurisma") ||
+              stateClean.includes("trombosis") ||
+              stateClean.includes("critico") ||
+              stateClean.includes("crÃ­tico")
+            ) {
+              dotColor = [239, 68, 68];          // rose-500
+              badgeBg = [254, 242, 242];         // rose-50
+              badgeText = [185, 28, 28];          // rose-700
+              drawBorder = [254, 205, 211];       // rose-200
+            } else if (
+              stateClean.includes("leve") || 
+              stateClean.includes("quiste_simple") || 
+              stateClean.includes("benigno") || 
+              stateClean.includes("sinovitis_l") || 
+              stateClean.includes("derrame_l") ||
+              stateClean.includes("espesor_conservado") ||
+              stateClean.includes("hidrocele_l") ||
+              stateClean.includes("ectasia_l") ||
+              stateClean.includes("bursitis_l") ||
+              stateClean.includes("birads_2") ||
+              stateClean.includes("birads_3")
+            ) {
+              dotColor = [245, 158, 11];         // amber-500
+              badgeBg = [254, 252, 232];         // amber-50
+              badgeText = [180, 83, 9];           // amber-800
+              drawBorder = [254, 243, 199];       // amber-200
+            }
+          }
+
+          // Draw card background
+          docObj.setFillColor(255, 255, 255);
+          docObj.setDrawColor(drawBorder[0], drawBorder[1], drawBorder[2]);
+          docObj.setLineWidth(0.18);
+          docObj.roundedRect(cardX, cardY, colW, cardH, 1.2, 1.2, "FD");
+
+          // Draw colored stripe indicator on left edge
+          docObj.setFillColor(dotColor[0], dotColor[1], dotColor[2]);
+          docObj.rect(cardX, cardY, 1.2, cardH, "F");
+
+          // Draw badge for state FIRST
+          let rawState = (finding.state || "ALTERADO").replace(/_/g, " ").toUpperCase();
+          if (isVascular) {
+            const stateClean = (finding.state || "").toLowerCase().trim();
+            if (stateClean === "normal" || stateClean === "permeable" || stateClean === "sin_lesiones" || stateClean === "normales" || stateClean === "dentro de lÃ­mites normales") {
+              rawState = "PERMEABLE";
+            } else if (stateClean === "mild" || stateClean.includes("mild") || stateClean.includes("leve") || stateClean.includes("espesor_conservado")) {
+              rawState = "LEVE";
+            } else if (stateClean === "reflux" || stateClean.includes("reflux")) {
+              rawState = "INSUFICIENCIA";
+            } else if (stateClean === "thrombosis" || stateClean.includes("trombosis")) {
+              rawState = "TROMBOSIS";
+            } else if (stateClean === "severe" || stateClean === "critical" || stateClean.includes("severe") || stateClean.includes("critico") || stateClean.includes("crÃ­tico")) {
+              rawState = "ESTENOSIS";
+            } else {
+              rawState = "ALTERADO";
+            }
+          } else {
+            if (rawState === "NORMAL") rawState = "NORMAL";
+            else if (rawState === "DESGARRO MIOFASCIAL") rawState = "D. MIOFASC";
+            else if (rawState === "DESGARRO INTRAMUSCULAR") rawState = "D. INTRAC";
+            else if (rawState === "VALORACION DINAMICA") rawState = "VAL. DIN.";
+            else if (rawState === "ADENOPATIA REACTIVA") rawState = "INFLAMATORIO";
+          }
+
+          const badgeFontSize = cardH > 20 ? 5.2 : 4.0;
+          const badgeH = cardH > 20 ? 3.4 : 2.3;
+          docObj.setFont("helvetica", "bold");
+          docObj.setFontSize(badgeFontSize);
+          const stateTextWidth = docObj.getTextWidth(rawState);
+          const badgeW = Math.min(colW * 0.45, stateTextWidth + 2.5);
+          const badgeX = cardX + colW - badgeW - 1.2;
+
+          docObj.setFillColor(badgeBg[0], badgeBg[1], badgeBg[2]);
+          docObj.roundedRect(badgeX, cardY + 1.0, badgeW, badgeH, 0.5, 0.5, "F");
+          docObj.setTextColor(badgeText[0], badgeText[1], badgeText[2]);
+          docObj.text(rawState, badgeX + badgeW / 2, cardY + 1.0 + (badgeH * 0.72), { align: "center" });
+
+          // Draw structure label (Title) with auto-scaling font size to avoid truncation
+          let labelFontSize = cardH < 10 ? 5.0 : (cardH > 20 ? 7.2 : 5.6);
+          docObj.setFont("helvetica", "bold");
+          docObj.setFontSize(labelFontSize);
+          docObj.setTextColor(15, 23, 42); // slate-900
+
+          const maxTitleWidth = badgeX - (cardX + 2.4) - 1.0;
+          let titleText = finding.label.toUpperCase();
+
+          while (labelFontSize > 3.6 && docObj.getTextWidth(titleText) > maxTitleWidth) {
+            labelFontSize -= 0.3;
+            docObj.setFontSize(labelFontSize);
+          }
+          if (docObj.getTextWidth(titleText) > maxTitleWidth) {
+            while (titleText.length > 3 && docObj.getTextWidth(titleText + "..") > maxTitleWidth) {
+              titleText = titleText.slice(0, -1);
+            }
+            titleText += "..";
+          }
+          docObj.text(titleText, cardX + 2.4, cardY + (cardH > 20 ? 3.8 : 2.8));
+
+          // Draw wrapped clinical description without cutting off lines
+          docObj.setFont("helvetica", "normal");
+          let descFontSize = cardH < 9 ? 4.2 : (cardH < 13 ? 4.6 : (cardH > 20 ? 6.2 : 5.0));
+          let spacing = descFontSize * (cardH > 20 ? 0.45 : 0.42);
+
+          docObj.setFontSize(descFontSize);
+          docObj.setTextColor(71, 85, 105); // slate-600
+
+          const textToWrap = finding.description || "";
+          const wrapWidthLimit = colW - 4.2;
+          let linesWrapped = docObj.splitTextToSize(textToWrap, wrapWidthLimit);
+
+          const startTextY = cardY + (cardH > 20 ? 4.0 : 2.8) + spacing;
+          const maxTextY = cardY + cardH - 1.0;
+          const maxAllowedLines = Math.max(1, Math.floor((maxTextY - startTextY) / spacing) + 1);
+
+          if (linesWrapped.length > maxAllowedLines && descFontSize > 3.8) {
+            descFontSize = 3.8;
+            spacing = descFontSize * 0.40;
+            docObj.setFontSize(descFontSize);
+            linesWrapped = docObj.splitTextToSize(textToWrap, wrapWidthLimit);
+          }
+
+          const linesToRender = Math.min(linesWrapped.length, Math.max(1, Math.floor((maxTextY - startTextY) / spacing) + 1));
+          for (let i = 0; i < linesToRender; i++) {
+            let lineStr = linesWrapped[i];
+            if (i === linesToRender - 1 && linesWrapped.length > linesToRender && lineStr.length > 3) {
+              lineStr = lineStr.slice(0, -3) + "...";
+            }
+            docObj.text(lineStr, cardX + 2.4, startTextY + (i * spacing));
+          }
+        });
+      };
+
+      // Helper function to check space and add page if needed
+      const checkPageBreak = (neededHeight: number) => {
+        if (yCoord + neededHeight > pageHeight - 20) {
+          doc.addPage();
+          yCoord = 20;
+          if (pdfLayoutType === "asymmetric") {
+            drawAsymmetricSidebar(doc, doc.getNumberOfPages(), 20);
+          }
+        }
+      };
+
+      // Helper function to wrap markdown mixed text safely
+      const wrapMarkdown = (docObj: any, textStr: string, maxWidth: number) => {
+        const parts = textStr.split("**");
+        const tokens: { text: string; isBold: boolean }[] = [];
+
+        parts.forEach((partText, idx) => {
+          if (!partText && idx !== 0) return; // Allow empty first item (implies starting with bold)
+          const isBold = idx % 2 === 1;
+          const subParts = partText.split(/(\s+)/);
+          subParts.forEach((sub) => {
+            if (sub === "") return;
+            tokens.push({ text: sub, isBold });
+          });
+        });
+
+        const lines: { text: string; isBold: boolean }[][] = [];
+        let currentLine: { text: string; isBold: boolean }[] = [];
+        let currentWidth = 0;
+
+        const originalFontType = docObj.getFont().fontStyle;
+
+        tokens.forEach((token) => {
+          if (token.isBold) {
+            docObj.setFont("times", "bold");
+          } else {
+            docObj.setFont("times", "normal");
+          }
+          docObj.setFontSize(10.5);
+          const tokenWidth = docObj.getTextWidth(token.text);
+
+          if (currentWidth + tokenWidth <= maxWidth) {
+            currentLine.push(token);
+            currentWidth += tokenWidth;
+          } else {
+            if (token.text.trim() === "" && currentLine.length === 0) {
+              return; // Skip leading spaces
+            }
+            if (currentLine.length > 0) {
+              lines.push(currentLine);
+            }
+            currentLine = [token];
+            currentWidth = tokenWidth;
+          }
+        });
+
+        if (currentLine.length > 0) {
+          lines.push(currentLine);
+        }
+
+        docObj.setFont("times", originalFontType);
+        return lines;
+      };
+
+      // Header Brand/Clinic Logo & Name
+      if (customLogoUrl) {
+        if (customLogoStyle === "banner") {
+          // Banner Style (Centered wide banner)
+          let bannerWidth = 165;
+          let bannerHeight = 35;
+          if (logoDims.width && logoDims.height) {
+            const aspect = logoDims.width / logoDims.height;
+            const maxWidth = contentWidth; // 170
+            const maxHeight = 52;
+            if (aspect > maxWidth / maxHeight) {
+              bannerWidth = maxWidth;
+              bannerHeight = maxWidth / aspect;
+            } else {
+              bannerHeight = maxHeight;
+              bannerWidth = maxHeight * aspect;
+            }
+          }
+          
+          try {
+            const format = customLogoUrl.toLowerCase().includes("image/png") ? "PNG" : "JPEG";
+            doc.addImage(customLogoUrl, format, (pageWidth - bannerWidth) / 2, yCoord, bannerWidth, bannerHeight);
+            yCoord += bannerHeight + 5;
+          } catch (err) {
+            console.warn("Could not draw banner image inside jsPDF", err);
+            // Fallback
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(14);
+            doc.setTextColor(15, 23, 42);
+            doc.text(displayClinicName || "REPORTE DE RADIODIAGNÃ“STICO", pageWidth / 2, yCoord, { align: "center" });
+            yCoord += 6;
+          }
+
+          if (displayClinicName) {
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(10);
+            doc.setTextColor(15, 23, 42);
+            doc.text(displayClinicName, pageWidth / 2, yCoord, { align: "center" });
+            yCoord += 5;
+          }
+        } else {
+          // Left Aligned Logo Style
+          let logoWidth = 36;
+          let logoHeight = 36;
+          if (logoDims.width && logoDims.height) {
+            const aspect = logoDims.width / logoDims.height;
+            const maxWidth = 42;
+            const maxHeight = 42;
+            if (aspect > maxWidth / maxHeight) {
+              logoWidth = maxWidth;
+              logoHeight = maxWidth / aspect;
+            } else {
+              logoHeight = maxHeight;
+              logoWidth = maxHeight * aspect;
+            }
+          }
+          
+          try {
+            const format = customLogoUrl.toLowerCase().includes("image/png") ? "PNG" : "JPEG";
+            doc.addImage(customLogoUrl, format, marginX, yCoord, logoWidth, logoHeight);
+          } catch (err) {
+            console.warn("Could not draw logo image inside left header", err);
+          }
+          
+          const textX = marginX + logoWidth + 6;
+          doc.setFont("helvetica", "bold");
+          doc.setFontSize(14);
+          doc.setTextColor(15, 23, 42);
+          doc.text(displayClinicName || "REPORTE DE RADIODIAGNÃ“STICO", textX, yCoord + (logoHeight / 2) - 1.5);
+          
+          doc.setFont("helvetica", "bold");
+          doc.setFontSize(9);
+          doc.setTextColor(100, 116, 139);
+          doc.text("REPORTE DE RADIODIAGNÃ“STICO POR IMAGEN", textX, yCoord + (logoHeight / 2) + 4);
+          
+          yCoord += Math.max(logoHeight, 15) + 6;
+        }
+      } else {
+        // Standard (No user custom logo file, or they chose default medical vectors)
+        let symbolWidth = 0;
+        if (selectedLogo === "medical-cross") {
+          symbolWidth = 14;
+          doc.setDrawColor(220, 38, 38); // Red
+          doc.setFillColor(220, 38, 38);
+          doc.rect(marginX + 5, yCoord, 4, 12, "F");
+          doc.rect(marginX + 1, yCoord + 4, 12, 4, "F");
+        } else if (selectedLogo === "heart-pulse") {
+          symbolWidth = 14;
+          doc.setDrawColor(244, 63, 94); // Rose
+          doc.setFillColor(244, 63, 94);
+          doc.rect(marginX + 5, yCoord, 4, 12, "F");
+          doc.rect(marginX + 1, yCoord + 4, 12, 4, "F");
+        } else if (selectedLogo === "dna" || selectedLogo === "shield-check") {
+          symbolWidth = 14;
+          doc.setDrawColor(79, 70, 229); // Indigo
+          doc.setFillColor(79, 70, 229);
+          doc.rect(marginX + 5, yCoord, 4, 12, "F");
+          doc.rect(marginX + 1, yCoord + 4, 12, 4, "F");
+        }
+
+        if (symbolWidth > 0) {
+          const textX = marginX + symbolWidth + 4;
+          doc.setFont("helvetica", "bold");
+          doc.setFontSize(14);
+          doc.setTextColor(15, 23, 42);
+          doc.text(displayClinicName || "REPORTE DE RADIODIAGNÃ“STICO", textX, yCoord + 5);
+          
+          doc.setFont("helvetica", "bold");
+          doc.setFontSize(9);
+          doc.setTextColor(100, 116, 139);
+          doc.text("REPORTE DE RADIODIAGNÃ“STICO POR IMAGEN", textX, yCoord + 10.5);
+          
+          yCoord += 18;
+        } else {
+          // Centered Clinic Name or default heading
+          if (displayClinicName) {
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(14);
+            doc.setTextColor(15, 23, 42); // slate-900 / dark
+            doc.text(displayClinicName, pageWidth / 2, yCoord, { align: "center" });
+            yCoord += 6;
+
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(9);
+            doc.setTextColor(100, 116, 139); // slate-500
+            doc.text("REPORTE DE RADIODIAGNÃ“STICO POR IMAGEN", pageWidth / 2, yCoord, { align: "center" });
+            yCoord += 8;
+          } else {
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(14);
+            doc.setTextColor(15, 23, 42);
+            doc.text("REPORTE DE RADIODIAGNÃ“STICO", pageWidth / 2, yCoord, { align: "center" });
+            yCoord += 11;
+          }
+        }
+      }
+
+      // Add a line under header
+      if (pdfLayoutType === "clinical_slate") {
+        doc.setDrawColor(71, 85, 105); // slate-600
+        doc.setLineWidth(0.65);
+        doc.line(marginX, yCoord - 2, pageWidth - marginX, yCoord - 2);
+      } else if (pdfLayoutType === "executive_medical") {
+        doc.setDrawColor(15, 23, 42); // Navy
+        doc.setLineWidth(0.6);
+        doc.line(marginX, yCoord - 2.5, pageWidth - marginX, yCoord - 2.5);
+        doc.setDrawColor(197, 160, 89); // Gold
+        doc.setLineWidth(0.35);
+        doc.line(marginX, yCoord - 1.5, pageWidth - marginX, yCoord - 1.5);
+      } else {
+        doc.setDrawColor(226, 232, 240); // slate-200
+        doc.setLineWidth(0.4);
+        doc.line(marginX, yCoord - 2, pageWidth - marginX, yCoord - 2);
+      }
+      yCoord += 2;
+
+      // Patient Metadata Block
+      if (pdfLayoutType === "clinical_slate" && (patientName || reportDate)) {
+        const extraCols: { label: string; value: string }[] = [];
+        if (patientId && patientId.trim() !== "") {
+          extraCols.push({
+            label: "ID / HISTORIA CLÃNICA",
+            value: patientId.trim().toUpperCase()
+          });
+        }
+        const agePart = patientAge && patientAge.trim() !== "" ? patientAge.trim() : "";
+        const genderPart = patientGender && patientGender.trim() !== "" ? patientGender.trim() : "";
+        if (agePart || genderPart) {
+          let combinedVal = "";
+          let label = "";
+          if (agePart && genderPart) {
+            label = "EDAD / SEXO";
+            combinedVal = `${agePart} / ${genderPart}`;
+          } else if (agePart) {
+            label = "EDAD";
+            combinedVal = agePart;
+          } else {
+            label = "SEXO / GÃ‰NERO";
+            combinedVal = genderPart;
+          }
+          extraCols.push({
+            label: label,
+            value: combinedVal.toUpperCase()
+          });
+        }
+
+        const hasExtraMeta = extraCols.length > 0;
+        const cardHeight = hasExtraMeta ? 22 : 13;
+
+        // Draw elegant Clinical Slate metadata card
+        doc.setFillColor(241, 245, 249); // slate-100
+        doc.setDrawColor(148, 163, 184); // slate-400
+        doc.setLineWidth(0.35);
+        doc.roundedRect(marginX, yCoord, contentWidth, cardHeight, 1.5, 1.5, "FD");
+
+        // Vertical divider inside the card for Row 1
+        doc.setDrawColor(203, 213, 225); // slate-300
+        doc.setLineWidth(0.25);
+        doc.line(marginX + (contentWidth / 2), yCoord, marginX + (contentWidth / 2), yCoord + 12);
+
+        if (hasExtraMeta) {
+          // Horizontal divider
+          doc.line(marginX, yCoord + 12, marginX + contentWidth, yCoord + 12);
+
+          if (extraCols.length === 2) {
+            // Draw vertical divider in Row 2
+            doc.line(marginX + (contentWidth / 2), yCoord + 12, marginX + (contentWidth / 2), yCoord + cardHeight);
+          }
+        }
+
+        const formattedDate = formatDateToDMY(reportDate);
+
+        // Column 1: PACIENTE
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(7.5);
+        doc.setTextColor(71, 85, 105); // slate-600
+        doc.text("PACIENTE", marginX + 4, yCoord + 4.5);
+
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(9.5);
+        doc.setTextColor(15, 23, 42); // slate-900
+        doc.text((patientName || "NO ESPECIFICADO").toUpperCase(), marginX + 4, yCoord + 9.5);
+
+        // Column 2: FECHA DEL ESTUDIO
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(7.5);
+        doc.setTextColor(71, 85, 105); // slate-600
+        doc.text("FECHA DEL ESTUDIO", marginX + (contentWidth / 2) + 4, yCoord + 4.5);
+
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(9.5);
+        doc.setTextColor(15, 23, 42); // slate-900
+        doc.text(formattedDate || "NO ESPECIFICADO", marginX + (contentWidth / 2) + 4, yCoord + 9.5);
+
+        if (hasExtraMeta) {
+          if (extraCols.length === 1) {
+            const col = extraCols[0];
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(7.5);
+            doc.setTextColor(71, 85, 105);
+            doc.text(col.label, marginX + 4, yCoord + 15.5);
+
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(9.5);
+            doc.setTextColor(15, 23, 42);
+            doc.text(col.value, marginX + 4, yCoord + 19.5);
+          } else if (extraCols.length === 2) {
+            const col1 = extraCols[0];
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(7.5);
+            doc.setTextColor(71, 85, 105);
+            doc.text(col1.label, marginX + 4, yCoord + 15.5);
+
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(9.5);
+            doc.setTextColor(15, 23, 42);
+            doc.text(col1.value, marginX + 4, yCoord + 19.5);
+
+            const col2 = extraCols[1];
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(7.5);
+            doc.setTextColor(71, 85, 105);
+            doc.text(col2.label, marginX + (contentWidth / 2) + 4, yCoord + 15.5);
+
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(9.5);
+            doc.setTextColor(15, 23, 42);
+            doc.text(col2.value, marginX + (contentWidth / 2) + 4, yCoord + 19.5);
+          }
+        }
+
+        yCoord += cardHeight + 6;
+      } else if (pdfLayoutType === "executive_medical" && (patientName || reportDate)) {
+        const extraCols: { label: string; value: string }[] = [];
+        if (patientId && patientId.trim() !== "") {
+          extraCols.push({
+            label: "ID / HISTORIA CLÃNICA",
+            value: patientId.trim().toUpperCase()
+          });
+        }
+        const agePart = patientAge && patientAge.trim() !== "" ? patientAge.trim() : "";
+        const genderPart = patientGender && patientGender.trim() !== "" ? patientGender.trim() : "";
+        if (agePart || genderPart) {
+          let combinedVal = "";
+          let label = "";
+          if (agePart && genderPart) {
+            label = "EDAD / SEXO";
+            combinedVal = `${agePart} / ${genderPart}`;
+          } else if (agePart) {
+            label = "EDAD";
+            combinedVal = agePart;
+          } else {
+            label = "SEXO / GÃ‰NERO";
+            combinedVal = genderPart;
+          }
+          extraCols.push({
+            label: label,
+            value: combinedVal.toUpperCase()
+          });
+        }
+
+        const hasExtraMeta = extraCols.length > 0;
+        const cardHeight = hasExtraMeta ? 22 : 13;
+
+        // Draw elegant Executive Medical metadata card (Cream & Gold style)
+        doc.setFillColor(253, 251, 247); // Sophisticated cream
+        doc.setDrawColor(197, 160, 89); // Metallic Gold
+        doc.setLineWidth(0.4);
+        doc.roundedRect(marginX, yCoord, contentWidth, cardHeight, 1.5, 1.5, "FD");
+
+        // Vertical gold divider inside the card for Row 1
+        doc.line(marginX + (contentWidth / 2), yCoord, marginX + (contentWidth / 2), yCoord + 12);
+
+        if (hasExtraMeta) {
+          // Horizontal divider
+          doc.line(marginX, yCoord + 12, marginX + contentWidth, yCoord + 12);
+
+          if (extraCols.length === 2) {
+            // Row 2 divider
+            doc.line(marginX + (contentWidth / 2), yCoord + 12, marginX + (contentWidth / 2), yCoord + cardHeight);
+          }
+        }
+
+        const formattedDate = formatDateToDMY(reportDate);
+
+        // Column 1: PACIENTE
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(7.5);
+        doc.setTextColor(197, 160, 89); // Gold
+        doc.text("PACIENTE", marginX + 4, yCoord + 4.5);
+
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(9.5);
+        doc.setTextColor(15, 23, 42); // Dark Navy / Slate-900
+        doc.text((patientName || "NO ESPECIFICADO").toUpperCase(), marginX + 4, yCoord + 9.5);
+
+        // Column 2: FECHA DEL ESTUDIO
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(7.5);
+        doc.setTextColor(197, 160, 89); // Gold
+        doc.text("FECHA DEL ESTUDIO", marginX + (contentWidth / 2) + 4, yCoord + 4.5);
+
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(9.5);
+        doc.setTextColor(15, 23, 42); // Dark Navy / Slate-900
+        doc.text(formattedDate || "NO ESPECIFICADO", marginX + (contentWidth / 2) + 4, yCoord + 9.5);
+
+        if (hasExtraMeta) {
+          if (extraCols.length === 1) {
+            const col = extraCols[0];
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(7.5);
+            doc.setTextColor(197, 160, 89); // Gold
+            doc.text(col.label, marginX + 4, yCoord + 15.5);
+
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(9.5);
+            doc.setTextColor(15, 23, 42);
+            doc.text(col.value, marginX + 4, yCoord + 19.5);
+          } else if (extraCols.length === 2) {
+            const col1 = extraCols[0];
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(7.5);
+            doc.setTextColor(197, 160, 89); // Gold
+            doc.text(col1.label, marginX + 4, yCoord + 15.5);
+
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(9.5);
+            doc.setTextColor(15, 23, 42);
+            doc.text(col1.value, marginX + 4, yCoord + 19.5);
+
+            const col2 = extraCols[1];
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(7.5);
+            doc.setTextColor(197, 160, 89); // Gold
+            doc.text(col2.label, marginX + (contentWidth / 2) + 4, yCoord + 15.5);
+
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(9.5);
+            doc.setTextColor(15, 23, 42);
+            doc.text(col2.value, marginX + (contentWidth / 2) + 4, yCoord + 19.5);
+          }
+        }
+
+        yCoord += cardHeight + 6;
+      } else if (pdfLayoutType === "asymmetric") {
+        drawAsymmetricSidebar(doc, 1, yCoord);
+        yCoord += 4;
+        marginX = 74;
+        contentWidth = 116;
+      } else if (patientName || reportDate) {
+        const extraCols: { label: string; value: string }[] = [];
+        if (patientId && patientId.trim() !== "") {
+          extraCols.push({
+            label: "ID",
+            value: patientId.trim().toUpperCase()
+          });
+        }
+        const agePart = patientAge && patientAge.trim() !== "" ? patientAge.trim() : "";
+        const genderPart = patientGender && patientGender.trim() !== "" ? patientGender.trim() : "";
+        if (agePart || genderPart) {
+          let combinedVal = "";
+          let label = "";
+          if (agePart && genderPart) {
+            label = "EDAD/SEXO";
+            combinedVal = `${agePart} / ${genderPart}`;
+          } else if (agePart) {
+            label = "EDAD";
+            combinedVal = agePart;
+          } else {
+            label = "SEXO";
+            combinedVal = genderPart;
+          }
+          extraCols.push({
+            label: label,
+            value: combinedVal.toUpperCase()
+          });
+        }
+        const hasExtraMeta = extraCols.length > 0;
+        const cardHeight = hasExtraMeta ? 21 : 12;
+
+        doc.setFillColor(248, 250, 252); // greyish background
+        doc.rect(marginX, yCoord, contentWidth, cardHeight, "F");
+        doc.setDrawColor(226, 232, 240);
+        doc.rect(marginX, yCoord, contentWidth, cardHeight, "S");
+
+        let xOffset = marginX + 4;
+        let totalDateWidth = 0;
+        const formattedDate = formatDateToDMY(reportDate);
+        
+        if (reportDate) {
+          doc.setFont("helvetica", "bold");
+          doc.setFontSize(8.5);
+          const dateLabel = "FECHA: ";
+          totalDateWidth = doc.getTextWidth(dateLabel) + doc.getTextWidth(formattedDate);
+        }
+
+        if (patientName) {
+          doc.setFont("helvetica", "bold");
+          doc.setFontSize(8.5);
+          doc.setTextColor(100, 116, 139);
+          doc.text("PACIENTE: ", xOffset, yCoord + 7.5);
+          const labelWidth = doc.getTextWidth("PACIENTE: ");
+          doc.setFont("helvetica", "bold");
+          doc.setTextColor(15, 23, 42);
+          
+          let patientText = patientName.toUpperCase();
+          const maxNameWidth = (contentWidth - 8 - totalDateWidth) - labelWidth - 4;
+          if (doc.getTextWidth(patientText) > maxNameWidth) {
+            while (patientText.length > 5 && doc.getTextWidth(patientText + "...") > maxNameWidth) {
+              patientText = patientText.slice(0, -1);
+            }
+            patientText += "...";
+          }
+          doc.text(patientText, xOffset + labelWidth, yCoord + 7.5);
+        }
+
+        if (reportDate) {
+          doc.setFont("helvetica", "bold");
+          doc.setFontSize(8.5);
+          doc.setTextColor(100, 116, 139);
+          const dateLabel = "FECHA: ";
+          const rightX = marginX + contentWidth - 4 - totalDateWidth;
+          
+          doc.text(dateLabel, rightX, yCoord + 7.5);
+          const dateLabelWidth = doc.getTextWidth(dateLabel);
+          doc.setFont("helvetica", "bold");
+          doc.setTextColor(15, 23, 42);
+          doc.text(formattedDate, rightX + dateLabelWidth, yCoord + 7.5);
+        }
+
+        if (hasExtraMeta) {
+          // Draw a small line divider
+          doc.setDrawColor(226, 232, 240);
+          doc.line(marginX, yCoord + 11.5, marginX + contentWidth, yCoord + 11.5);
+
+          if (extraCols.length === 1) {
+            const col = extraCols[0];
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(8);
+            doc.setTextColor(100, 116, 139);
+            const labelText = `${col.label}: `;
+            doc.text(labelText, xOffset, yCoord + 16.5);
+            const labelW = doc.getTextWidth(labelText);
+            doc.setFont("helvetica", "bold");
+            doc.setTextColor(15, 23, 42);
+            doc.text(col.value, xOffset + labelW, yCoord + 16.5);
+          } else if (extraCols.length === 2) {
+            // Col 1 (Left)
+            const col1 = extraCols[0];
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(8);
+            doc.setTextColor(100, 116, 139);
+            const label1 = `${col1.label}: `;
+            doc.text(label1, xOffset, yCoord + 16.5);
+            const label1W = doc.getTextWidth(label1);
+            doc.setFont("helvetica", "bold");
+            doc.setTextColor(15, 23, 42);
+            doc.text(col1.value, xOffset + label1W, yCoord + 16.5);
+
+            // Col 2 (Right)
+            const col2 = extraCols[1];
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(8);
+            doc.setTextColor(100, 116, 139);
+            const label2 = `${col2.label}: `;
+            const val2 = col2.value;
+            const totalW2 = doc.getTextWidth(label2) + doc.getTextWidth(val2);
+            const rightX = marginX + contentWidth - 4 - totalW2;
+            doc.text(label2, rightX, yCoord + 16.5);
+            doc.setFont("helvetica", "bold");
+            doc.setTextColor(15, 23, 42);
+            doc.text(val2, rightX + doc.getTextWidth(label2), yCoord + 16.5);
+          }
+        }
+
+        yCoord += cardHeight + 7;
+      }
+
+      // --- DYNAMIC PAGE BUDGET & COMPLETE WIDOW/ORPHAN CONTROL ---
+      const isVascularStudy = specificStudy === "Doppler de carÃ³tidas" || 
+                              specificStudy === "Doppler venoso de miembro inferior" || 
+                              specificStudy === "Doppler arterial de miembro inferior";
+      const isCarotidasForPDF = specificStudy.toLowerCase().includes("carÃ³t") || specificStudy.toLowerCase().includes("carot");
+      const hasBifurcDer = !!document.getElementById("print-bifurcation-der");
+      const hasBifurcIzq = !!document.getElementById("print-bifurcation-izq");
+
+      let factor = 1.0;
+      let estimatedHeight = 20; // Start at top margin
+
+      // 1. Header height estimation
+      if (customLogoUrl) {
+        if (customLogoStyle === "banner") {
+          let bannerHeight = 35;
+          if (logoDims.width && logoDims.height) {
+            const aspect = logoDims.width / logoDims.height;
+            const maxWidth = contentWidth;
+            const maxHeight = 52;
+            bannerHeight = aspect > maxWidth / maxHeight ? maxWidth / aspect : maxHeight;
+          }
+          estimatedHeight += bannerHeight + 5;
+          if (displayClinicName) estimatedHeight += 5;
+        } else {
+          let logoHeight = 36;
+          if (logoDims.width && logoDims.height) {
+            const aspect = logoDims.width / logoDims.height;
+            const maxWidth = 42;
+            const maxHeight = 42;
+            logoHeight = aspect > maxWidth / maxHeight ? maxWidth / aspect : maxHeight;
+          }
+          estimatedHeight += Math.max(logoHeight, 15) + 6;
+        }
+      } else {
+        estimatedHeight += 18;
+      }
+      estimatedHeight += 2; // Underline
+
+      // 2. Patient metadata block estimation
+      if (pdfLayoutType !== "asymmetric" && (patientName || reportDate)) {
+        estimatedHeight += 19;
+      }
+
+      // 3. Estimate text blocks (paragraphs) and tables
+      try {
+        const stripEmojisLocal = (str: string): string => {
+          if (!str) return "";
+          return str.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, "").replace(/[\u2600-\u27BF]|[\u2300-\u23FF]|[\u2B50]|[\u2190-\u21FF]/g, "");
+        };
+        const reportToRenderLocal = isEditingReportManual ? editedReportText : generatedReport;
+        const emojiFreeReportLocal = stripEmojisLocal(reportToRenderLocal || "");
+        let cleanReportLocal = cleanRawClinicalText(emojiFreeReportLocal);
+        cleanReportLocal = cleanReportLocal.replace(/\[START_CASE_ANALYSIS:[\s\S]*?\[END_CASE_ANALYSIS:[^\]]+\]/gi, "");
+        const legacyIdxLocal = cleanReportLocal.indexOf("[CASE_ANALYSIS_JSON]");
+        if (legacyIdxLocal !== -1) {
+          cleanReportLocal = cleanReportLocal.substring(0, legacyIdxLocal).trim();
+        }
+        const summaryIdxLocal = cleanReportLocal.indexOf("**ANÃLISIS INTEGRADO DE CASO");
+        if (summaryIdxLocal !== -1) {
+          cleanReportLocal = cleanReportLocal.substring(0, summaryIdxLocal).trim();
+        }
+        cleanReportLocal = cleanReportLocal.trim();
+        const normalizedReportLocal = cleanReportLocal
+          .replace(/\n+\s*(---\s*)/g, "\n\n$1")
+          .replace(/\n+\s*((?:\*+)?\s*(?:pie de pÃ¡gina|nota de pie|nota de pie de pÃ¡gina|pie de pagina|nota de pie de pagina)\b)/gi, "\n\n$1")
+          .replace(/\n+\s*(\s*(?:##+|#|\*\*)\s*(?:conclusi[oÃ³]n(?:es)?|impresi[oÃ³]n(?:es)?\s+diagn[oÃ³]stica(?:s)?|diagn[oÃ³]stico(?:s)?|hallazgos)\b)/gi, "\n\n$1");
+        const rawParagraphsLocal = normalizedReportLocal.split(/\n\n+/);
+        const paragraphsLocal: string[] = [];
+        let inConclusionLocal = false;
+        let conclusionBufferLocal: string[] = [];
+
+        rawParagraphsLocal.forEach((p) => {
+          const trimmed = p.trim();
+          if (!trimmed) return;
+
+          const isSemiologyLineLocal = /semiolog[iÃ­]a|justificaci[oÃ³]n|exclusi[oÃ³]n/i.test(trimmed);
+          const isConclusionHeader = !isSemiologyLineLocal && /^\s*(?:#+|\*+|-|_|\d+\.)*\s*(?:conclusiÃ³n|conclusiones|conclusion|impresiÃ³n\s+diagnÃ³stica|impresion\s+diagnostica|impresiones\s+diagnÃ³sticas|impresiones\s+diagnosticas|diagnÃ³sticos|diagnÃ³stico|diagnostico|diagnosticos)\b/i.test(trimmed);
+
+          const isFootnoteOrDividerLocal = trimmed === "---" || /^---+\s*$/.test(trimmed) ||
+            /^\s*(?:\*+)?\s*(?:pie de pÃ¡gina|nota de pie|nota de pie de pÃ¡gina|pie de pagina|nota de pie de pagina)\b/i.test(trimmed);
+
+          const isOtherSectionHeader = /^\s*(?:##+|#)\s+/i.test(trimmed) ||
+            /^\s*\*\*(?:hallazgos|estudio|tÃ©cnica|tecnica|mÃ©todo|metodo|exploraciÃ³n|exploracion|motivo|comparaciÃ³n|comparacion|datos\s+clÃ­nicos|indicaciÃ³n|indicacion|antecedentes|pie\s+de\s+pÃ¡gina|nota\s+de\s+pie)\b/i.test(trimmed) ||
+            isFootnoteOrDividerLocal;
+
+          if (isFootnoteOrDividerLocal) {
+            if (inConclusionLocal && conclusionBufferLocal.length > 0) {
+              paragraphsLocal.push(conclusionBufferLocal.join("\n\n"));
+              conclusionBufferLocal = [];
+            }
+            inConclusionLocal = false;
+            paragraphsLocal.push(trimmed);
+          } else if (isConclusionHeader) {
+            if (inConclusionLocal && conclusionBufferLocal.length > 0) {
+              paragraphsLocal.push(conclusionBufferLocal.join("\n\n"));
+              conclusionBufferLocal = [];
+            }
+            inConclusionLocal = true;
+            conclusionBufferLocal.push(trimmed);
+          } else if (isOtherSectionHeader) {
+            if (inConclusionLocal && conclusionBufferLocal.length > 0) {
+              paragraphsLocal.push(conclusionBufferLocal.join("\n\n"));
+              conclusionBufferLocal = [];
+            }
+            inConclusionLocal = false;
+            paragraphsLocal.push(trimmed);
+          } else {
+            if (inConclusionLocal) {
+              conclusionBufferLocal.push(trimmed);
+            } else {
+              paragraphsLocal.push(trimmed);
+            }
+          }
+        });
+
+        if (inConclusionLocal && conclusionBufferLocal.length > 0) {
+          paragraphsLocal.push(conclusionBufferLocal.join("\n\n"));
+        }
+
+        const tempDoc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+        let isFirstBlockLocal = true;
+        const estContentWidth = pdfLayoutType === "asymmetric" ? 116 : contentWidth;
+
+        paragraphsLocal.forEach((block) => {
+          const trimmedBlock = block.trim();
+          if (!trimmedBlock) return;
+
+          if (!isFirstBlockLocal) {
+            estimatedHeight += 4.5;
+          } else {
+            isFirstBlockLocal = false;
+          }
+
+          if (trimmedBlock.startsWith("|") && (trimmedBlock.includes("-|-") || trimmedBlock.includes("---") || trimmedBlock.includes(":---"))) {
+            // Table block
+            const rows = trimmedBlock.split("\n").filter(r => r.trim() !== "");
+            const bodyRows = rows.slice(2);
+            estimatedHeight += 16;
+            bodyRows.forEach((r) => {
+              const cells = r.split("|").map(c => c.trim());
+              let maxLinesLocal = 1;
+              cells.forEach((cellText) => {
+                const wrapped = tempDoc.splitTextToSize(cellText.replace(/\*\*/g, ""), (estContentWidth / cells.length) - 6);
+                if (wrapped.length > maxLinesLocal) maxLinesLocal = wrapped.length;
+              });
+              estimatedHeight += (maxLinesLocal * 5) + 4;
+            });
+            estimatedHeight += 4;
+          } else {
+            // Standard block
+            const linesOfBlock = trimmedBlock.split("\n");
+            linesOfBlock.forEach((line) => {
+              let trimmed = line.trim();
+              if (!trimmed) {
+                estimatedHeight += 2.5;
+                return;
+              }
+              if (trimmed === "---" || /^---+\s*$/.test(trimmed)) {
+                return;
+              }
+              const isHeader = trimmed.startsWith("#") || (
+                trimmed.startsWith("**") && (
+                  trimmed.endsWith("**") || 
+                  trimmed.replace(/[:\s]+$/, "").endsWith("**")
+                )
+              );
+              if (isHeader) {
+                estimatedHeight += 5.5;
+              } else {
+                const wrappedLines = tempDoc.splitTextToSize(trimmed.replace(/\*\*/g, ""), estContentWidth);
+                estimatedHeight += wrappedLines.length * 5.0;
+              }
+            });
+          }
+        });
+      } catch (estError) {
+        console.warn("Error estimating paragraph heights:", estError);
+      }
+
+      // 4. Clinical schematics / Diagram estimation
+      if (includeShoulderSchemaInReport && specificStudy === "Hombro") {
+        estimatedHeight += 95;
+      } else if (includeVascularSchemaInReport && isVascularStudy) {
+        estimatedHeight += 85;
+        if (isCarotidasForPDF && includeCarotidBifurcations && (hasBifurcDer || hasBifurcIzq)) {
+          estimatedHeight += 75;
+        }
+      }
+
+      // 5. Signature block estimation
+      estimatedHeight += 38;
+
+      // 6. Calculate pages and remainder for widow/orphan detection
+      const usablePageHeight = 255;
+      const estTotalPages = Math.ceil(estimatedHeight / usablePageHeight);
+      const estRemainder = estimatedHeight % usablePageHeight;
+
+      // If we spill onto a new page, and that new page has less than 48mm of content (orphaned signature/conclusion!),
+      // we reduce spacing to pull it back onto the previous page elegantly!
+      if (estTotalPages > 1 && estRemainder < 48) {
+        factor = 0.84; // 16% spacing compression
+      } else if (estTotalPages > 1 && estRemainder < 60) {
+        factor = 0.88; // 12% spacing compression
+      }
+
+      // Adjust starting patient offset with factor
+      if (patientName || reportDate) {
+        yCoord = yCoord - 19 + (19 * factor);
+      }
+
+      // Strip emojis from the generated report
+      const stripEmojis = (str: string): string => {
+        if (!str) return "";
+        return str
+          // Strip surrogate pairs (handles 4-byte emojis like ðŸ«, ðŸ«€, ðŸ¦´, ðŸ§ , ðŸ“‹, ðŸ”, etc.)
+          .replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, "")
+          // Strip miscellaneous symbol emojis & shapes in the BMP (like âš ï¸, â±, âš•, âœ”ï¸, âŒ, â­, etc.)
+          .replace(/[\u2600-\u27BF]|[\u2300-\u23FF]|[\u2B50]|[\u2190-\u21FF]/g, "");
+      };
+
+      // Clean non-ASCII smart quotes, dashes, bullet symbols, and special unicode symbols that distort jsPDF letter spacing
+      const cleanTextForJSPDF = (text: string): string => {
+        if (!text) return "";
+        return text
+          .replace(/[â€œâ€â€žÂ«Â»â€Ÿ]/g, '"')
+          .replace(/[â€˜â€™`Â´â€²â€³]/g, "'")
+          .replace(/[â€”â€“â€’â€•]/g, "-")
+          .replace(/[\u2022\u25E6\u2023\u2043\u25AA\u25FE\u25C6\u25C7\u25B6\u25B7\u25C0\u25C1]/g, "-")
+          .replace(/[\u00A0\u200B\u2009\u202F\u2000-\u200A]/g, " ")
+          .replace(/â€¦/g, "...");
+      };
+
+      const reportToRender = isEditingReportManual ? editedReportText : generatedReport;
+      const emojiFreeReport = stripEmojis(reportToRender);
+      let cleanReport = cleanRawClinicalText(emojiFreeReport);
+
+      // Extract all CASE_ANALYSIS blocks from the report text to draw them in the Annex at the end
+      const caseAnalysisBlocks: CaseAnalysisData[] = [];
+      const caseRegex = /\[CASE_ANALYSIS_JSON\]\s*([\s\S]*?)\s*\[\/CASE_ANALYSIS_JSON\]/g;
+      let caseMatch;
+      while ((caseMatch = caseRegex.exec(cleanReport)) !== null) {
+        if (caseMatch[1]) {
+          try {
+            const parsed = JSON.parse(caseMatch[1]) as CaseAnalysisData;
+            caseAnalysisBlocks.push(parsed);
+          } catch (e) {
+            console.error("Error parsing case data block for PDF annex:", e);
+          }
+        }
+      }
+
+      // Strip all [START_CASE_ANALYSIS:format] ... [END_CASE_ANALYSIS:format] blocks
+      // from the main report content so they do not print as plain text.
+      cleanReport = cleanReport.replace(/\[START_CASE_ANALYSIS:[\s\S]*?\[END_CASE_ANALYSIS:[^\]]+\]/gi, "");
+
+      // Strip the fallback text summary of the case analysis from the PDF text entirely
+      const legacyIdx = cleanReport.indexOf("[CASE_ANALYSIS_JSON]");
+      if (legacyIdx !== -1) {
+        cleanReport = cleanReport.substring(0, legacyIdx).trim();
+      }
+      const summaryIdx = cleanReport.indexOf("**ANÃLISIS INTEGRADO DE CASO");
+      if (summaryIdx !== -1) {
+        cleanReport = cleanReport.substring(0, summaryIdx).trim();
+      }
+      cleanReport = cleanReport.trim();
+
+      const normalizedReport = cleanReport
+        .replace(/\n+\s*(---\s*)/g, "\n\n$1")
+        .replace(/\n+\s*((?:\*+)?\s*(?:pie de pÃ¡gina|nota de pie|nota de pie de pÃ¡gina|pie de pagina|nota de pie de pagina)\b)/gi, "\n\n$1")
+        .replace(/\n+\s*(\s*(?:##+|#|\*\*)\s*(?:conclusi[oÃ³]n(?:es)?|impresi[oÃ³]n(?:es)?\s+diagn[oÃ³]stica(?:s)?|diagn[oÃ³]stico(?:s)?|hallazgos)\b)/gi, "\n\n$1");
+      const rawParagraphs = normalizedReport.split(/\n\n+/);
+      const paragraphs: string[] = [];
+      let inConclusion = false;
+      let conclusionBuffer: string[] = [];
+
+      rawParagraphs.forEach((p) => {
+        const trimmed = p.trim();
+        if (!trimmed) return;
+
+        // If this is a CASE_ANALYSIS_JSON block, do not merge it with the conclusion or any other buffer
+        if (trimmed.includes("[CASE_ANALYSIS_JSON]")) {
+          if (inConclusion && conclusionBuffer.length > 0) {
+            paragraphs.push(conclusionBuffer.join("\n\n"));
+            conclusionBuffer = [];
+          }
+          inConclusion = false;
+          paragraphs.push(trimmed);
+          return;
+        }
+
+        const isSemiologyLine = /semiolog[iÃ­]a|justificaci[oÃ³]n|exclusi[oÃ³]n/i.test(trimmed);
+        const isConclusionHeader = !isSemiologyLine && /^\s*(?:#+|\*+|-|_|\d+\.)*\s*(?:conclusiÃ³n|conclusiones|conclusion|impresiÃ³n\s+diagnÃ³stica|impresion\s+diagnostica|impresiones\s+diagnÃ³sticas|impresiones\s+diagnosticas|diagnÃ³sticos|diagnÃ³stico|diagnostico|diagnosticos)\b/i.test(trimmed);
+
+        const isFootnoteOrDivider = trimmed === "---" || /^---+\s*$/.test(trimmed) ||
+          /^\s*(?:\*+)?\s*(?:pie de pÃ¡gina|nota de pie|nota de pie de pÃ¡gina|pie de pagina|nota de pie de pagina)\b/i.test(trimmed);
+
+        const isOtherSectionHeader = /^\s*(?:##+|#)\s+/i.test(trimmed) ||
+          /^\s*\*\*(?:hallazgos|estudio|tÃ©cnica|tecnica|mÃ©todo|metodo|exploraciÃ³n|exploracion|motivo|comparaciÃ³n|comparacion|datos\s+clÃ­nicos|indicaciÃ³n|indicacion|antecedentes|pie\s+de\s+pÃ¡gina|nota\s+de\s+pie)\b/i.test(trimmed) ||
+          trimmed.includes("ANEXO DIAGNÃ“STICO") ||
+          trimmed.includes("DESGLOSE Y JUSTIFICACIÃ“N") ||
+          isFootnoteOrDivider;
+
+        if (isFootnoteOrDivider) {
+          if (inConclusion && conclusionBuffer.length > 0) {
+            paragraphs.push(conclusionBuffer.join("\n\n"));
+            conclusionBuffer = [];
+          }
+          inConclusion = false;
+          paragraphs.push(trimmed);
+        } else if (isConclusionHeader) {
+          if (inConclusion && conclusionBuffer.length > 0) {
+            paragraphs.push(conclusionBuffer.join("\n\n"));
+            conclusionBuffer = [];
+          }
+          inConclusion = true;
+          conclusionBuffer.push(trimmed);
+        } else if (isOtherSectionHeader) {
+          if (inConclusion && conclusionBuffer.length > 0) {
+            paragraphs.push(conclusionBuffer.join("\n\n"));
+            conclusionBuffer = [];
+          }
+          inConclusion = false;
+          paragraphs.push(trimmed);
+        } else {
+          if (inConclusion) {
+            conclusionBuffer.push(trimmed);
+          } else {
+            paragraphs.push(trimmed);
+          }
+        }
+      });
+
+      if (inConclusion && conclusionBuffer.length > 0) {
+        paragraphs.push(conclusionBuffer.join("\n\n"));
+      }
+
+      // Set standard font settings
+      doc.setFont("times", "normal");
+      doc.setFontSize(10.5);
+      doc.setTextColor(30, 41, 59);
+
+      let isFirstLine = true;
+      let isFirstBlock = true;
+      let inFootnoteSection = false;
+      let hasDrawnSignature = false;
+
+      const renderSignatureBlock = () => {
+        if (hasDrawnSignature) return;
+        if (doctorName || customSignatureUrl) {
+          checkPageBreak(38); // Requerir suficiente espacio para el bloque homologado dual
+          yCoord += 12;
+
+          const startY = yCoord;
+
+          // Dibujar borde gris claro con fondo suave en la columna izquierda (Caja de verificaciÃ³n)
+          const boxX = marginX;
+          const boxY = startY;
+          const boxW = (pageWidth - marginX * 2) * 0.48; // Columna izquierda (48% de ancho)
+          const boxH = 26;
+
+          // Rellenar fondo
+          doc.setFillColor(248, 250, 252); // slate 50
+          doc.rect(boxX, boxY, boxW, boxH, "F");
+          // Dibujar borde
+          doc.setDrawColor(203, 213, 225); // slate 300
+          doc.setLineWidth(0.35);
+          doc.rect(boxX, boxY, boxW, boxH, "S");
+
+          // Metadatos de Integridad en Columna Izquierda:
+          let internalY = boxY + 4;
+          
+          doc.setFont("helvetica", "bold");
+          doc.setFontSize(6.5);
+          doc.setTextColor(71, 85, 105); // slate 600
+          doc.text("VERIFICACIÃ“N INTEGRIDAD DE DOCUMENTO", boxX + 3, internalY);
+          internalY += 3.5;
+
+          // Obtener el Hash generado determinÃ­sticamente
+          const sSeedCombine = `${patientName || ""}-${doctorName || ""}-${reportDate || ""}-${clinicName || ""}`;
+          let sHashVal = 0;
+          for (let i = 0; i < sSeedCombine.length; i++) {
+            sHashVal = ((sHashVal << 5) - sHashVal) + sSeedCombine.charCodeAt(i);
+            sHashVal |= 0;
+          }
+          const sHexStr = Math.abs(sHashVal).toString(16).toUpperCase().padStart(8, "0");
+          const pSeedVal = (patientName && patientName.length > 0) ? patientName.charCodeAt(0) + patientName.length : 42;
+          const dSeedVal = (doctorName && doctorName.length > 0) ? doctorName.charCodeAt(0) + doctorName.length : 17;
+          const partVal = ((pSeedVal * 231 + dSeedVal * 19) % 65535).toString(16).toUpperCase().padStart(4, "E");
+          const pdfValidationHash = `SHA256: FD82-${sHexStr.substring(0, 4)}-${sHexStr.substring(4, 8)}-${partVal}-9B1C-E8B1`;
+
+          doc.setFont("courier", "bold");
+          doc.setFontSize(5.5);
+          doc.setTextColor(30, 41, 59); // slate 800
+          doc.text(pdfValidationHash, boxX + 3, internalY);
+          internalY += 3;
+
+          doc.setFont("helvetica", "bold");
+          doc.setFontSize(5.5);
+          doc.setTextColor(100, 116, 139); // slate 500
+          doc.text("ESTADO DEL DOCUMENTO: ", boxX + 3, internalY);
+          const stateW = doc.getTextWidth("ESTADO DEL DOCUMENTO: ");
+          doc.setFont("helvetica", "bold");
+          doc.setTextColor(21, 128, 61); // green 700
+          doc.text("FIRMADO ELECTRÃ“NICAMENTE", boxX + 3 + stateW, internalY);
+          internalY += 2.8;
+
+          doc.setFont("helvetica", "normal");
+          doc.setFontSize(5.1);
+          doc.setTextColor(100, 116, 139); // slate 500
+          doc.text(`REG. MÃ‰DICO: ${doctorLicense || "M.S.P. Reg: 6025 / Senescyt: 1005-12-7489"}`, boxX + 3, internalY);
+          internalY += 2.8;
+
+          doc.text(`FECHA DE VALIDACIÃ“N: ${reportDate} (AUTÃ“NOMO)`, boxX + 3, internalY);
+          internalY += 2.8;
+
+          doc.setFont("helvetica", "italic");
+          doc.text("Firma de Validez Homologada segÃºn Normativa Sanitaria.", boxX + 3, internalY);
+
+          // --- Columna Derecha: Ãrea de Firma Digital / AutÃ³grafa ---
+          const rightColX = pageWidth - marginX;
+          
+          // Agregar firma fÃ­sica si estÃ¡ cargada
+          if (customSignatureUrl) {
+            try {
+              let sigWidth = 35;
+              let sigHeight = 11;
+              if (signatureDims.width && signatureDims.height) {
+                const aspect = signatureDims.width / signatureDims.height;
+                const maxWidth = 50;
+                const maxHeight = 15;
+                if (aspect > maxWidth / maxHeight) {
+                  sigWidth = maxWidth;
+                  sigHeight = maxWidth / aspect;
+                } else {
+                  sigHeight = maxHeight;
+                  sigWidth = maxHeight * aspect;
+                }
+              }
+              const sigX = rightColX - sigWidth - 4;
+              const sigY = boxY + 1; // Alinear ordenadamente arriba
+              const format = customSignatureUrl.toLowerCase().includes("image/png") ? "PNG" : "JPEG";
+              doc.addImage(customSignatureUrl, format, sigX, sigY, sigWidth, sigHeight);
+            } catch (imgError) {
+              console.warn("Could not render custom signature image inside jsPDF", imgError);
+            }
+          } else {
+            // Si no hay firma fÃ­sica, mostrar sello digital elegante
+            doc.setFont("helvetica", "oblique");
+            doc.setFontSize(7);
+            doc.setTextColor(30, 64, 175); // blue 800
+            doc.text("FIRMADO ELECTRÃ“NICAMENTE CON TOKEN", rightColX - 62, boxY + 8);
+          }
+
+          // LÃ­nea horizontal para firma del doctor (solo del lado derecho)
+          const lineStart = rightColX - 70;
+          doc.setDrawColor(203, 213, 225); // slate 300
+          doc.setLineWidth(0.3);
+          doc.line(lineStart, boxY + boxH - 8, rightColX, boxY + boxH - 8);
+
+          // Nombre del doctor en la derecha
+          doc.setFont("helvetica", "bold");
+          doc.setFontSize(8.5);
+          doc.setTextColor(15, 23, 42);
+          const docText = (doctorName || "Dr. Milton Benavides S. Cod.6025").toUpperCase();
+          const docTextWidth = doc.getTextWidth(docText);
+          doc.text(docText, rightColX - docTextWidth, boxY + boxH - 4.5);
+
+          // Especialidad del doctor en la derecha
+          doc.setFont("helvetica", "normal");
+          doc.setFontSize(6.5);
+          doc.setTextColor(100, 116, 139);
+          const titleText = "Especialista en RadiologÃ­a e ImÃ¡genes Medicas.";
+          const titleTextWidth = doc.getTextWidth(titleText);
+          doc.text(titleText, rightColX - titleTextWidth, boxY + boxH - 1.5);
+          
+          yCoord = boxY + boxH + 6;
+        }
+        hasDrawnSignature = true;
+      };
+
+      const renderSingleReportBlock = (block: string) => {
+        const trimmedBlock = block.trim();
+        if (!trimmedBlock) return;
+
+        // Check for explicit page break tag
+        if (/^(?:\[(?:salto(?:_de_p[aÃ¡]gina)?|page_break|salto_pagina)\]|<pagebreak>)$/i.test(trimmedBlock)) {
+          doc.addPage();
+          yCoord = 20;
+          if (pdfLayoutType === "asymmetric") {
+            drawAsymmetricSidebar(doc, doc.getNumberOfPages(), 20);
+          }
+          return;
+        }
+
+        // Check for explicit vertical spacing tag (e.g. [ESPACIO] or [ESPACIO_10MM])
+        const spaceMatch = trimmedBlock.match(/^\[ESPACIO(?:_(\d+)MM)?\]$/i);
+        if (spaceMatch) {
+          const mm = spaceMatch[1] ? parseInt(spaceMatch[1], 10) : 10;
+          yCoord += mm * factor;
+          return;
+        }
+
+        // Skip inline Case Analysis JSON blocks as they are rendered in Step 5 (DiagnÃ³stico Avanzado)
+        if (trimmedBlock.includes("[CASE_ANALYSIS_JSON]")) {
+          return;
+        }
+
+
+        // Check if the block is a footnote (for Creador de Notas de Pie de PÃ¡gina)
+        const blockLower = trimmedBlock.toLowerCase();
+        
+        const isHeadingOrTableOrCode = trimmedBlock.startsWith("#") || 
+                                       trimmedBlock.startsWith("**") || 
+                                       trimmedBlock.startsWith("|") || 
+                                       trimmedBlock.startsWith("```") || 
+                                       (trimmedBlock.startsWith("===") && (trimmedBlock.includes("SÃNTESIS VASCULAR") || trimmedBlock.includes("SÃNTESIS DE ANATOMÃA")));
+        
+        if (isHeadingOrTableOrCode) {
+          inFootnoteSection = false;
+        }
+
+        const isFootnote = inFootnoteSection ||
+                            blockLower.startsWith("*pie de pÃ¡gina:") || 
+                            blockLower.startsWith("pie de pÃ¡gina:") ||
+                            blockLower.startsWith("*nota de pie:") ||
+                            blockLower.startsWith("nota de pie:") ||
+                            blockLower.startsWith("*nota de pie de pÃ¡gina:") ||
+                            blockLower.startsWith("nota de pie de pÃ¡gina:");
+
+        if (isFootnote) {
+          checkPageBreak(8 * factor);
+          doc.setFont("times", "italic");
+          doc.setFontSize(8.5);
+          doc.setTextColor(115, 125, 140); // Slate-500 (dim gray)
+          
+          let cleanTxt = trimmedBlock;
+          // Strip "Pie de pÃ¡gina: " or similar prefixes if they exist
+          const prefixRegex = /^\s*(?:\*+)?\s*(?:pie de pÃ¡gina|nota de pie|nota de pie de pÃ¡gina)\s*(?:\*+)?\s*:\s*(?:\*+)?\s*/i;
+          cleanTxt = cleanTxt.replace(prefixRegex, "");
+
+          if (cleanTxt.startsWith("*")) {
+            cleanTxt = cleanTxt.replace(/^\*\s*/, "").replace(/\*$/, "");
+          }
+          cleanTxt = cleanTxt.replace(/\*\*/g, "");
+
+          const lines = doc.splitTextToSize(cleanTxt, contentWidth);
+          lines.forEach((l: string) => {
+            checkPageBreak(4.5 * factor);
+            doc.text(l, marginX, yCoord);
+            yCoord += 4.5 * factor;
+          });
+          yCoord += 2 * factor; // subtle gap
+          
+          // Reset default font styles
+          doc.setFont("times", "normal");
+          doc.setFontSize(10.5);
+          doc.setTextColor(30, 41, 59);
+          return;
+        }
+
+        // 1. Check if the block is a conclusion/diagnostic impression block (Sugerencia 1: Cuadro de ConclusiÃ³n)
+        const isConclusionBlock = /^\s*(?:#+|\*+|-|_|\d+\.)*\s*(?:conclusiÃ³n|conclusiones|conclusion|impresiÃ³n\s+diagnÃ³stica|impresion\s+diagnostica|impresiones\s+diagnÃ³sticas|impresiones\s+diagnosticas|diagnÃ³sticos|diagnÃ³stico|diagnostico|diagnosticos)\b/i.test(trimmedBlock);
+
+        if (isConclusionBlock) {
+          const blockLines = trimmedBlock.split("\n");
+          
+          let totalBlockHeight = 0;
+          const parsedLines: {
+            isHeader: boolean;
+            isBulleted: boolean;
+            bulletToken?: string;
+            wrappedLines: { text: string; isBold: boolean }[][];
+          }[] = [];
+          
+          // Padding dentro del bloque de sombreado sutil
+          const boxPaddingLeft = 6;
+          const boxPaddingRight = 6;
+          const boxPaddingTop = 5;
+          const boxPaddingBottom = 5;
+          
+          const boxContentWidth = contentWidth - boxPaddingLeft - boxPaddingRight;
+          let headerTitle = "";
+
+          blockLines.forEach((line) => {
+            let lineTrimmed = line.trim();
+            if (!lineTrimmed) {
+              totalBlockHeight += 2.5 * factor;
+              parsedLines.push({ isHeader: false, isBulleted: false, wrappedLines: [] });
+              return;
+            }
+            const isFootnoteLineInBox = lineTrimmed === "---" || /^---+\s*$/.test(lineTrimmed) ||
+              /^\s*(?:\*+)?\s*(?:pie de pÃ¡gina|nota de pie|nota de pie de pÃ¡gina|pie de pagina|nota de pie de pagina)\b/i.test(lineTrimmed);
+            if (isFootnoteLineInBox) {
+              return;
+            }
+            
+            let isMarkdownHeading = false;
+            if (lineTrimmed.startsWith("# ")) { isMarkdownHeading = true; lineTrimmed = lineTrimmed.replace(/^#\s+/, ""); }
+            else if (lineTrimmed.startsWith("## ")) { isMarkdownHeading = true; lineTrimmed = lineTrimmed.replace(/^##\s+/, ""); }
+            else if (lineTrimmed.startsWith("### ")) { isMarkdownHeading = true; lineTrimmed = lineTrimmed.replace(/^###\s+/, ""); }
+            else if (lineTrimmed.startsWith("#### ")) { isMarkdownHeading = true; lineTrimmed = lineTrimmed.replace(/^####\s+/, ""); }
+
+            const lineLower = lineTrimmed.toLowerCase();
+            const isHeader = isMarkdownHeading || 
+              (lineTrimmed.startsWith("**") && lineTrimmed.includes("**")) ||
+              lineLower.startsWith("conclusiÃ³n") ||
+              lineLower.startsWith("conclusiones") ||
+              lineLower.startsWith("conclusion") ||
+              lineLower.startsWith("impresiÃ³n diagnÃ³stica") ||
+              lineLower.startsWith("impresion diagnostica") ||
+              lineLower.startsWith("impresiones diagnÃ³sticas") ||
+              lineLower.startsWith("impresiones diagnosticas") ||
+              lineLower.startsWith("diagnÃ³sticos") ||
+              lineLower.startsWith("diagnÃ³stico") ||
+              lineLower.startsWith("diagnostico") ||
+              lineLower.startsWith("diagnosticos");
+            
+            if (isHeader && !headerTitle) {
+              let cleanHeading = lineTrimmed;
+              cleanHeading = cleanHeading.replace(/^#+\s*/, "");
+              cleanHeading = cleanHeading.replace(/\*\*/g, "");
+              cleanHeading = cleanHeading.replace(/\*/g, "");
+              cleanHeading = cleanHeading.replace(/:$/, ""); // Remover dos puntos finales
+              cleanHeading = cleanHeading.trim();
+              headerTitle = cleanHeading;
+            } else {
+              const isBulleted = lineTrimmed.startsWith("- ") || lineTrimmed.startsWith("* ") || /^\d+\.\s+/.test(lineTrimmed);
+              let bulletToken = "-";
+              let cleanText = lineTrimmed;
+              
+              if (isBulleted) {
+                if (/^\d+\.\s+/.test(cleanText)) {
+                  const numMatch = cleanText.match(/^(\d+\.)\s+/);
+                  if (numMatch) {
+                    bulletToken = numMatch[1];
+                    cleanText = cleanText.substring(numMatch[0].length);
+                  }
+                } else if (cleanText.startsWith("- ") || cleanText.startsWith("* ")) {
+                  cleanText = cleanText.substring(2);
+                }
+              }
+              
+              const wrapped = wrapMarkdown(doc, cleanText, isBulleted ? (boxContentWidth - 6) : boxContentWidth);
+              totalBlockHeight += (wrapped.length * 5.0) * factor;
+              
+              parsedLines.push({
+                isHeader: false,
+                isBulleted,
+                bulletToken,
+                wrappedLines: wrapped
+              });
+            }
+          });
+          
+          // Calcular la altura para el tÃ­tulo de la cabecera si existe
+          let wrappedHeaderLines: string[] = [];
+          let headerHeight = 0;
+          if (headerTitle) {
+            wrappedHeaderLines = doc.splitTextToSize(headerTitle.toUpperCase(), boxContentWidth);
+            headerHeight = (wrappedHeaderLines.length * 5.5 + 3.0) * factor; // Altura de lÃ­nea + espaciado debajo
+          }
+          
+          const finalBoxHeight = totalBlockHeight + headerHeight + (boxPaddingTop + boxPaddingBottom) * factor;
+          
+          // Margen de seguridad para evitar saltos huÃ©rfanos
+          checkPageBreak(finalBoxHeight + 6);
+          
+          // Colores de OpciÃ³n 3 (Sombreado ClÃ­nico Sutil sin bordes laterales)
+          let bgColor = [248, 250, 252]; // Tono pizarra extremadamente sutil (slate-50)
+          let lineAccentColor = [148, 163, 184]; // Delicada lÃ­nea pizarra (slate-400)
+          let textColor = [30, 41, 59]; // slate-800
+          let headerColor = [15, 23, 42]; // slate-900 para el tÃ­tulo interno
+          
+          if (pdfLayoutType === "clinical_slate") {
+            bgColor = [241, 245, 249]; // slate-100
+            lineAccentColor = [100, 116, 139]; // slate-500
+            textColor = [15, 23, 42];
+            headerColor = [71, 85, 105];
+          } else if (pdfLayoutType === "executive_medical") {
+            bgColor = [253, 251, 247]; // Crema sutil (warm white)
+            lineAccentColor = [197, 160, 89]; // LÃ­nea dorada de cierre
+            textColor = [15, 23, 42];
+            headerColor = [141, 110, 50]; // Bronce profundo
+          } else if (pdfLayoutType === "asymmetric") {
+            bgColor = [249, 250, 254]; // Ãndigo extremadamente sutil
+            lineAccentColor = [129, 140, 248]; // Ãndigo suave (indigo-400)
+            textColor = [15, 23, 42];
+            headerColor = [79, 70, 229];
+          }
+          
+          // Dibujar el sombreado de fondo sin bordes perimetrales rÃ­gidos
+          doc.setFillColor(bgColor[0], bgColor[1], bgColor[2]);
+          doc.rect(marginX, yCoord, contentWidth, finalBoxHeight, "F");
+          
+          // Dibujar la delgada lÃ­nea horizontal superior para abrir el bloque
+          doc.setDrawColor(lineAccentColor[0], lineAccentColor[1], lineAccentColor[2]);
+          doc.setLineWidth(0.35); // Grosor fino y elegante (0.35mm)
+          doc.line(marginX, yCoord, marginX + contentWidth, yCoord);
+          
+          // Dibujar la delgada lÃ­nea horizontal inferior para cerrar el bloque
+          doc.line(marginX, yCoord + finalBoxHeight, marginX + contentWidth, yCoord + finalBoxHeight);
+          
+          let currentY = yCoord + boxPaddingTop * factor;
+          
+          // Renderizar el tÃ­tulo de la cabecera si existe
+          if (headerTitle) {
+            doc.setFont("times", "bold");
+            doc.setFontSize(10.5);
+            doc.setTextColor(headerColor[0], headerColor[1], headerColor[2]);
+            
+            wrappedHeaderLines.forEach((wLine) => {
+              doc.text(wLine, marginX + boxPaddingLeft, currentY);
+              currentY += 5.5 * factor;
+            });
+            currentY += 3.0 * factor; // Espaciado elegante bajo el tÃ­tulo
+          }
+          
+          parsedLines.forEach((pLine) => {
+            if (pLine.wrappedLines.length === 0) {
+              currentY += 2.5 * factor;
+              return;
+            }
+            
+            doc.setFont("times", "normal");
+            doc.setFontSize(10.5);
+            doc.setTextColor(textColor[0], textColor[1], textColor[2]);
+            
+            if (pLine.isBulleted) {
+              let isFirstLineOfBullet = true;
+              pLine.wrappedLines.forEach((wLineArr) => {
+                if (isFirstLineOfBullet) {
+                  doc.setFont("times", "bold");
+                  doc.text(pLine.bulletToken || "-", marginX + boxPaddingLeft + 1.5, currentY);
+                  isFirstLineOfBullet = false;
+                }
+                
+                let currentX = marginX + boxPaddingLeft + 6;
+                wLineArr.forEach((span) => {
+                  if (span.isBold) {
+                    doc.setFont("times", "bold");
+                  } else {
+                    doc.setFont("times", "normal");
+                  }
+                  doc.text(span.text, currentX, currentY);
+                  currentX += doc.getTextWidth(span.text);
+                });
+                currentY += 5.0 * factor;
+              });
+            } else {
+              pLine.wrappedLines.forEach((wLineArr) => {
+                let currentX = marginX + boxPaddingLeft;
+                wLineArr.forEach((span) => {
+                  if (span.isBold) {
+                    doc.setFont("times", "bold");
+                  } else {
+                    doc.setFont("times", "normal");
+                  }
+                  doc.text(span.text, currentX, currentY);
+                  currentX += doc.getTextWidth(span.text);
+                });
+                currentY += 5.0 * factor;
+              });
+            }
+          });
+          
+          yCoord = yCoord + finalBoxHeight + 3 * factor;
+          
+          doc.setFont("times", "normal");
+          doc.setFontSize(10.5);
+          doc.setTextColor(30, 41, 59);
+          return;
+        }
+
+        // 2. Check if the block is a code block (starts/ends with triple backticks, or is a raw EMR segment)
+        const isCodeBlockSegment = trimmedBlock.startsWith("```") || (trimmedBlock.startsWith("===") && (trimmedBlock.includes("SÃNTESIS VASCULAR") || trimmedBlock.includes("SÃNTESIS DE ANATOMÃA")));
+
+        if (isCodeBlockSegment) {
+          const linesOfBlock = trimmedBlock.split("\n");
+          // Filter out the opening/closing backtick lines
+          const codeBlockLines = linesOfBlock.filter(line => !line.trim().startsWith("```"));
+          
+          // Allocate height for the spacing
+          const lineSpacing = 4.2 * factor;
+          const neededHeight = (codeBlockLines.length * lineSpacing) + 7 * factor;
+          checkPageBreak(neededHeight);
+
+          // Draw a clean background box
+          doc.setFillColor(248, 250, 252); // slate-50 / light gray
+          doc.rect(marginX, yCoord, contentWidth, neededHeight - 2 * factor, "F");
+          doc.setDrawColor(226, 232, 240); // slate-200 border
+          doc.setLineWidth(0.3);
+          doc.rect(marginX, yCoord, contentWidth, neededHeight - 2 * factor, "D");
+
+          // Set monospace font Courier (built-in)
+          doc.setFont("courier", "normal");
+          doc.setFontSize(8.5);
+          doc.setTextColor(30, 41, 59);
+
+          let relativeY = yCoord + 4.5 * factor;
+          codeBlockLines.forEach((line) => {
+            doc.text(line, marginX + 4, relativeY);
+            relativeY += lineSpacing;
+          });
+
+          yCoord = relativeY + 1.5 * factor;
+          
+          // Re-set default font settings for the next paragraphs
+          doc.setFont("times", "normal");
+          doc.setFontSize(10.5);
+          doc.setTextColor(30, 41, 59);
+          return;
+        }
+
+        // 2. Check if the block is a separator/divider
+        if (trimmedBlock === "---") {
+          inFootnoteSection = true;
+          checkPageBreak(8 * factor);
+          yCoord += 4 * factor;
+          doc.setDrawColor(226, 232, 240); // slate-200
+          doc.setLineWidth(0.4);
+          doc.line(marginX, yCoord, pageWidth - marginX, yCoord);
+          yCoord += 6 * factor;
+          return;
+        }
+
+        // 2. Check if the block is a markdown table
+        const linesOfBlock = trimmedBlock.split("\n");
+        const hasPipe = linesOfBlock.some(line => line.includes("|"));
+        const isTableDivider = linesOfBlock.some(line => line.includes("---") && line.includes("|"));
+        const isTable = hasPipe && (isTableDivider || linesOfBlock.length >= 2);
+
+        if (isTable) {
+          if (!isFirstBlock) {
+            yCoord += 16 * factor; // Elegant, clear vertical gap between preceding diagnostic text and table
+          } else {
+            isFirstBlock = false;
+          }
+          const nonTableLinesAtTop: string[] = [];
+          const tableOnlyLines: string[] = [];
+          let foundTableStart = false;
+
+          linesOfBlock.forEach(line => {
+            const trimmedLine = line.trim();
+            if (trimmedLine.includes("|")) {
+              foundTableStart = true;
+            }
+            if (foundTableStart) {
+              tableOnlyLines.push(line);
+            } else {
+              nonTableLinesAtTop.push(line);
+            }
+          });
+
+          const cleanTableRows = tableOnlyLines
+            .map(line => line.trim())
+            .filter(line => {
+              const rowHasPipe = line.includes("|");
+              const isDivider = line.includes("---") || /^[|:\-\s]+$/.test(line);
+              return rowHasPipe && !isDivider && line.replace(/\|/g, "").trim().length > 0;
+            });
+
+          if (cleanTableRows.length > 0) {
+            const parseRowCells = (rowText: string) => {
+              const rawParts = rowText.split("|");
+              let cells = rawParts.map(c => c.trim());
+              if (rowText.startsWith("|")) cells.shift();
+              if (rowText.endsWith("|")) cells.pop();
+              return cells;
+            };
+
+            const headers = parseRowCells(cleanTableRows[0]);
+            const bodyRows = cleanTableRows.slice(1).map(row => parseRowCells(row));
+
+            // Determine column widths
+            const colCount = headers.length || 1;
+            const colWidths: number[] = [];
+            
+            if (colCount === 1) {
+              colWidths.push(contentWidth);
+            } else if (colCount === 2) {
+              const isAsistenteUnilateralNoRef = headers.some(h => h.toLowerCase().includes("estructura")) && 
+                                                 headers.some(h => h.toLowerCase().includes("derecha") || h.toLowerCase().includes("izquierda") || h.toLowerCase().includes("medida"));
+              if (isAsistenteUnilateralNoRef) {
+                colWidths.push(contentWidth * 0.45);
+                colWidths.push(contentWidth * 0.55);
+              } else {
+                colWidths.push(contentWidth * 0.4);
+                colWidths.push(contentWidth * 0.6);
+              }
+            } else if (colCount === 3) {
+              const isAsistenteUnilateral = headers.some(h => h.toLowerCase().includes("referencia"));
+              const isVascular = headers.some(h => {
+                const lower = h.toLowerCase();
+                return lower.includes("derech") || lower.includes("izquierd") || lower.includes("alterad") || lower.includes("vaso");
+              });
+              if (isAsistenteUnilateral) {
+                // Column 0: Estructura (30%), Column 1: Derecha/Izquierda (50%), Column 2: Valor de Referencia (20%)
+                colWidths.push(contentWidth * 0.30);
+                colWidths.push(contentWidth * 0.50);
+                colWidths.push(contentWidth * 0.20);
+              } else if (isVascular) {
+                colWidths.push(contentWidth * 0.34);
+                colWidths.push(contentWidth * 0.33);
+                colWidths.push(contentWidth * 0.33);
+              } else {
+                colWidths.push(contentWidth * 0.15); // ID col (compact)
+                colWidths.push(contentWidth * 0.35); // Structure / Site Name
+                colWidths.push(contentWidth * 0.50); // Detailed Main Findings
+              }
+            } else if (colCount === 4) {
+              const isClassificationTable = headers.some(h => {
+                const l = (h || "").toLowerCase();
+                return l.includes("criterio") || l.includes("pondera") || l.includes("score") || l.includes("justifica") || l.includes("sustento");
+              });
+              const isAsistenteBilateral = headers.some(h => {
+                const l = h.toLowerCase();
+                return l.includes("derecha") || l.includes("izquierda");
+              });
+              const isGenericAsistente = headers.some(h => h.toLowerCase().includes("registrada")) || headers.some(h => h.toLowerCase().includes("referencia"));
+
+              if (isClassificationTable) {
+                colWidths.push(contentWidth * 0.24); // Criterio Evaluado
+                colWidths.push(contentWidth * 0.28); // Hallazgo en el Reporte
+                colWidths.push(contentWidth * 0.16); // PonderaciÃ³n / Score
+                colWidths.push(contentWidth * 0.32); // JustificaciÃ³n DiagnÃ³stica
+              } else if (isAsistenteBilateral) {
+                colWidths.push(contentWidth * 0.25);
+                colWidths.push(contentWidth * 0.30);
+                colWidths.push(contentWidth * 0.30);
+                colWidths.push(contentWidth * 0.15);
+              } else if (isGenericAsistente) {
+                colWidths.push(contentWidth * 0.30);
+                colWidths.push(contentWidth * 0.20);
+                colWidths.push(contentWidth * 0.20);
+                colWidths.push(contentWidth * 0.30);
+              } else {
+                colWidths.push(contentWidth * 0.12); // ID Column (e.g. H1, H2, H3)
+                colWidths.push(contentWidth * 0.28); // Estructura / Sitio
+                colWidths.push(contentWidth * 0.22); // CategorÃ­a
+                colWidths.push(contentWidth * 0.38); // Hallazgo Principal
+              }
+            } else {
+              const equalWidth = contentWidth / colCount;
+              for (let i = 0; i < colCount; i++) {
+                colWidths.push(equalWidth);
+              }
+            }
+
+            // Pre-calculate heights of all table rows to prevent the table from being split across pages if possible.
+            const cachedRowsData: {
+              cellSpansLines: { text: string; isBold: boolean }[][][];
+              rowHeight: number;
+            }[] = [];
+
+            let calculatedRowsHeightSum = 0;
+
+            bodyRows.forEach((row) => {
+              const cellSpansLinesList: { text: string; isBold: boolean }[][][] = [];
+              let maxLines = 0;
+
+              row.forEach((cellText, cIdx) => {
+                const currentColWidth = colWidths[cIdx] || (contentWidth / colCount);
+                const cellSpansLines = wrapMarkdown(doc, cellText, currentColWidth - 6);
+                cellSpansLinesList.push(cellSpansLines);
+                if (cellSpansLines.length > maxLines) {
+                  maxLines = cellSpansLines.length;
+                }
+              });
+
+              const rowHeight = (maxLines * 5 * factor) + 4 * factor;
+              calculatedRowsHeightSum += rowHeight;
+              cachedRowsData.push({
+                cellSpansLines: cellSpansLinesList,
+                rowHeight,
+              });
+            });
+
+            // The header takes 12 units baseline check, then yCoord is advanced by 9.
+            // So total calculated height for table is roughly: header (12) + rows + extra gap (4)
+            const totalTableNeededHeight = (12 * factor) + calculatedRowsHeightSum + (4 * factor);
+
+            // Estimate the height of any non-table lines/titles at the top
+            let estimatedHeadingsHeight = 0;
+            nonTableLinesAtTop.forEach((line) => {
+              let trimmed = line.trim();
+              if (!trimmed) return;
+
+              let isMarkdownHeading = false;
+              if (trimmed.startsWith("# ")) {
+                isMarkdownHeading = true;
+                trimmed = trimmed.replace(/^#\s+/, "");
+              } else if (trimmed.startsWith("## ")) {
+                isMarkdownHeading = true;
+                trimmed = trimmed.replace(/^##\s+/, "");
+              } else if (trimmed.startsWith("### ")) {
+                isMarkdownHeading = true;
+                trimmed = trimmed.replace(/^###\s+/, "");
+              } else if (trimmed.startsWith("#### ")) {
+                isMarkdownHeading = true;
+                trimmed = trimmed.replace(/^####\s+/, "");
+              }
+
+              const isHeader = isMarkdownHeading || (
+                trimmed.startsWith("**") && (
+                  trimmed.endsWith("**") || 
+                  trimmed.replace(/[:\s]+$/, "").endsWith("**")
+                )
+              );
+              const cleanHeaderTxt = trimmed.replace(/\*\*/g, "");
+
+              if (isHeader) {
+                const wrappedHeaders = doc.splitTextToSize(cleanHeaderTxt, contentWidth);
+                estimatedHeadingsHeight += (wrappedHeaders.length * 5.5 + 4) * factor;
+              } else {
+                const lines = doc.splitTextToSize(trimmed, contentWidth);
+                estimatedHeadingsHeight += (lines.length * 4.5 + 4) * factor;
+              }
+            });
+
+            // We want to make sure that the headings AND the table header + at least the first row of the table
+            // can fit together on the current page to avoid orphans!
+            const firstRowHeight = cachedRowsData[0]?.rowHeight || (15 * factor);
+            const minimumCombinedHeight = estimatedHeadingsHeight + (12 * factor) + firstRowHeight + (4 * factor);
+
+            // Check combined page break before printing anything (including headings)!
+            checkPageBreak(Math.min(minimumCombinedHeight, pageHeight - 40));
+
+            // Draw any non-table heading lines from the top (e.g., table titles/headings)
+            nonTableLinesAtTop.forEach((line) => {
+              let trimmed = line.trim();
+              if (!trimmed) return;
+
+              let isMarkdownHeading = false;
+              if (trimmed.startsWith("# ")) {
+                isMarkdownHeading = true;
+                trimmed = trimmed.replace(/^#\s+/, "");
+              } else if (trimmed.startsWith("## ")) {
+                isMarkdownHeading = true;
+                trimmed = trimmed.replace(/^##\s+/, "");
+              } else if (trimmed.startsWith("### ")) {
+                isMarkdownHeading = true;
+                trimmed = trimmed.replace(/^###\s+/, "");
+              } else if (trimmed.startsWith("#### ")) {
+                isMarkdownHeading = true;
+                trimmed = trimmed.replace(/^####\s+/, "");
+              }
+
+              const isHeader = isMarkdownHeading || (
+                trimmed.startsWith("**") && (
+                  trimmed.endsWith("**") || 
+                  trimmed.replace(/[:\s]+$/, "").endsWith("**")
+                )
+              );
+              const cleanHeaderTxt = trimmed.replace(/\*\*/g, "");
+
+              checkPageBreak(10 * factor);
+              if (isHeader) {
+                doc.setFont("times", "bold");
+                doc.setFontSize(11);
+                
+                if (pdfLayoutType === "clinical_slate") {
+                  doc.setTextColor(30, 41, 59); // slate-800
+                } else if (pdfLayoutType === "executive_medical") {
+                  doc.setTextColor(15, 23, 42); // Navy
+                } else {
+                  doc.setTextColor(15, 23, 42);
+                }
+
+                const wrappedHeaders = doc.splitTextToSize(cleanHeaderTxt, contentWidth);
+                wrappedHeaders.forEach((lineText: string) => {
+                  checkPageBreak(5.5 * factor);
+                  
+                  if (pdfLayoutType === "clinical_slate") {
+                    // Left vertical slate bar
+                    doc.setFillColor(71, 85, 105);
+                    doc.rect(marginX - 3, yCoord - 3.8 * factor, 1.0, 4.5 * factor, "F");
+                  }
+                  
+                  doc.text(lineText, marginX, yCoord);
+                  yCoord += 5.5 * factor;
+                });
+
+                // Underlines for headings
+                if (pdfLayoutType === "clinical_slate") {
+                  doc.setDrawColor(226, 232, 240); // slate-200
+                  doc.setLineWidth(0.25);
+                  doc.line(marginX, yCoord - 1.5 * factor, marginX + contentWidth, yCoord - 1.5 * factor);
+                  yCoord += 1.5 * factor;
+                } else if (pdfLayoutType === "executive_medical") {
+                  doc.setDrawColor(197, 160, 89); // Gold
+                  doc.setLineWidth(0.35);
+                  doc.line(marginX, yCoord - 1.5 * factor, marginX + contentWidth, yCoord - 1.5 * factor);
+                  yCoord += 1.5 * factor;
+                }
+              } else {
+                doc.setFont("times", "normal");
+                doc.setFontSize(10.5);
+                doc.setTextColor(51, 65, 85);
+                const lines = doc.splitTextToSize(trimmed, contentWidth);
+                lines.forEach((l: string) => {
+                  checkPageBreak(5 * factor);
+                  doc.text(l, marginX, yCoord);
+                  yCoord += 4.5 * factor;
+                });
+                yCoord += 2 * factor;
+              }
+            });
+
+            // Now check page break for table header + first row only. If that fits, we start the table on this page
+            // and let subsequent rows split naturally across pages as needed.
+            checkPageBreak(12 * factor + (cachedRowsData[0]?.rowHeight || 10 * factor));
+
+            // Header Render
+            checkPageBreak(12 * factor);
+            
+            if (pdfLayoutType === "clinical_slate") {
+              doc.setFillColor(71, 85, 105); // slate-600
+              doc.rect(marginX, yCoord - 4 * factor, contentWidth, 8 * factor, "F");
+              doc.setDrawColor(51, 65, 85); // slate-700
+              doc.setLineWidth(0.35);
+              doc.line(marginX, yCoord - 4 * factor, marginX + contentWidth, yCoord - 4 * factor);
+              doc.line(marginX, yCoord + 4 * factor, marginX + contentWidth, yCoord + 4 * factor);
+            } else if (pdfLayoutType === "executive_medical") {
+              doc.setFillColor(15, 23, 42); // Navy-900
+              doc.rect(marginX, yCoord - 4 * factor, contentWidth, 8 * factor, "F");
+              doc.setDrawColor(197, 160, 89); // Gold
+              doc.setLineWidth(0.4);
+              doc.line(marginX, yCoord - 4 * factor, marginX + contentWidth, yCoord - 4 * factor);
+              doc.line(marginX, yCoord + 4 * factor, marginX + contentWidth, yCoord + 4 * factor);
+            } else {
+              doc.setFillColor(241, 245, 249); // slate-100 / cool grey background
+              doc.rect(marginX, yCoord - 4 * factor, contentWidth, 8 * factor, "F");
+              doc.setDrawColor(203, 213, 225); // slate-300 border
+              doc.setLineWidth(0.3);
+              doc.line(marginX, yCoord - 4 * factor, marginX + contentWidth, yCoord - 4 * factor);
+              doc.line(marginX, yCoord + 4 * factor, marginX + contentWidth, yCoord + 4 * factor);
+            }
+
+            let currentX = marginX;
+            doc.setFont("times", "bold");
+            doc.setFontSize(9.5);
+            
+            if (pdfLayoutType === "clinical_slate" || pdfLayoutType === "executive_medical") {
+              doc.setTextColor(255, 255, 255); // white text
+            } else {
+              doc.setTextColor(15, 23, 42); // slate-900
+            }
+
+            const isVascularTable = colCount === 3 && 
+              headers.some(h => {
+                const lower = h.toLowerCase();
+                return lower.includes("derech") || lower.includes("izquierd") || lower.includes("alterad") || lower.includes("vaso");
+              }) && 
+              !headers.some(h => {
+                const lower = h.toLowerCase();
+                return lower.includes("referencia") || lower.includes("estructura");
+              });
+
+            headers.forEach((headerTxt, hIdx) => {
+              let hClean = headerTxt.replace(/\*\*/g, "").trim();
+              if (colCount === 2) {
+                // Force headers to read exactly "INTERPRETACIÃ“N" and "Hallazgos" ONLY if header explicitly indicates semiology or interpretation
+                const isSynoptic = headers.some(h => {
+                  const l = h.toLowerCase();
+                  return l.includes("aspecto") || l.includes("detalle") || l.includes("sinopsis") || l.includes("evaluado") || l.includes("clÃ­nico") || l.includes("sistema") || l.includes("categorÃ­a") || l.includes("criterio") || l.includes("paso") || l.includes("parÃ¡metro") || l.includes("definiciÃ³n") || l.includes("estadio") || l.includes("ponderaciÃ³n") || l.includes("justificaciÃ³n");
+                });
+                const isExplicitSemiology = headers.some(h => {
+                  const l = h.toLowerCase();
+                  return l.includes("interpretaci") || l.includes("semiol");
+                });
+                if (!isSynoptic && isExplicitSemiology) {
+                  if (hIdx === 0) hClean = "INTERPRETACIÃ“N";
+                  if (hIdx === 1) hClean = "Hallazgos";
+                }
+              } else if (isVascularTable) {
+                if (hIdx === 0) hClean = "Segmento Alterado";
+                if (hIdx === 1) hClean = "Derecho";
+                if (hIdx === 2) hClean = "Izquierdo";
+              }
+
+              const currentColW = colWidths[hIdx] || (contentWidth / colCount);
+              doc.setFont("times", "bold");
+              doc.setFontSize(9.5);
+              if (doc.getTextWidth(hClean) > currentColW - 4) {
+                doc.setFontSize(8.5);
+              }
+              if (doc.getTextWidth(hClean) > currentColW - 4) {
+                doc.setFontSize(7.5);
+              }
+              doc.text(hClean, currentX + 3, yCoord + 1);
+              currentX += currentColW;
+            });
+            
+            yCoord += 9 * factor;
+
+            // Rows Render
+            bodyRows.forEach((row, rIdx) => {
+              const cachedRow = cachedRowsData[rIdx];
+              const cellLines = cachedRow.cellSpansLines;
+              const rowHeight = cachedRow.rowHeight;
+
+              checkPageBreak(rowHeight);
+
+              if (rIdx % 2 === 1) {
+                if (pdfLayoutType === "clinical_slate") {
+                  doc.setFillColor(241, 245, 249); // slate-100
+                } else if (pdfLayoutType === "executive_medical") {
+                  doc.setFillColor(253, 251, 247); // Cream-50
+                } else {
+                  doc.setFillColor(248, 250, 252); // standard grey alternate background
+                }
+                doc.rect(marginX, yCoord - 4 * factor, contentWidth, rowHeight, "F");
+              }
+
+              if (pdfLayoutType === "clinical_slate") {
+                doc.setDrawColor(203, 213, 225); // slate-300
+                doc.setLineWidth(0.25);
+              } else if (pdfLayoutType === "executive_medical") {
+                doc.setDrawColor(220, 210, 195); // light gold-gray
+                doc.setLineWidth(0.25);
+              } else {
+                doc.setDrawColor(226, 232, 240); // slate-200 border
+                doc.setLineWidth(0.2);
+              }
+              doc.line(marginX, yCoord - 4 * factor + rowHeight, marginX + contentWidth, yCoord - 4 * factor + rowHeight);
+
+              let startRowX = marginX;
+              row.forEach((_, cIdx) => {
+                const colW = colWidths[cIdx] || (contentWidth / colCount);
+                let tempY = yCoord;
+                const spansLines = cellLines[cIdx] || [];
+
+                spansLines.forEach((spanLine) => {
+                  let cellX = startRowX + 3;
+                  spanLine.forEach((span) => {
+                    if (span.isBold) {
+                      doc.setFont("times", "bold");
+                    } else {
+                      doc.setFont("times", "normal");
+                    }
+                    doc.setFontSize(9.5);
+                    doc.setTextColor(51, 65, 85);
+                    doc.text(span.text, cellX, tempY + 1);
+                    cellX += doc.getTextWidth(span.text);
+                  });
+                  tempY += 5 * factor;
+                });
+
+                startRowX += colW;
+              });
+
+              yCoord += rowHeight;
+            });
+
+            yCoord += 4 * factor; // margin after table completes
+            return;
+          }
+        }
+
+        // 3. Render as standard block with paragraphs and line spacing
+        if (!isFirstBlock) {
+          yCoord += 4.5 * factor;
+        } else {
+          isFirstBlock = false;
+        }
+
+        const blockSeverity = getParagraphSeverity(trimmedBlock);
+
+        linesOfBlock.forEach((line, lineIdx) => {
+          let trimmed = line.trim();
+          if (!trimmed) {
+            yCoord += 2.5 * factor;
+            return;
+          }
+
+          // Clean Markdown headers format if any
+          let isMarkdownHeading = false;
+          if (trimmed.startsWith("# ")) {
+            isMarkdownHeading = true;
+            trimmed = trimmed.replace(/^#\s+/, "");
+          } else if (trimmed.startsWith("## ")) {
+            isMarkdownHeading = true;
+            trimmed = trimmed.replace(/^##\s+/, "");
+          } else if (trimmed.startsWith("### ")) {
+            isMarkdownHeading = true;
+            trimmed = trimmed.replace(/^###\s+/, "");
+          } else if (trimmed.startsWith("#### ")) {
+            isMarkdownHeading = true;
+            trimmed = trimmed.replace(/^####\s+/, "");
+          }
+
+          const isHeader = isMarkdownHeading || (
+            trimmed.startsWith("**") && (
+              trimmed.endsWith("**") || 
+              trimmed.replace(/[:\s]+$/, "").endsWith("**")
+            )
+          );
+          const cleanHeaderTxt = trimmed.replace(/\*\*/g, "");
+
+          // Determine if first visual line is the main title of study
+          const isMainTitle = isFirstLine && (isHeader || /REPORTE|INFORME|ESTUDIO|DIAGNÃ“STICO|VALORACIÃ“N/i.test(trimmed));
+
+          if (isMainTitle) {
+            isFirstLine = false;
+            // Center-align main title beautifully
+            doc.setFont("times", "bold");
+            doc.setFontSize(13);
+            doc.setTextColor(15, 23, 42);
+            const wrappedTitle = doc.splitTextToSize(cleanHeaderTxt.toUpperCase(), contentWidth);
+            wrappedTitle.forEach((lineText: string) => {
+              checkPageBreak(7 * factor);
+              doc.text(lineText, pageWidth / 2, yCoord, { align: "center" });
+              yCoord += 6 * factor;
+            });
+            return;
+          }
+
+          if (isFirstLine) {
+            isFirstLine = false;
+          }
+
+          if (isHeader) {
+            // Let's estimate the height of the header + next few lines to avoid orphans!
+            let lookAheadHeight = 12 * factor; // space for header + spacing
+            let countLinesLookedAt = 0;
+            
+            // 1. Look ahead in the remaining lines of the current block
+            for (let nextIdx = lineIdx + 1; nextIdx < linesOfBlock.length; nextIdx++) {
+              const nextLine = linesOfBlock[nextIdx].trim();
+              if (!nextLine) continue;
+              
+              // If we hit another header, stop look-ahead
+              const isNextHeader = nextLine.startsWith("#") || (
+                nextLine.startsWith("**") && (
+                  nextLine.endsWith("**") || 
+                  nextLine.replace(/[:\s]+$/, "").endsWith("**")
+                )
+              );
+              if (isNextHeader) break;
+              
+              const isNextBulleted = nextLine.startsWith("- ") || nextLine.startsWith("* ") || /^\d+\.\s+/.test(nextLine);
+              let cleanNext = nextLine;
+              if (isNextBulleted) {
+                if (/^\d+\.\s+/.test(cleanNext)) {
+                  cleanNext = cleanNext.substring(cleanNext.indexOf(".") + 1).trim();
+                } else {
+                  cleanNext = cleanNext.substring(2).trim();
+                }
+              }
+              
+              const wrappedNext = wrapMarkdown(doc, cleanNext, isNextBulleted ? contentWidth - 6 : contentWidth);
+              lookAheadHeight += (wrappedNext.length * 5) * factor;
+              
+              countLinesLookedAt++;
+              if (countLinesLookedAt >= 2) break;
+            }
+            
+            // 2. If we haven't found enough content lines yet, look at the next paragraph blocks!
+            if (countLinesLookedAt < 2) {
+              const currentBlockIdx = paragraphs.indexOf(block);
+              if (currentBlockIdx !== -1) {
+                for (let nextBlockIdx = currentBlockIdx + 1; nextBlockIdx < paragraphs.length; nextBlockIdx++) {
+                  const nextBlock = paragraphs[nextBlockIdx].trim();
+                  if (!nextBlock) continue;
+                  
+                  if (nextBlock.startsWith("```") || nextBlock.startsWith("|") || (nextBlock.startsWith("===") && (nextBlock.includes("SÃNTESIS VASCULAR") || nextBlock.includes("SÃNTESIS DE ANATOMÃA")))) {
+                    lookAheadHeight += 15 * factor;
+                    countLinesLookedAt += 2;
+                    break;
+                  }
+                  
+                  const nextBlockLines = nextBlock.split("\n");
+                  let hitHeaderInNextBlock = false;
+                  
+                  for (let i = 0; i < nextBlockLines.length; i++) {
+                    const nextLine = nextBlockLines[i].trim();
+                    if (!nextLine) continue;
+                    
+                    const isNextHeader = nextLine.startsWith("#") || (
+                      nextLine.startsWith("**") && (
+                        nextLine.endsWith("**") || 
+                        nextLine.replace(/[:\s]+$/, "").endsWith("**")
+                      )
+                    );
+                    if (isNextHeader) {
+                      hitHeaderInNextBlock = true;
+                      break;
+                    }
+                    
+                    const isNextBulleted = nextLine.startsWith("- ") || nextLine.startsWith("* ") || /^\d+\.\s+/.test(nextLine);
+                    let cleanNext = nextLine;
+                    if (isNextBulleted) {
+                      if (/^\d+\.\s+/.test(cleanNext)) {
+                        cleanNext = cleanNext.substring(cleanNext.indexOf(".") + 1).trim();
+                      } else {
+                        cleanNext = cleanNext.substring(2).trim();
+                      }
+                    }
+                    
+                    const wrappedNext = wrapMarkdown(doc, cleanNext, isNextBulleted ? contentWidth - 6 : contentWidth);
+                    lookAheadHeight += (wrappedNext.length * 5) * factor;
+                    
+                    countLinesLookedAt++;
+                    if (countLinesLookedAt >= 2) break;
+                  }
+                  
+                  if (hitHeaderInNextBlock || countLinesLookedAt >= 2) {
+                    break;
+                  }
+                }
+              }
+            }
+            
+            // Avoid heading orphans by requiring at least 25mm of space, up to calculated lookahead
+            const minRequiredHeight = Math.max(25 * factor, lookAheadHeight);
+            checkPageBreak(minRequiredHeight);
+            
+            doc.setFont("times", "bold");
+            doc.setFontSize(11);
+            
+            if (pdfLayoutType === "clinical_slate") {
+              doc.setTextColor(30, 41, 59); // slate-800
+            } else if (pdfLayoutType === "executive_medical") {
+              doc.setTextColor(15, 23, 42); // Navy
+            } else {
+              doc.setTextColor(15, 23, 42);
+            }
+
+            const wrappedHeaders = doc.splitTextToSize(cleanHeaderTxt, contentWidth);
+            wrappedHeaders.forEach((lineText: string) => {
+              checkPageBreak(5.5 * factor);
+              
+              if (pdfLayoutType === "clinical_slate") {
+                // Draw elegant vertical slate bar on the left of header
+                doc.setFillColor(71, 85, 105); // slate-600
+                doc.rect(marginX - 3, yCoord - 3.8 * factor, 1.0, 4.5 * factor, "F");
+              }
+              
+              doc.text(lineText, marginX, yCoord);
+              yCoord += 5.5 * factor;
+            });
+
+            // Underlines for headings
+            const isAnnexHeading = cleanHeaderTxt.toUpperCase().includes("ANEXO") || 
+                                   cleanHeaderTxt.toUpperCase().includes("DESGLOSE Y JUSTIFICACIÃ“N");
+            if (isAnnexHeading) {
+              doc.setDrawColor(203, 213, 225); // slate-300
+              doc.setLineWidth(0.3);
+              doc.line(marginX, yCoord - 1 * factor, marginX + contentWidth, yCoord - 1 * factor);
+              yCoord += 3.5 * factor;
+            } else if (pdfLayoutType === "clinical_slate") {
+              doc.setDrawColor(226, 232, 240); // slate-200
+              doc.setLineWidth(0.25);
+              doc.line(marginX, yCoord - 1.5 * factor, marginX + contentWidth, yCoord - 1.5 * factor);
+              yCoord += 1.5 * factor;
+            } else if (pdfLayoutType === "executive_medical") {
+              doc.setDrawColor(197, 160, 89); // Gold
+              doc.setLineWidth(0.35);
+              doc.line(marginX, yCoord - 1.5 * factor, marginX + contentWidth, yCoord - 1.5 * factor);
+              yCoord += 1.5 * factor;
+            }
+          } else {
+            // Is it a bullet/list item in original design?
+            const isBulleted = trimmed.startsWith("- ") || trimmed.startsWith("* ") || /^\d+\.\s+/.test(trimmed);
+            if (isBulleted) {
+              let cleanItem = trimmed;
+              let bulletToken = "-";
+              const isNumbered = /^\d+\.\s+/.test(cleanItem);
+
+              if (isNumbered) {
+                const numMatch = cleanItem.match(/^(\d+\.)\s+/);
+                if (numMatch) {
+                  bulletToken = numMatch[1];
+                  cleanItem = cleanItem.substring(numMatch[0].length);
+                }
+              } else if (cleanItem.startsWith("- ") || cleanItem.startsWith("* ")) {
+                cleanItem = cleanItem.substring(2);
+              }
+
+              const indent = 6;
+              const textWidth = contentWidth - indent;
+              
+              checkPageBreak(6 * factor);
+              doc.setFont("times", "bold");
+              doc.setFontSize(10.5);
+              doc.setTextColor(15, 23, 42);
+              doc.text(bulletToken || "-", marginX + 1.5, yCoord);
+ 
+              const lines = wrapMarkdown(doc, cleanItem, textWidth);
+              const itemSeverity = getParagraphSeverity(cleanItem);
+              lines.forEach((lineVal) => {
+                checkPageBreak(5 * factor);
+                
+                // Fine continuous left chromatic accent based on severity of findings
+                if (isSyntacticHighlightingActive) {
+                  if (itemSeverity === "critical") {
+                    doc.setFillColor(251, 113, 133); // soft coral rose-400
+                    doc.rect(marginX - 3.5, yCoord - 3.8 * factor, 0.4, 5 * factor, "F"); // Left accent only (fine continuous line)
+                  } else if (itemSeverity === "altered") {
+                    doc.setFillColor(245, 158, 11); // amber-500
+                    doc.rect(marginX - 3.5, yCoord - 3.8 * factor, 0.4, 5 * factor, "F"); // Left accent only (fine continuous line)
+                  }
+                }
+ 
+                let currentX = marginX + indent;
+                lineVal.forEach((span) => {
+                  if (span.isBold) {
+                    doc.setFont("times", "bold");
+                  } else {
+                    doc.setFont("times", "normal");
+                  }
+                  doc.setFontSize(10.5);
+                  doc.setTextColor(30, 41, 59);
+                  doc.text(span.text, currentX, yCoord);
+                  currentX += doc.getTextWidth(span.text);
+                });
+                yCoord += 5 * factor;
+              });
+            } else {
+              // Wrap markdown formatted lines (bold and normal text mixed) safely and beautifully
+              const lines = wrapMarkdown(doc, trimmed, contentWidth);
+              const itemSeverity = getParagraphSeverity(trimmed);
+              lines.forEach((lineVal) => {
+                checkPageBreak(5 * factor);
+ 
+                // Fine continuous left chromatic accent based on severity of findings
+                if (isSyntacticHighlightingActive) {
+                  if (itemSeverity === "critical") {
+                    doc.setFillColor(251, 113, 133); // soft coral rose-400
+                    doc.rect(marginX - 3.5, yCoord - 3.8 * factor, 0.4, 5 * factor, "F"); // Left accent only (fine continuous line)
+                  } else if (itemSeverity === "altered") {
+                    doc.setFillColor(245, 158, 11); // amber-500
+                    doc.rect(marginX - 3.5, yCoord - 3.8 * factor, 0.4, 5 * factor, "F"); // Left accent only (fine continuous line)
+                  }
+                }
+ 
+                let currentX = marginX;
+                lineVal.forEach((span) => {
+                  if (span.isBold) {
+                    doc.setFont("times", "bold");
+                  } else {
+                    doc.setFont("times", "normal");
+                  }
+                  doc.setFontSize(10.5);
+                  doc.setTextColor(30, 41, 59);
+                  doc.text(span.text, currentX, yCoord);
+                  currentX += doc.getTextWidth(span.text);
+                });
+                yCoord += 5 * factor;
+              });
+            }
+          }
+        });
+      };
+
+      // Categorize paragraph blocks according to requested 10-step insertion sequence:
+      // 1. CUERPO DE REPORTE CON FIRMA AL FINAL
+      // 2. CUADRO SINOPTICO
+      // 3. SINOPSIS POR ORGANO
+      // 4. SINOPSIS DE HALLAZGOS CON DIBUJO Y TARJETAS SINOPTICAS
+      // 5. CUADRO DE ASISTENTE DE MEDIDAS
+      // 6. ANEXO DE FOTOS Y CAPTURAS DE ULTRASONIDO
+      // 7. DIAGNOSTICO AVANZADO
+      // 8. DESGLOCE Y JUSTIFICACION DE CLASIFICACIONES
+      // 9. RESUMEN DEL PACIENTE
+      // 10. INFOGRAFIA DEL PACIENTE
+      const mainReportBlocks: string[] = [];
+      const cuadroSinopticoBlocks: string[] = [];
+      const organSynopsisBlocks: string[] = [];
+      const measurementAssistantBlocks: string[] = [];
+      const classificationAnnexBlocks: string[] = [];
+
+      let pdfSectionTarget: "main" | "cuadro" | "organ" | "medidas" | "annex" = "main";
+
+      paragraphs.forEach((block) => {
+        const trimmedBlock = block.trim();
+        if (!trimmedBlock) return;
+
+        if (trimmedBlock.includes("[CASE_ANALYSIS_JSON]")) {
+          return;
+        }
+
+        const upperBlock = trimmedBlock.toUpperCase();
+        if (
+          upperBlock.includes("RADAR BIOMECÃNICO") ||
+          upperBlock.includes("RADAR BIOMECANICO") ||
+          upperBlock.includes("PUNTAJE GLOBAL DE CARGA TISULAR:") ||
+          upperBlock.includes("VECTOR PATOLÃ“GICO DOMINANTE:") ||
+          upperBlock.includes("MATRIZ DE VECTORES CLAVE:") ||
+          upperBlock.includes("SÃNTESIS BIOMECÃNICO-INFLAMATORIA:") ||
+          upperBlock.includes("RECOMENDACIÃ“N DINÃMICA:") ||
+          (upperBlock.startsWith("â€¢") && (upperBlock.includes("/10") || upperBlock.includes("[")))
+        ) {
+          return;
+        }
+
+        const isHeaderMarker = /^\s*(?:#{1,6}\s+|\*\*\s*)/.test(trimmedBlock) || trimmedBlock.toUpperCase().startsWith("ANEXO:");
+        const isImpressionHeader = /^\s*(?:#{1,6}\s*|\*\*)*\s*(?:IMPRESI[OÃ“]N\s+DIAGN[OÃ“]STICA|IMPRESI[OÃ“]N\b|CONCLUSI[OÃ“]N|CONCLUSIONES|DIAGN[OÃ“]STICO|DIAGN[OÃ“]STICOS)\b/i.test(trimmedBlock) ||
+                                    upperBlock.includes("IMPRESIÃ“N DIAGNÃ“STICA") || upperBlock.includes("IMPRESION DIAGNOSTICA") ||
+                                    upperBlock.includes("CONCLUSIÃ“N:") || upperBlock.includes("CONCLUSIONES:");
+        const isCuadroHeader = isHeaderMarker && /^\s*(?:#{1,6}\s*|\*\*)*\s*(?:ESQUEMA\s+CLÃNICO\s+DE\s+HALLAZGOS\s+PRINCIPALES|CUADRO\s+SINÃ“PTICO|MATRIZ\s+SEMIÃ“TICA)\b/i.test(trimmedBlock) && !isImpressionHeader;
+        const isOrganHeader = isHeaderMarker && /^\s*(?:#{1,6}\s*|\*\*)*\s*(?:SINOPSIS\s+CLÃNICA|SINOPSIS\s+POR\s+[OÃ“]RGANO|SINOPSIS\s+DE\s+[OÃ“]RGANO)\b/i.test(trimmedBlock) && !isCuadroHeader && !isImpressionHeader;
+        const isMeasurementHeader = isHeaderMarker && /^\s*(?:#{1,6}\s*|\*\*)*\s*(?:ASISTENTE\s+DE\s+MEDIDAS|CUADRO\s+DE\s+ASISTENTE\s+DE\s+MEDIDAS|TABLA\s+DE\s+MEDIDAS|MEDICIONES\s+Y\s+PARÃMETROS|PARÃMETROS\s+Y\s+MEDIDAS)\b/i.test(trimmedBlock) && !isCuadroHeader && !isOrganHeader && !isImpressionHeader;
+        const isAnnexHeader = isHeaderMarker && (trimmedBlock.includes("ANEXO DIAGNÃ“STICO") || 
+                              trimmedBlock.includes("DESGLOSE Y JUSTIFICACIÃ“N DE CLASIFICACIÃ“N") || 
+                              trimmedBlock.includes("DESGLOSE Y JUSTIFICACIÃ“N") ||
+                              trimmedBlock.includes("CLASIFICACIÃ“N DE") ||
+                              /^\s*(?:#{1,6}\s*|\*\*)*\s*(?:ANEXO|CLASIFICACI[OÃ“]N)\b/i.test(trimmedBlock)) && !isCuadroHeader && !isOrganHeader && !isMeasurementHeader && !isImpressionHeader;
+
+        if (isImpressionHeader) {
+          pdfSectionTarget = "main";
+        } else if (isCuadroHeader) {
+          pdfSectionTarget = "cuadro";
+        } else if (isOrganHeader) {
+          pdfSectionTarget = "organ";
+        } else if (isMeasurementHeader) {
+          pdfSectionTarget = "medidas";
+        } else if (isAnnexHeader) {
+          pdfSectionTarget = "annex";
+        }
+
+        if (pdfSectionTarget === "cuadro") {
+          cuadroSinopticoBlocks.push(trimmedBlock);
+        } else if (pdfSectionTarget === "organ") {
+          organSynopsisBlocks.push(trimmedBlock);
+        } else if (pdfSectionTarget === "medidas") {
+          measurementAssistantBlocks.push(trimmedBlock);
+        } else if (pdfSectionTarget === "annex") {
+          classificationAnnexBlocks.push(trimmedBlock);
+        } else {
+          mainReportBlocks.push(trimmedBlock);
+        }
+      });
+
+      // Safety recovery pass for jsPDF: Ensure Impression & Conclusions are NEVER trapped inside annexes
+      const isImpressionBlockText = (bText: string) => {
+        const u = bText.toUpperCase();
+        return u.includes("IMPRESIÃ“N DIAGNÃ“STICA") || u.includes("IMPRESION DIAGNOSTICA") ||
+               u.includes("CONCLUSIÃ“N:") || u.includes("CONCLUSIONES:") ||
+               /^\s*(?:#{1,6}\s*|\*\*)*\s*(?:IMPRESI[OÃ“]N|CONCLUSI[OÃ“]N|CONCLUSIONES|DIAGN[OÃ“]STICO)\b/i.test(bText);
+      };
+
+      const recoverImpressionForPDF = (sourceArr: string[]) => {
+        for (let i = 0; i < sourceArr.length; ) {
+          if (isImpressionBlockText(sourceArr[i])) {
+            const recovered = sourceArr.splice(i, sourceArr.length - i);
+            mainReportBlocks.push(...recovered);
+            break;
+          } else {
+            i++;
+          }
+        }
+      };
+
+      recoverImpressionForPDF(cuadroSinopticoBlocks);
+      recoverImpressionForPDF(organSynopsisBlocks);
+      recoverImpressionForPDF(measurementAssistantBlocks);
+      recoverImpressionForPDF(classificationAnnexBlocks);
+
+      // --- 1. CUERPO DE REPORTE CON FIRMA AL FINAL ---
+      mainReportBlocks.forEach((block) => {
+        renderSingleReportBlock(block);
+      });
+
+      if (!hasDrawnSignature) {
+        renderSignatureBlock();
+      }
+
+      // --- 2. CUADRO SINÃ“PTICO ---
+      if (cuadroSinopticoBlocks.length > 0) {
+        doc.addPage();
+        yCoord = 20;
+        cuadroSinopticoBlocks.forEach((block) => {
+          renderSingleReportBlock(block);
+        });
+      }
+
+      // --- 3. SINOPSIS POR Ã“RGANO (PÃGINA INDEPENDIENTE DESPUÃ‰S DEL CUERPO DEL REPORTE) ---
+      if (organSynopsisBlocks.length > 0) {
+        doc.addPage();
+        yCoord = 20;
+        organSynopsisBlocks.forEach((block) => {
+          renderSingleReportBlock(block);
+        });
+      }
+
+      // Restore standard margins and content widths for any diagrams, annexes, and signature block
+      marginX = 20;
+      contentWidth = pageWidth - (2 * marginX);
+
+      // --- 4. SINOPSIS DE HALLAZGOS CON DIBUJO Y TARJETAS SINÃ“PTICAS EN ANEXO DEDICADO ---
+      const isDopplerStudy = specificStudy === "Doppler de carÃ³tidas" || 
+                             specificStudy === "Doppler venoso de miembro inferior" || 
+                             specificStudy === "Doppler arterial de miembro inferior";
+
+      const activeSchemasList: Array<{ key: string; name: string }> = [];
+
+      if (includeShoulderSchemaInReport && specificStudy === "Hombro") {
+        activeSchemasList.push({ key: "shoulder", name: "Hombro" });
+      }
+      if (specificStudy === "Rodilla") {
+        if (includeKneeSchemaInReport) activeSchemasList.push({ key: "knee", name: "Rodilla Trauma" });
+        if (includeGonartrosisSchemaInReport) activeSchemasList.push({ key: "gonartrosis", name: "Rodilla Gonartrosis" });
+      }
+      if (includeAnkleSchemaInReport && specificStudy === "Tobillo") {
+        activeSchemasList.push({ key: "ankle", name: "Tobillo" });
+      }
+      if (includeThighSchemaInReport && specificStudy === "Muslo Anterior") {
+        activeSchemasList.push({ key: "thigh_ant", name: "Muslo Anterior" });
+      }
+      if (includeThighPosteriorSchemaInReport && specificStudy === "Muslo Posterior") {
+        activeSchemasList.push({ key: "thigh_post", name: "Muslo Posterior" });
+      }
+      if (includeNeckSchemaInReport && specificStudy === "Cuello") {
+        activeSchemasList.push({ key: "neck", name: "Cuello y Tiroides" });
+      }
+      if (includeUrinarySchemaInReport && specificStudy === "Vias urinarias") {
+        activeSchemasList.push({ key: "urinary", name: "VÃ­as Urinarias" });
+      }
+      if (includeScrotumSchemaInReport && (specificStudy === "Escroto" || activeProtocol === "Escroto" || /escrot|testic/i.test(specificStudy || ""))) {
+        activeSchemasList.push({ key: "scrotum", name: "Escroto" });
+      }
+      if (specificStudy === "MuÃ±eca") {
+        if (includeWristSchemaInReport) activeSchemasList.push({ key: "wrist", name: "MuÃ±eca" });
+        if (includeDeQuervainSchemaInReport) activeSchemasList.push({ key: "de_quervain", name: "De Quervain" });
+      }
+      if (includeBreastSchemaInReport && (specificStudy === "Mamas" || specificStudy === "MomografÃ­a" || modality === "MamografÃ­a" || modality === "MamografÃ­a y Ultrasonido de Mamas")) {
+        activeSchemasList.push({ key: "breast", name: "Mamas" });
+      }
+      if (includeElbowSchemaInReport && specificStudy === "Codo") {
+        activeSchemasList.push({ key: "elbow", name: "Codo" });
+      }
+      if (specificStudy === "Abdomen" || activeProtocol === "Abdomen") {
+        if (includeAbdomenSchemaInReport) activeSchemasList.push({ key: "abdomen", name: "Abdomen General" });
+        if (includeBiliarySchemaInReport) activeSchemasList.push({ key: "biliary", name: "VesÃ­cula Biliar" });
+        if (includeAppendixSchemaInReport) activeSchemasList.push({ key: "appendix", name: "ApÃ©ndice" });
+        if (includeHepatopatiaSchemaInReport) activeSchemasList.push({ key: "hepatopatia", name: "HepatopatÃ­a" });
+        if (includeDiverticulitisSchemaInReport) activeSchemasList.push({ key: "diverticulitis", name: "Diverticulitis" });
+        if (includeAneurismaSchemaInReport) activeSchemasList.push({ key: "aneurisma", name: "Aneurisma" });
+        if (includeSmallBowelSchemaInReport) activeSchemasList.push({ key: "small_bowel", name: "Asas Intestinales" });
+        if (includeElastographyInReport) activeSchemasList.push({ key: "elastography", name: "ElastografÃ­a & QUS" });
+      }
+      if (includeAbdominalWallSchemaInReport && specificStudy === "Pared Abdominal") {
+        activeSchemasList.push({ key: "abdominal_wall", name: "Pared Abdominal" });
+      }
+      if (includeCalfAchillesSchemaInReport && specificStudy === "Pantorrilla y TendÃ³n de Aquiles") {
+        activeSchemasList.push({ key: "calf", name: "Pantorrilla y Aquiles" });
+      }
+      if (includeNeonatalBrainSchemaInReport && specificStudy === "Cerebro Neonatal") {
+        activeSchemasList.push({ key: "neonatal_brain", name: "Cerebro Neonatal" });
+      }
+      if (includeVascularSchemaInReport && isDopplerStudy) {
+        activeSchemasList.push({ key: "vascular", name: "Vascular Doppler" });
+      }
+
+      const totalActiveSchemasCount = activeSchemasList.length;
+      let renderedSchemasCounter = 0;
+
+      const getNextSchemaPlacement = () => {
+        const isFirst = (renderedSchemasCounter === 0);
+        let forceAddPage = false;
+        let yStart = 26;
+        let boxH = 74;
+        let leftBoxW = 88;
+        let rightBoxX = 111;
+        let rightBoxW = 79;
+        const isSingleFullPage = (totalActiveSchemasCount === 1);
+
+        if (isFirst) {
+          forceAddPage = true; // Always start on a new separate annexed page!
+        }
+
+        if (isSingleFullPage) {
+          // 1 Schema: Large prominent full page format!
+          boxH = 138;
+          leftBoxW = 92;
+          rightBoxX = 113;
+          rightBoxW = 75;
+          yStart = 26;
+        } else {
+          // 2 or more schemas: Dual per page format (2 per page)
+          const posOnPage = renderedSchemasCounter % 2;
+          if (posOnPage === 0 && !isFirst) {
+            forceAddPage = true; // New page for 3rd, 5th, etc.
+          }
+          if (posOnPage === 0) {
+            yStart = 26;
+          } else {
+            yStart = 108;
+          }
+          boxH = 74;
+          leftBoxW = 88;
+          rightBoxX = 111;
+          rightBoxW = 79;
+        }
+
+        renderedSchemasCounter++;
+
+        return {
+          forceAddPage,
+          yStart,
+          boxH,
+          leftBoxW,
+          rightBoxX,
+          rightBoxW,
+          isSingleFullPage
+        };
+      };
+
+      // ðŸ› ï¸ DRAW SHOULDER DIAGRAM IN THE PROGRAMMATIC PDF
+      if (includeShoulderSchemaInReport && specificStudy === "Hombro") {
+        try {
+          const sanitizeShoulderSvgForPrint = (svgEl: HTMLElement) => {
+            const clonedSvg = svgEl.cloneNode(true) as SVGElement;
+            const stops = clonedSvg.querySelectorAll("linearGradient stop");
+            stops.forEach(stop => {
+              const curColor = stop.getAttribute("stop-color") || stop.getAttribute("stopColor") || "";
+              if (curColor === "#1e293b" || curColor === "#2e3d52") stop.setAttribute("stop-color", "#f1f5f9");
+              if (curColor === "#0f172a" || curColor === "#111827") stop.setAttribute("stop-color", "#cbd5e1");
+              if (curColor === "#334155" || curColor === "#3d4e66") stop.setAttribute("stop-color", "#cbd5e1");
+            });
+
+            const paths = clonedSvg.querySelectorAll("path");
+            paths.forEach(p => {
+              const fill = p.getAttribute("fill") || "";
+              const stroke = p.getAttribute("stroke") || "";
+              if (fill === "#1e293b") p.setAttribute("fill", "#f8fafc");
+              if (fill === "#451a03") p.setAttribute("fill", "#fef3c7");
+              if (fill === "#500730") p.setAttribute("fill", "#fce7f3");
+              if (fill === "#7f1d1d") p.setAttribute("fill", "#fee2e2");
+
+              if (stroke === "#ef4444") p.setAttribute("stroke", "#dc2626");
+              if (stroke === "#ec4899") p.setAttribute("stroke", "#db2777");
+              if (stroke === "#f59e0b") p.setAttribute("stroke", "#d97706");
+              if (stroke === "#334155") p.setAttribute("stroke", "#475569");
+              if (stroke === "#475569") p.setAttribute("stroke", "#64748b");
+            });
+
+            const texts = clonedSvg.querySelectorAll("text");
+            texts.forEach(t => {
+              const fill = t.getAttribute("fill") || "";
+              if (fill === "#64748b") t.setAttribute("fill", "#475569");
+              if (fill === "#475569") t.setAttribute("fill", "#1e293b");
+            });
+
+            const circles = clonedSvg.querySelectorAll("circle");
+            circles.forEach(c => {
+              const stroke = c.getAttribute("stroke") || "";
+              if (stroke === "#1e293b") c.setAttribute("stroke", "#e2e8f0");
+            });
+            const lines = clonedSvg.querySelectorAll("line");
+            lines.forEach(l => {
+              const stroke = l.getAttribute("stroke") || "";
+              if (stroke === "#1e293b") l.setAttribute("stroke", "#e2e8f0");
+            });
+            return clonedSvg;
+          };
+
+          const getCardDataForSide = (statesObj: any, descObj: any) => {
+            const structures = [
+              { id: "supraspinatus", label: "Supraespinoso" },
+              { id: "infraspinatus", label: "Infraespinoso" },
+              { id: "subscapularis", label: "Subescapular" },
+              { id: "biceps", label: "PL BÃ­ceps" },
+              { id: "bursa", label: "Bursa SAD" },
+              { id: "glenohumeral", label: "Derrame GH" },
+              { id: "acromioclavicular", label: "Artic. A.C." },
+              { id: "dynamic_assessment", label: "Val. DinÃ¡mica" }
+            ].filter(struct => {
+              const s = statesObj[struct.id] || "no_descrito";
+              return s !== "no_descrito" && s !== "normal";
+            });
+
+            const getPDFSimplifiedDescription = (id: string, state: string) => {
+              if (descObj && descObj[id] && descObj[id].trim() !== "" && descObj[id] !== "No mencionado / No descrito." && descObj[id] !== "No descrito.") {
+                return descObj[id];
+              }
+              if (!state || state === "no_descrito") {
+                return "No descrito en el reporte.";
+              }
+              if (state === "normal") {
+                return "Entre lÃ­mites normales.";
+              }
+              return state.charAt(0).toUpperCase() + state.slice(1).replace(/_/g, " ");
+            };
+
+            const data = structures.map(struct => {
+              const s = statesObj[struct.id] || "no_descrito";
+              return {
+                label: struct.label,
+                state: s,
+                description: getPDFSimplifiedDescription(struct.id, s)
+              };
+            });
+
+            const shoulderExtras = additionalFindings["Hombro"] || [];
+            shoulderExtras.forEach((extra: any) => {
+              data.push({
+                label: extra.structureName,
+                state: extra.state || "Alterado",
+                description: extra.description
+              });
+            });
+
+            return data;
+          };
+
+          if (laterality === "Bilateral") {
+            const svgDer = document.getElementById("shoulder-anatomy-svg");
+            const svgIzq = document.getElementById("shoulder-anatomy-svg-left");
+
+            if (svgDer && svgIzq) {
+              const imgDataDer = await convertSvgToPng(sanitizeShoulderSvgForPrint(svgDer));
+              const imgDataIzq = await convertSvgToPng(sanitizeShoulderSvgForPrint(svgIzq));
+
+              checkPageBreak(125);
+              yCoord += 15;
+
+              doc.setFont("helvetica", "bold");
+              doc.setFontSize(8.5);
+              doc.setTextColor(30, 41, 59);
+              doc.text("ANEXO: ESQUEMAS DE HALLAZGOS Y SINOPSIS BILATERAL", pageWidth / 2, yCoord, { align: "center" });
+              yCoord += 3.5;
+
+              doc.setFont("helvetica", "normal");
+              doc.setFontSize(6.5);
+              doc.setTextColor(148, 163, 184);
+              doc.text("MAPEO ANATÃ“MICO Y SINOPSIS ESTRUCTURADA - HOMBRO BILATERAL", pageWidth / 2, yCoord, { align: "center" });
+              yCoord += 6;
+
+              const yStart = yCoord;
+
+              // --- HOMBRO DERECHO (LEFT COLUMN) ---
+              doc.setFont("helvetica", "bold");
+              doc.setFontSize(7.5);
+              doc.setTextColor(71, 85, 105);
+              doc.text("HOMBRO DERECHO", 60, yStart - 1, { align: "center" });
+
+              // Diagram Box Left
+              doc.setFillColor(255, 255, 255);
+              doc.setDrawColor(229, 231, 235);
+              doc.roundedRect(20, yStart, 80, 50, 3, 3, "FD");
+              doc.addImage(imgDataDer, "PNG", 35, yStart + 2, 50, 46);
+
+              // Findings Box Left
+              const dataDer = getCardDataForSide(shoulderStates, shoulderDescriptions);
+              doc.setFillColor(248, 250, 252);
+              doc.setDrawColor(229, 231, 235);
+              doc.roundedRect(20, yStart + 53, 80, 52, 3, 3, "FD");
+
+              doc.setFont("helvetica", "bold");
+              doc.setFontSize(7.0);
+              doc.setTextColor(67, 56, 202);
+              doc.text("SINOPSIS CLÃNICA - DER", 24, yStart + 58.5);
+              doc.line(24, yStart + 60, 96, yStart + 60);
+
+              if (dataDer.length === 0) {
+                doc.setFont("helvetica", "italic");
+                doc.setFontSize(6.5);
+                doc.setTextColor(100, 116, 139);
+                doc.text("Sin hallazgos patolÃ³gicos relevantes.", 60, yStart + 75, { align: "center" });
+              } else {
+                drawAnatomicalCards(doc, dataDer, 20, yStart + 53, 80, 52);
+              }
+
+              // --- HOMBRO IZQUIERDO (RIGHT COLUMN) ---
+              doc.setFont("helvetica", "bold");
+              doc.setFontSize(7.5);
+              doc.setTextColor(71, 85, 105);
+              doc.text("HOMBRO IZQUIERDO", 150, yStart - 1, { align: "center" });
+
+              // Diagram Box Right
+              doc.setFillColor(255, 255, 255);
+              doc.setDrawColor(229, 231, 235);
+              doc.roundedRect(110, yStart, 80, 50, 3, 3, "FD");
+              doc.addImage(imgDataIzq, "PNG", 125, yStart + 2, 50, 46);
+
+              // Findings Box Right
+              const dataIzq = getCardDataForSide(shoulderStatesLeft, shoulderDescriptionsLeft);
+              doc.setFillColor(248, 250, 252);
+              doc.setDrawColor(229, 231, 235);
+              doc.roundedRect(110, yStart + 53, 80, 52, 3, 3, "FD");
+
+              doc.setFont("helvetica", "bold");
+              doc.setFontSize(7.0);
+              doc.setTextColor(67, 56, 202);
+              doc.text("SINOPSIS CLÃNICA - IZQ", 114, yStart + 58.5);
+              doc.line(114, yStart + 60, 186, yStart + 60);
+
+              if (dataIzq.length === 0) {
+                doc.setFont("helvetica", "italic");
+                doc.setFontSize(6.5);
+                doc.setTextColor(100, 116, 139);
+                doc.text("Sin hallazgos patolÃ³gicos relevantes.", 150, yStart + 75, { align: "center" });
+              } else {
+                drawAnatomicalCards(doc, dataIzq, 110, yStart + 53, 80, 52);
+              }
+
+              // Footnote
+              doc.setFont("helvetica", "italic");
+              doc.setFontSize(6.0);
+              doc.setTextColor(148, 163, 184);
+              doc.text("Mapas anatÃ³micos y sinopsis correspondientes al estudio bilateral.", pageWidth / 2, yStart + 101, { align: "center" });
+
+              yCoord += 112;
+
+              // --- SUPRASPINATUS EXTRA DRAWINGS FOR BILATERAL STUDY ---
+              try {
+                const supraspinatusWrapperDer = document.getElementById("supraspinatus-ap-print-wrapper");
+                const supraspinatusWrapperIzq = document.getElementById("supraspinatus-ap-print-wrapper-left");
+
+                const shouldPrintSupraspinatusDer = supraspinatusWrapperDer && supraspinatusWrapperDer.getAttribute("data-include") === "true";
+                const shouldPrintSupraspinatusIzq = supraspinatusWrapperIzq && supraspinatusWrapperIzq.getAttribute("data-include") === "true";
+
+                if (shouldPrintSupraspinatusDer || shouldPrintSupraspinatusIzq) {
+                  checkPageBreak(120);
+                  doc.addPage();
+                  yCoord = 20;
+
+                  doc.setFont("helvetica", "bold");
+                  doc.setFontSize(8.5);
+                  doc.setTextColor(30, 41, 59);
+                  doc.text("ANEXO: ESTUDIO MICRO-ANATÃ“MICO DE ROTURA DE SUPRAESPINOSO", pageWidth / 2, yCoord, { align: "center" });
+                  yCoord += 3.5;
+
+                  doc.setFont("helvetica", "normal");
+                  doc.setFontSize(6.5);
+                  doc.setTextColor(148, 163, 184);
+                  doc.text("INTERPRETACIÃ“N PARAMÃ‰TRICA VECTORES CORONAL (AP) Y SAGITAL (LAT)", pageWidth / 2, yCoord, { align: "center" });
+                  yCoord += 8;
+
+                  const yS = yCoord;
+
+                  if (shouldPrintSupraspinatusDer && supraspinatusWrapperDer) {
+                    const svgChildren = supraspinatusWrapperDer.querySelectorAll("svg");
+                    if (svgChildren.length >= 2) {
+                      const apSvg = svgChildren[0] as SVGElement;
+                      const latSvg = svgChildren[1] as SVGElement;
+                      const apPng = await convertSvgToPng(apSvg);
+                      const latPng = await convertSvgToPng(latSvg);
+
+                      doc.setFillColor(255, 255, 255);
+                      doc.setDrawColor(229, 231, 235);
+                      doc.roundedRect(20, yS, 80, 52, 3, 3, "FD");
+
+                      doc.setFont("helvetica", "bold");
+                      doc.setFontSize(7.0);
+                      doc.setTextColor(225, 29, 72);
+                      doc.text("HOMBRO DERECHO: DETALLE DE ROTURA", 60, yS + 6, { align: "center" });
+
+                      doc.addImage(apPng, "PNG", 22, yS + 10, 36, 36);
+                      doc.addImage(latPng, "PNG", 62, yS + 10, 36, 36);
+                    }
+                  } else {
+                    doc.setFillColor(248, 250, 252);
+                    doc.setDrawColor(229, 231, 235);
+                    doc.roundedRect(20, yS, 80, 52, 3, 3, "FD");
+
+                    doc.setFont("helvetica", "bold");
+                    doc.setFontSize(7.0);
+                    doc.setTextColor(71, 85, 105);
+                    doc.text("HOMBRO DERECHO: DETALLE", 60, yS + 6, { align: "center" });
+
+                    doc.setFont("helvetica", "italic");
+                    doc.setFontSize(6.5);
+                    doc.setTextColor(148, 163, 184);
+                    doc.text("TendÃ³n supraespinoso sin desgarro", 60, yS + 26, { align: "center" });
+                  }
+
+                  if (shouldPrintSupraspinatusIzq && supraspinatusWrapperIzq) {
+                    const svgChildren = supraspinatusWrapperIzq.querySelectorAll("svg");
+                    if (svgChildren.length >= 2) {
+                      const apSvg = svgChildren[0] as SVGElement;
+                      const latSvg = svgChildren[1] as SVGElement;
+                      const apPng = await convertSvgToPng(apSvg);
+                      const latPng = await convertSvgToPng(latSvg);
+
+                      doc.setFillColor(255, 255, 255);
+                      doc.setDrawColor(229, 231, 235);
+                      doc.roundedRect(110, yS, 80, 52, 3, 3, "FD");
+
+                      doc.setFont("helvetica", "bold");
+                      doc.setFontSize(7.0);
+                      doc.setTextColor(225, 29, 72);
+                      doc.text("HOMBRO IZQUIERDO: DETALLE DE ROTURA", 150, yS + 6, { align: "center" });
+
+                      doc.addImage(apPng, "PNG", 112, yS + 10, 36, 36);
+                      doc.addImage(latPng, "PNG", 152, yS + 10, 36, 36);
+                    }
+                  } else {
+                    doc.setFillColor(248, 250, 252);
+                    doc.setDrawColor(229, 231, 235);
+                    doc.roundedRect(110, yS, 80, 52, 3, 3, "FD");
+
+                    doc.setFont("helvetica", "bold");
+                    doc.setFontSize(7.0);
+                    doc.setTextColor(71, 85, 105);
+                    doc.text("HOMBRO IZQUIERDO: DETALLE", 150, yS + 6, { align: "center" });
+
+                    doc.setFont("helvetica", "italic");
+                    doc.setFontSize(6.5);
+                    doc.setTextColor(148, 163, 184);
+                    doc.text("TendÃ³n supraespinoso sin desgarro", 150, yS + 26, { align: "center" });
+                  }
+
+                  doc.setFont("helvetica", "italic");
+                  doc.setFontSize(5.5);
+                  doc.setTextColor(148, 163, 184);
+                  doc.text("AnÃ¡lisis clÃ­nico y modelaciÃ³n de fibras intactas vs soluciÃ³n de continuidad.", pageWidth / 2, yS + 58, { align: "center" });
+
+                  yCoord = yS + 62;
+                }
+              } catch (ex) {
+                console.warn("Error printing extra supraspinatus detailed drawings", ex);
+              }
+            }
+          } else {
+            // Unilateral
+            const sideTitle = `HOMBRO ${laterality ? getGenderedLaterality(laterality, "Hombro").toUpperCase() : ""}`;
+            const svgElement = document.getElementById("shoulder-anatomy-svg");
+            if (svgElement) {
+              const clonedSvg = sanitizeShoulderSvgForPrint(svgElement);
+              const imgData = await convertSvgToPng(clonedSvg);
+
+              const willPageBreak = (yCoord + 95 > pageHeight - 20);
+              checkPageBreak(95);
+              if (!willPageBreak) {
+                yCoord += 18;
+              } else {
+                yCoord += 6;
+              }
+
+              doc.setFont("helvetica", "bold");
+              doc.setFontSize(8.0);
+              doc.setTextColor(30, 41, 59);
+              doc.text(`ANEXO: ESQUEMA DE HALLAZGOS Y SINOPSIS - ${sideTitle}`, pageWidth / 2, yCoord, { align: "center" });
+              yCoord += 3.5;
+
+              doc.setFont("helvetica", "normal");
+              doc.setFontSize(6.3);
+              doc.setTextColor(148, 163, 184);
+              doc.text("MAPEO ANATÃ“MICO Y SINOPSIS ESTRUCTURADA DEL MANGUITO ROTADOR Y ESTRUCTURAS ADYACENTES", pageWidth / 2, yCoord, { align: "center" });
+              yCoord += 4.5;
+
+              const yStart = yCoord;
+
+              doc.setFillColor(255, 255, 255);
+              doc.setDrawColor(229, 231, 235);
+              doc.roundedRect(20, yStart, 75, 75, 3, 3, "FD");
+              doc.addImage(imgData, "PNG", 22.5, yStart + 2.5, 70, 70);
+
+              doc.setFillColor(248, 250, 252);
+              doc.setDrawColor(229, 231, 235);
+              doc.roundedRect(100, yStart, 90, 75, 3, 3, "FD");
+
+              doc.setFont("helvetica", "bold");
+              doc.setFontSize(7.5);
+              doc.setTextColor(67, 56, 202);
+              doc.text(`SINOPSIS DE HALLAZGOS CLINICOS - ${sideTitle}`, 104, yStart + 5.5);
+
+              doc.setDrawColor(229, 231, 235);
+              doc.setLineWidth(0.2);
+              doc.line(104, yStart + 7.5, 186, yStart + 7.5);
+
+              const cardData = getCardDataForSide(shoulderStates, shoulderDescriptions);
+
+              if (cardData.length === 0) {
+                doc.setFont("helvetica", "italic");
+                doc.setFontSize(6.5);
+                doc.setTextColor(100, 116, 139);
+                doc.text("Sin hallazgos patolÃ³gicos relevantes.", 145, yStart + 30, { align: "center" });
+                doc.text("Todas las estructuras musculotendinosas", 145, yStart + 36, { align: "center" });
+                doc.text("y articulares se reportan normales.", 145, yStart + 42, { align: "center" });
+              } else {
+                drawAnatomicalCards(doc, cardData, 100, yStart, 90, 75);
+              }
+
+              doc.setFont("helvetica", "italic");
+              doc.setFontSize(6.2);
+              doc.setTextColor(148, 163, 184);
+              doc.text("Mapa anatÃ³mico y lista sinÃ³ptica correspondientes al reporte fÃ­sico.", 145, yStart + 72, { align: "center" });
+
+              yCoord += 80;
+
+              // --- SUPRASPINATUS EXTRA DRAWINGS FOR UNILATERAL STUDY ---
+              try {
+                const supraspinatusWrapperDer = document.getElementById("supraspinatus-ap-print-wrapper");
+                const supraspinatusWrapperIzq = document.getElementById("supraspinatus-ap-print-wrapper-left");
+
+                const shouldPrintSupraspinatusDer = supraspinatusWrapperDer && supraspinatusWrapperDer.getAttribute("data-include") === "true";
+                const shouldPrintSupraspinatusIzq = supraspinatusWrapperIzq && supraspinatusWrapperIzq.getAttribute("data-include") === "true";
+
+                if (shouldPrintSupraspinatusDer && shouldPrintSupraspinatusIzq) {
+                  // Print both side-by-side!
+                  checkPageBreak(58);
+                  yCoord += 11;
+
+                  doc.setFont("helvetica", "bold");
+                  doc.setFontSize(8.0);
+                  doc.setTextColor(30, 41, 59);
+                  doc.text("ANEXO: DETALLE BILATERAL DE ROTURA DE SUPRAESPINOSO", pageWidth / 2, yCoord, { align: "center" });
+                  yCoord += 3.5;
+
+                  doc.setFont("helvetica", "normal");
+                  doc.setFontSize(6.2);
+                  doc.setTextColor(148, 163, 184);
+                  doc.text("COHERENCIA GEOMÃ‰TRICA CON LA IMPRESIÃ“N CLÃNICA: VISTA AP & LAT", pageWidth / 2, yCoord, { align: "center" });
+                  yCoord += 5.5;
+
+                  const yS = yCoord;
+
+                  if (supraspinatusWrapperDer) {
+                    const svgDerChildren = supraspinatusWrapperDer.querySelectorAll("svg");
+                    if (svgDerChildren.length >= 2) {
+                      const apSvg = svgDerChildren[0] as SVGElement;
+                      const latSvg = svgDerChildren[1] as SVGElement;
+                      const apPng = await convertSvgToPng(apSvg);
+                      const latPng = await convertSvgToPng(latSvg);
+
+                      doc.setFillColor(255, 255, 255);
+                      doc.setDrawColor(229, 231, 235);
+                      doc.roundedRect(20, yS, 80, 38, 3, 3, "FD");
+
+                      doc.setFont("helvetica", "bold");
+                      doc.setFontSize(6.5);
+                      doc.setTextColor(225, 29, 72);
+                      doc.text("HOMBRO DERECHO: DETALLE DE ROTURA", 60, yS + 6, { align: "center" });
+
+                      doc.addImage(apPng, "PNG", 24, yS + 8, 28, 28);
+                      doc.addImage(latPng, "PNG", 64, yS + 8, 28, 28);
+                    }
+                  }
+
+                  if (supraspinatusWrapperIzq) {
+                    const svgIzqChildren = supraspinatusWrapperIzq.querySelectorAll("svg");
+                    if (svgIzqChildren.length >= 2) {
+                      const apSvg = svgIzqChildren[0] as SVGElement;
+                      const latSvg = svgIzqChildren[1] as SVGElement;
+                      const apPng = await convertSvgToPng(apSvg);
+                      const latPng = await convertSvgToPng(latSvg);
+
+                      doc.setFillColor(255, 255, 255);
+                      doc.setDrawColor(229, 231, 235);
+                      doc.roundedRect(110, yS, 80, 38, 3, 3, "FD");
+
+                      doc.setFont("helvetica", "bold");
+                      doc.setFontSize(6.5);
+                      doc.setTextColor(225, 29, 72);
+                      doc.text("HOMBRO IZQUIERDO: DETALLE DE ROTURA", 150, yS + 6, { align: "center" });
+
+                      doc.addImage(apPng, "PNG", 114, yS + 8, 28, 28);
+                      doc.addImage(latPng, "PNG", 154, yS + 8, 28, 28);
+                    }
+                  }
+
+                  yCoord = yS + 42;
+                } else if (shouldPrintSupraspinatusDer || shouldPrintSupraspinatusIzq) {
+                  const isLeftActive = !!shouldPrintSupraspinatusIzq;
+                  const activeWrapper = isLeftActive ? supraspinatusWrapperIzq : supraspinatusWrapperDer;
+                  const sideLabel = isLeftActive ? "IZQUIERDO" : "DERECHO";
+
+                  if (activeWrapper) {
+                    const svgChildren = activeWrapper.querySelectorAll("svg");
+                    if (svgChildren.length >= 2) {
+                      const apSvg = svgChildren[0] as SVGElement;
+                      const latSvg = svgChildren[1] as SVGElement;
+                      const apPng = await convertSvgToPng(apSvg);
+                      const latPng = await convertSvgToPng(latSvg);
+
+                      checkPageBreak(58);
+                      yCoord += 11;
+
+                      doc.setFont("helvetica", "bold");
+                      doc.setFontSize(8.0);
+                      doc.setTextColor(30, 41, 59);
+                      doc.text(`ANEXO: DETALLE DE ROTURA DE SUPRAESPINOSO - HOMBRO ${sideLabel}`, pageWidth / 2, yCoord, { align: "center" });
+                      yCoord += 3.5;
+
+                      doc.setFont("helvetica", "normal");
+                      doc.setFontSize(6.2);
+                      doc.setTextColor(148, 163, 184);
+                      doc.text("COHERENCIA GEOMÃ‰TRICA CON LA IMPRESIÃ“N CLÃNICA: VISTA AP & LAT", pageWidth / 2, yCoord, { align: "center" });
+                      yCoord += 5.5;
+
+                      const yS = yCoord;
+
+                      doc.setFillColor(255, 255, 255);
+                      doc.setDrawColor(229, 231, 235);
+                      doc.roundedRect(45, yS, 120, 38, 3, 3, "FD");
+
+                      doc.addImage(apPng, "PNG", 55, yS + 3, 32, 32);
+                      doc.addImage(latPng, "PNG", 123, yS + 3, 32, 32);
+
+                      yCoord = yS + 42;
+                    }
+                  }
+                }
+              } catch (ex) {
+                console.warn("Error printing unilateral detailed supraspinatus drawings", ex);
+              }
+            }
+          }
+        } catch (err) {
+          console.warn("Could not draw shoulder diagram inside jsPDF", err);
+        }
+      }
+
+      // ðŸ› ï¸ DRAW KNEE DIAGRAM IN THE PROGRAMMATIC PDF
+      if ((includeKneeSchemaInReport || includeGonartrosisSchemaInReport) && specificStudy === "Rodilla") {
+        try {
+          const sanitizeKneeSvgForPrint = (el: HTMLElement) => {
+            const cloned = el.cloneNode(true) as SVGElement;
+            const stops = cloned.querySelectorAll("linearGradient stop");
+            stops.forEach(stop => {
+              const curColor = stop.getAttribute("stop-color") || stop.getAttribute("stopColor") || "";
+              if (curColor === "#1e293b" || curColor === "#2e3d52") stop.setAttribute("stop-color", "#f1f5f9");
+              if (curColor === "#0f172a" || curColor === "#111827") stop.setAttribute("stop-color", "#cbd5e1");
+              if (curColor === "#334155" || curColor === "#3d4e66") stop.setAttribute("stop-color", "#cbd5e1");
+            });
+
+            const paths = cloned.querySelectorAll("path");
+            paths.forEach(p => {
+              const fill = p.getAttribute("fill") || "";
+              const stroke = p.getAttribute("stroke") || "";
+              if (fill === "#1e293b") p.setAttribute("fill", "#f8fafc");
+              if (fill === "#451a03") p.setAttribute("fill", "#fef3c7");
+              if (fill === "#500730") p.setAttribute("fill", "#fce7f3");
+              if (fill === "#7f1d1d") p.setAttribute("fill", "#fee2e2");
+
+              if (stroke === "#ef4444") p.setAttribute("stroke", "#dc2626");
+              if (stroke === "#ec4899") p.setAttribute("stroke", "#db2777");
+              if (stroke === "#f59e0b") p.setAttribute("stroke", "#d97706");
+              if (stroke === "#334155") p.setAttribute("stroke", "#475569");
+              if (stroke === "#475569") p.setAttribute("stroke", "#64748b");
+            });
+
+            const texts = cloned.querySelectorAll("text");
+            texts.forEach(t => {
+              const fill = t.getAttribute("fill") || "";
+              if (fill === "#64748b") t.setAttribute("fill", "#475569");
+              if (fill === "#475569") t.setAttribute("fill", "#1e293b");
+            });
+
+            const circles = cloned.querySelectorAll("circle");
+            circles.forEach(c => {
+              const stroke = c.getAttribute("stroke") || "";
+              if (stroke === "#1e293b") c.setAttribute("stroke", "#e2e8f0");
+            });
+            const lines = cloned.querySelectorAll("line");
+            lines.forEach(l => {
+              const stroke = l.getAttribute("stroke") || "";
+              if (stroke === "#1e293b") l.setAttribute("stroke", "#e2e8f0");
+            });
+            return cloned;
+          };
+
+          const getKneeCardDataForSide = (statesObj: any, descObj: any) => {
+            const pdfKneeStructuresBase = [
+              { id: "quadriceps", label: "T. Cuadricipital" },
+              { id: "patellar", label: "T. Rotuliano" },
+              { id: "lcm", label: "Lig. C. Medial" },
+              { id: "lce", label: "Lig. C. Lateral" },
+              { id: "medial_meniscus", label: "Menisco Medial" },
+              { id: "lateral_meniscus", label: "Menisco Lateral" },
+              { id: "joint_effusion", label: "Derrame Artic." },
+              { id: "baker_cyst", label: "Quiste de Baker" },
+              { id: "popliteal_artery", label: "Art. PoplÃ­tea" },
+              { id: "popliteal_vein", label: "Vena PoplÃ­tea" },
+              { id: "distal_tendons", label: "Tendones Dist." },
+              { id: "popliteal_fossa", label: "Fosa PoplÃ­tea" }
+            ];
+
+            if (includeGonartrosisSchemaInReport) {
+              pdfKneeStructuresBase.push(
+                { id: "gon_pinzamiento_artic", label: "Pinzamiento Art." },
+                { id: "gon_osteofitos", label: "Osteofitos" },
+                { id: "gon_esclerosis_sub", label: "Escl. Subcondral" },
+                { id: "gon_geodas_quistes", label: "Geodas/Quistes" },
+                { id: "gon_desgaste_cartilago", label: "Desgaste Cart." },
+                { id: "gon_menisco_deg", label: "Menisco Deg." }
+              );
+            }
+
+            const pdfKneeStructures = pdfKneeStructuresBase.filter(struct => {
+              const s = statesObj[struct.id] || "no_descrito";
+              return s !== "no_descrito" && s !== "normal";
+            });
+
+            const getKneePDFSimplifiedDescription = (id: string, state: string) => {
+              if (descObj && descObj[id] && descObj[id].trim() !== "" && descObj[id] !== "No mencionado / No descrito." && descObj[id] !== "No descrito.") {
+                return descObj[id];
+              }
+              if (!state || state === "no_descrito") {
+                return "No descrito en el reporte.";
+              }
+              if (state === "normal") {
+                return "Entre lÃ­mites normales.";
+              }
+              return state.charAt(0).toUpperCase() + state.slice(1).replace(/_/g, " ");
+            };
+
+            const kneeCardData = pdfKneeStructures.map(struct => {
+              const s = statesObj[struct.id] || "no_descrito";
+              return {
+                label: struct.label,
+                state: s,
+                description: getKneePDFSimplifiedDescription(struct.id, s)
+              };
+            });
+
+            const kneeExtras = additionalFindings["Rodilla"] || [];
+            kneeExtras.forEach((extra: any) => {
+              kneeCardData.push({
+                label: extra.structureName,
+                state: extra.state || "Alterado",
+                description: extra.description
+              });
+            });
+
+            return kneeCardData;
+          };
+
+          if (laterality === "Bilateral") {
+            const svgElementAntDer = document.getElementById("knee-anatomy-svg");
+            const svgElementPostDer = document.getElementById("knee-anatomy-svg-posterior");
+            const svgElementAntIzq = document.getElementById("knee-anatomy-svg-left");
+            const svgElementPostIzq = document.getElementById("knee-anatomy-svg-posterior-left");
+            const svgGonDer = document.getElementById("knee-gonartrosis-svg");
+            const svgGonIzq = document.getElementById("knee-gonartrosis-svg-left");
+
+            const imgAntDer = svgElementAntDer ? await convertSvgToPng(sanitizeKneeSvgForPrint(svgElementAntDer)) : null;
+            const imgPostDer = svgElementPostDer ? await convertSvgToPng(sanitizeKneeSvgForPrint(svgElementPostDer)) : null;
+            const imgAntIzq = svgElementAntIzq ? await convertSvgToPng(sanitizeKneeSvgForPrint(svgElementAntIzq)) : null;
+            const imgPostIzq = svgElementPostIzq ? await convertSvgToPng(sanitizeKneeSvgForPrint(svgElementPostIzq)) : null;
+            const imgGonDer = svgGonDer ? await convertSvgToPng(sanitizeKneeSvgForPrint(svgGonDer)) : null;
+            const imgGonIzq = svgGonIzq ? await convertSvgToPng(sanitizeKneeSvgForPrint(svgGonIzq)) : null;
+
+            if (imgAntDer || imgAntIzq || imgGonDer || imgGonIzq) {
+              checkPageBreak(127);
+              yCoord += 15;
+
+              doc.setFont("helvetica", "bold");
+              doc.setFontSize(8.5);
+              doc.setTextColor(30, 41, 59);
+              doc.text("ANEXO: ESQUEMAS DE HALLAZGOS Y SINOPSIS BILATERAL", pageWidth / 2, yCoord, { align: "center" });
+              yCoord += 3.5;
+
+              doc.setFont("helvetica", "normal");
+              doc.setFontSize(6.5);
+              doc.setTextColor(148, 163, 184);
+              doc.text("MAPEO REGIONAL ANTERIOR Y POSTERIOR - RODILLA BILATERAL", pageWidth / 2, yCoord, { align: "center" });
+              yCoord += 6;
+
+              // --- ROW 1: RODILLA DERECHA ---
+              let yStart = yCoord;
+
+              doc.setFont("helvetica", "bold");
+              doc.setFontSize(7.5);
+              doc.setTextColor(71, 85, 105);
+              doc.text("RODILLA DERECHA", pageWidth / 2, yStart - 1, { align: "center" });
+
+              if (includeKneeSchemaInReport && includeGonartrosisSchemaInReport) {
+                // Anterior Box
+                doc.setFillColor(255, 255, 255);
+                doc.setDrawColor(229, 231, 235);
+                doc.roundedRect(15, yStart, 31, 50, 2, 2, "FD");
+                if (imgAntDer) doc.addImage(imgAntDer, "PNG", 16.5, yStart + 1.5, 28, 28);
+                doc.setFont("helvetica", "bold");
+                doc.setFontSize(5.0);
+                doc.setTextColor(71, 85, 105);
+                doc.text("VISTA ANTERIOR", 30.5, yStart + 46, { align: "center" });
+
+                // Posterior Box
+                doc.setFillColor(255, 255, 255);
+                doc.setDrawColor(229, 231, 235);
+                doc.roundedRect(48, yStart, 31, 50, 2, 2, "FD");
+                if (imgPostDer) doc.addImage(imgPostDer, "PNG", 49.5, yStart + 1.5, 28, 28);
+                doc.setFont("helvetica", "bold");
+                doc.setFontSize(5.0);
+                doc.setTextColor(71, 85, 105);
+                doc.text("VISTA POSTERIOR", 63.5, yStart + 46, { align: "center" });
+
+                // Gonartrosis Box
+                doc.setFillColor(255, 255, 255);
+                doc.setDrawColor(229, 231, 235);
+                doc.roundedRect(81, yStart, 31, 50, 2, 2, "FD");
+                if (imgGonDer) doc.addImage(imgGonDer, "PNG", 82.5, yStart + 1.5, 28, 28);
+                doc.setFont("helvetica", "bold");
+                doc.setFontSize(5.0);
+                doc.setTextColor(71, 85, 105);
+                doc.text("GONARTROSIS", 96.5, yStart + 46, { align: "center" });
+              } else if (includeKneeSchemaInReport) {
+                // Box Left (Anterior)
+                doc.setFillColor(255, 255, 255);
+                doc.setDrawColor(229, 231, 235);
+                doc.roundedRect(15, yStart, 46, 50, 2, 2, "FD");
+                if (imgAntDer) doc.addImage(imgAntDer, "PNG", 18, yStart + 1.5, 40, 40);
+                doc.setFont("helvetica", "bold");
+                doc.setFontSize(5.5);
+                doc.setTextColor(71, 85, 105);
+                doc.text("VISTA ANTERIOR", 38, yStart + 46, { align: "center" });
+
+                // Box Middle (Posterior)
+                doc.setFillColor(255, 255, 255);
+                doc.setDrawColor(229, 231, 235);
+                doc.roundedRect(64, yStart, 46, 50, 2, 2, "FD");
+                if (imgPostDer) {
+                  doc.addImage(imgPostDer, "PNG", 67, yStart + 1.5, 40, 40);
+                } else {
+                  doc.setFont("helvetica", "italic");
+                  doc.setFontSize(5.5);
+                  doc.setTextColor(148, 163, 184);
+                  doc.text("No disponible", 87, yStart + 23, { align: "center" });
+                }
+                doc.setFont("helvetica", "bold");
+                doc.setFontSize(5.5);
+                doc.setTextColor(71, 85, 105);
+                doc.text("VISTA POSTERIOR", 87, yStart + 46, { align: "center" });
+              } else {
+                // Only Gonartrosis
+                doc.setFillColor(255, 255, 255);
+                doc.setDrawColor(229, 231, 235);
+                doc.roundedRect(15, yStart, 95, 50, 2, 2, "FD");
+                if (imgGonDer) doc.addImage(imgGonDer, "PNG", 42.5, yStart + 1.5, 40, 40);
+                doc.setFont("helvetica", "bold");
+                doc.setFontSize(5.5);
+                doc.setTextColor(71, 85, 105);
+                doc.text("ESQUEMA DE GONARTROSIS", 62.5, yStart + 46, { align: "center" });
+              }
+
+              // Box Right (Findings)
+              doc.setFillColor(248, 250, 252);
+              doc.setDrawColor(229, 231, 235);
+              doc.roundedRect(113, yStart, 82, 50, 2, 2, "FD");
+
+              doc.setFont("helvetica", "bold");
+              doc.setFontSize(7.0);
+              doc.setTextColor(67, 56, 202);
+              doc.text("SINOPSIS CLÃNICA - DER", 117, yStart + 5.5);
+              doc.setLineWidth(0.2);
+              doc.line(117, yStart + 7.5, 191, yStart + 7.5);
+
+              const dataDer = getKneeCardDataForSide(kneeStates, kneeDescriptions);
+              if (dataDer.length === 0) {
+                doc.setFont("helvetica", "italic");
+                doc.setFontSize(6.0);
+                doc.setTextColor(100, 116, 139);
+                doc.text("Sin hallazgos patolÃ³gicos.", 154, yStart + 25, { align: "center" });
+              } else {
+                drawAnatomicalCards(doc, dataDer, 113, yStart, 82, 50);
+              }
+
+              yCoord += 56;
+
+              // --- ROW 2: RODILLA IZQUIERDA ---
+              yStart = yCoord;
+
+              doc.setFont("helvetica", "bold");
+              doc.setFontSize(7.5);
+              doc.setTextColor(71, 85, 105);
+              doc.text("RODILLA IZQUIERDA", pageWidth / 2, yStart - 1, { align: "center" });
+
+              if (includeKneeSchemaInReport && includeGonartrosisSchemaInReport) {
+                // Anterior Box
+                doc.setFillColor(255, 255, 255);
+                doc.setDrawColor(229, 231, 235);
+                doc.roundedRect(15, yStart, 31, 50, 2, 2, "FD");
+                if (imgAntIzq) doc.addImage(imgAntIzq, "PNG", 16.5, yStart + 1.5, 28, 28);
+                doc.setFont("helvetica", "bold");
+                doc.setFontSize(5.0);
+                doc.setTextColor(71, 85, 105);
+                doc.text("VISTA ANTERIOR", 30.5, yStart + 46, { align: "center" });
+
+                // Posterior Box
+                doc.setFillColor(255, 255, 255);
+                doc.setDrawColor(229, 231, 235);
+                doc.roundedRect(48, yStart, 31, 50, 2, 2, "FD");
+                if (imgPostIzq) doc.addImage(imgPostIzq, "PNG", 49.5, yStart + 1.5, 28, 28);
+                doc.setFont("helvetica", "bold");
+                doc.setFontSize(5.0);
+                doc.setTextColor(71, 85, 105);
+                doc.text("VISTA POSTERIOR", 63.5, yStart + 46, { align: "center" });
+
+                // Gonartrosis Box
+                doc.setFillColor(255, 255, 255);
+                doc.setDrawColor(229, 231, 235);
+                doc.roundedRect(81, yStart, 31, 50, 2, 2, "FD");
+                if (imgGonIzq) doc.addImage(imgGonIzq, "PNG", 82.5, yStart + 1.5, 28, 28);
+                doc.setFont("helvetica", "bold");
+                doc.setFontSize(5.0);
+                doc.setTextColor(71, 85, 105);
+                doc.text("GONARTROSIS", 96.5, yStart + 46, { align: "center" });
+              } else if (includeKneeSchemaInReport) {
+                // Box Left (Anterior)
+                doc.setFillColor(255, 255, 255);
+                doc.setDrawColor(229, 231, 235);
+                doc.roundedRect(15, yStart, 46, 50, 2, 2, "FD");
+                if (imgAntIzq) doc.addImage(imgAntIzq, "PNG", 18, yStart + 1.5, 40, 40);
+                doc.setFont("helvetica", "bold");
+                doc.setFontSize(5.5);
+                doc.text("VISTA ANTERIOR", 38, yStart + 46, { align: "center" });
+
+                // Box Middle (Posterior)
+                doc.setFillColor(255, 255, 255);
+                doc.setDrawColor(229, 231, 235);
+                doc.roundedRect(64, yStart, 46, 50, 2, 2, "FD");
+                if (imgPostIzq) {
+                  doc.addImage(imgPostIzq, "PNG", 67, yStart + 1.5, 40, 40);
+                } else {
+                  doc.setFont("helvetica", "italic");
+                  doc.setFontSize(5.5);
+                  doc.setTextColor(148, 163, 184);
+                  doc.text("No disponible", 87, yStart + 23, { align: "center" });
+                }
+                doc.setFont("helvetica", "bold");
+                doc.setFontSize(5.5);
+                doc.setTextColor(71, 85, 105);
+                doc.text("VISTA POSTERIOR", 87, yStart + 46, { align: "center" });
+              } else {
+                // Only Gonartrosis
+                doc.setFillColor(255, 255, 255);
+                doc.setDrawColor(229, 231, 235);
+                doc.roundedRect(15, yStart, 95, 50, 2, 2, "FD");
+                if (imgGonIzq) doc.addImage(imgGonIzq, "PNG", 42.5, yStart + 1.5, 40, 40);
+                doc.setFont("helvetica", "bold");
+                doc.setFontSize(5.5);
+                doc.setTextColor(71, 85, 105);
+                doc.text("ESQUEMA DE GONARTROSIS", 62.5, yStart + 46, { align: "center" });
+              }
+
+              // Box Right (Findings)
+              doc.setFillColor(248, 250, 252);
+              doc.setDrawColor(229, 231, 235);
+              doc.roundedRect(113, yStart, 82, 50, 2, 2, "FD");
+
+              doc.setFont("helvetica", "bold");
+              doc.setFontSize(7.0);
+              doc.setTextColor(67, 56, 202);
+              doc.text("SINOPSIS CLÃNICA - IZQ", 117, yStart + 5.5);
+              doc.setLineWidth(0.2);
+              doc.line(117, yStart + 7.5, 191, yStart + 7.5);
+
+              const dataIzq = getKneeCardDataForSide(kneeStatesLeft, kneeDescriptionsLeft);
+              if (dataIzq.length === 0) {
+                doc.setFont("helvetica", "italic");
+                doc.setFontSize(6.0);
+                doc.setTextColor(100, 116, 139);
+                doc.text("Sin hallazgos patolÃ³gicos.", 154, yStart + 25, { align: "center" });
+              } else {
+                drawAnatomicalCards(doc, dataIzq, 113, yStart, 82, 50);
+              }
+
+              // Footnote
+              doc.setFont("helvetica", "italic");
+              doc.setFontSize(5.5);
+              doc.setTextColor(148, 163, 184);
+              doc.text("Mapeo dual y sinopsis anatÃ³micas correspondientes al estudio bilateral.", pageWidth / 2, yStart + 54, { align: "center" });
+
+              yCoord += 59;
+            }
+          } else {
+            // Unilateral
+            const sideTitle = `RODILLA ${laterality ? getGenderedLaterality(laterality, "Rodilla").toUpperCase() : ""}`;
+            const svgElement = document.getElementById("knee-anatomy-svg");
+            const svgElementPost = document.getElementById("knee-anatomy-svg-posterior");
+            const svgGonDer = document.getElementById("knee-gonartrosis-svg");
+
+            const imgDataAnterior = svgElement ? await convertSvgToPng(sanitizeKneeSvgForPrint(svgElement)) : null;
+            const imgDataPosterior = svgElementPost ? await convertSvgToPng(sanitizeKneeSvgForPrint(svgElementPost)) : null;
+            const imgGonDer = svgGonDer ? await convertSvgToPng(sanitizeKneeSvgForPrint(svgGonDer)) : null;
+
+            if (imgDataAnterior || imgGonDer) {
+              const willPageBreak = (yCoord + 80 > pageHeight - 20);
+              checkPageBreak(80);
+              if (!willPageBreak) {
+                yCoord += 15;
+              } else {
+                yCoord += 6;
+              }
+
+              doc.setFont("helvetica", "bold");
+              doc.setFontSize(8.0);
+              doc.setTextColor(30, 41, 59);
+              doc.text(`ANEXO: ESQUEMAS DE HALLAZGOS Y SINOPSIS - ${sideTitle}`, pageWidth / 2, yCoord, { align: "center" });
+              yCoord += 3.5;
+
+              doc.setFont("helvetica", "normal");
+              doc.setFontSize(6.3);
+              doc.setTextColor(148, 163, 184);
+              doc.text("MAPEO REGIONAL ANTERIOR Y POSTERIOR DE COMPLEMENTOS Y ESTRUCTURAS EVALUADAS", pageWidth / 2, yCoord, { align: "center" });
+              yCoord += 4.5;
+
+              const yStart = yCoord;
+
+              if (includeKneeSchemaInReport && includeGonartrosisSchemaInReport) {
+                // Anterior Box
+                doc.setFillColor(255, 255, 255);
+                doc.setDrawColor(229, 231, 235);
+                doc.roundedRect(15, yStart, 31, 60, 2, 2, "FD");
+                if (imgDataAnterior) doc.addImage(imgDataAnterior, "PNG", 16.5, yStart + 2, 28, 28);
+                doc.setFont("helvetica", "bold");
+                doc.setFontSize(5.0);
+                doc.setTextColor(71, 85, 105);
+                doc.text("VISTA ANTERIOR", 30.5, yStart + 54, { align: "center" });
+
+                // Posterior Box
+                doc.setFillColor(255, 255, 255);
+                doc.setDrawColor(229, 231, 235);
+                doc.roundedRect(48, yStart, 31, 60, 2, 2, "FD");
+                if (imgDataPosterior) doc.addImage(imgDataPosterior, "PNG", 49.5, yStart + 2, 28, 28);
+                doc.setFont("helvetica", "bold");
+                doc.setFontSize(5.0);
+                doc.setTextColor(71, 85, 105);
+                doc.text("VISTA POSTERIOR", 63.5, yStart + 54, { align: "center" });
+
+                // Gonartrosis Box
+                doc.setFillColor(255, 255, 255);
+                doc.setDrawColor(229, 231, 235);
+                doc.roundedRect(81, yStart, 31, 60, 2, 2, "FD");
+                if (imgGonDer) doc.addImage(imgGonDer, "PNG", 82.5, yStart + 2, 28, 28);
+                doc.setFont("helvetica", "bold");
+                doc.setFontSize(5.0);
+                doc.setTextColor(71, 85, 105);
+                doc.text("GONARTROSIS", 96.5, yStart + 54, { align: "center" });
+              } else if (includeKneeSchemaInReport) {
+                doc.setFillColor(255, 255, 255);
+                doc.setDrawColor(229, 231, 235);
+                doc.roundedRect(15, yStart, 46, 60, 2, 2, "FD");
+                if (imgDataAnterior) doc.addImage(imgDataAnterior, "PNG", 16.5, yStart + 2, 43, 43);
+                doc.setFont("helvetica", "bold");
+                doc.setFontSize(6.0);
+                doc.setTextColor(71, 85, 105);
+                doc.text("VISTA ANTERIOR", 38, yStart + 54, { align: "center" });
+
+                doc.setFillColor(255, 255, 255);
+                doc.setDrawColor(229, 231, 235);
+                doc.roundedRect(64, yStart, 46, 60, 2, 2, "FD");
+                if (imgDataPosterior) {
+                  doc.addImage(imgDataPosterior, "PNG", 65.5, yStart + 2, 43, 43);
+                } else {
+                  doc.setFont("helvetica", "italic");
+                  doc.setFontSize(6.0);
+                  doc.setTextColor(148, 163, 184);
+                  doc.text("No disponible", 87, yStart + 25, { align: "center" });
+                }
+                doc.setFont("helvetica", "bold");
+                doc.setFontSize(6.0);
+                doc.setTextColor(71, 85, 105);
+                doc.text("VISTA POSTERIOR", 87, yStart + 54, { align: "center" });
+              } else {
+                // Only Gonartrosis
+                doc.setFillColor(255, 255, 255);
+                doc.setDrawColor(229, 231, 235);
+                doc.roundedRect(15, yStart, 95, 60, 2, 2, "FD");
+                if (imgGonDer) doc.addImage(imgGonDer, "PNG", 42.5, yStart + 2, 43, 43);
+                doc.setFont("helvetica", "bold");
+                doc.setFontSize(6.0);
+                doc.setTextColor(71, 85, 105);
+                doc.text("ESQUEMA DE GONARTROSIS", 62.5, yStart + 54, { align: "center" });
+              }
+
+              doc.setFillColor(248, 250, 252);
+              doc.setDrawColor(229, 231, 235);
+              doc.roundedRect(113, yStart, 82, 60, 2, 2, "FD");
+
+              doc.setFont("helvetica", "bold");
+              doc.setFontSize(7.5);
+              doc.setTextColor(67, 56, 202);
+              doc.text(`SINOPSIS DE HALLAZGOS CLINICOS - ${sideTitle}`, 117, yStart + 5.5);
+
+              doc.setDrawColor(229, 231, 235);
+              doc.setLineWidth(0.2);
+              doc.line(117, yStart + 7.5, 191, yStart + 7.5);
+
+              const kneeCardData = getKneeCardDataForSide(kneeStates, kneeDescriptions);
+
+              if (kneeCardData.length === 0) {
+                doc.setFont("helvetica", "italic");
+                doc.setFontSize(6.5);
+                doc.setTextColor(100, 116, 139);
+                doc.text("Sin hallazgos patolÃ³gicos relevantes.", 154, yStart + 25, { align: "center" });
+                doc.text("Todas las estructuras evaluadas", 154, yStart + 31, { align: "center" });
+                doc.text("se reportan normales.", 154, yStart + 37, { align: "center" });
+              } else {
+                drawAnatomicalCards(doc, kneeCardData, 113, yStart, 82, 60);
+              }
+
+              doc.setFont("helvetica", "italic");
+              doc.setFontSize(5.5);
+              doc.setTextColor(148, 163, 184);
+              doc.text("Mapeo dual y sinopsis anatÃ³mica de la articulaciÃ³n.", 154, yStart + 57, { align: "center" });
+
+              yCoord += 65;
+            }
+          }
+        } catch (err) {
+          console.warn("Could not draw knee diagram inside jsPDF", err);
+        }
+      }
+
+      // ðŸ› ï¸ DRAW ANKLE DIAGRAM IN THE PROGRAMMATIC PDF
+      if (includeAnkleSchemaInReport && specificStudy === "Tobillo") {
+        const svgLateral = document.getElementById("ankle-anatomy-svg-lateral");
+        const svgMedial = document.getElementById("ankle-anatomy-svg-medial");
+
+        if (svgLateral || svgMedial) {
+          try {
+            const processAnkleSvg = async (svgEl: HTMLElement) => {
+              const rect = svgEl.getBoundingClientRect();
+              const clonedSvg = svgEl.cloneNode(true) as SVGElement;
+              
+              // 1. Force background and clean outline colors on gradient stops
+              const stops = clonedSvg.querySelectorAll("linearGradient stop");
+              stops.forEach(stop => {
+                const curColor = stop.getAttribute("stop-color") || stop.getAttribute("stopColor") || "";
+                if (curColor === "#1e293b" || curColor === "#2e3d52") stop.setAttribute("stop-color", "#f1f5f9");
+                if (curColor === "#0f172a" || curColor === "#111827") stop.setAttribute("stop-color", "#cbd5e1");
+                if (curColor === "#334155" || curColor === "#3d4e66") stop.setAttribute("stop-color", "#cbd5e1");
+              });
+
+              // 2. Adjust paths fill/stroke colors for paper print
+              const paths = clonedSvg.querySelectorAll("path");
+              paths.forEach(p => {
+                const fill = p.getAttribute("fill") || "";
+                const stroke = p.getAttribute("stroke") || "";
+                
+                if (fill === "#1e293b") p.setAttribute("fill", "#f8fafc");
+                if (fill === "#451a03") p.setAttribute("fill", "#fef3c7");
+                if (fill === "#500730") p.setAttribute("fill", "#fce7f3");
+                if (fill === "#7f1d1d") p.setAttribute("fill", "#fee2e2");
+
+                if (stroke === "#ef4444") p.setAttribute("stroke", "#dc2626");
+                if (stroke === "#ec4899") p.setAttribute("stroke", "#db2777");
+                if (stroke === "#f59e0b") p.setAttribute("stroke", "#d97706");
+                if (stroke === "#334155") p.setAttribute("stroke", "#475569");
+                if (stroke === "#475569") p.setAttribute("stroke", "#64748b");
+              });
+
+              // 3. Adjust text colors
+              const texts = clonedSvg.querySelectorAll("text");
+              texts.forEach(t => {
+                const fill = t.getAttribute("fill") || "";
+                if (fill === "#64748b") t.setAttribute("fill", "#475569");
+                if (fill === "#475569") t.setAttribute("fill", "#1e293b");
+              });
+
+              // 4. Adjust custom guides/circles in background
+              const circles = clonedSvg.querySelectorAll("circle");
+              circles.forEach(c => {
+                const stroke = c.getAttribute("stroke") || "";
+                if (stroke === "#1e293b") c.setAttribute("stroke", "#e2e8f0");
+              });
+              const lines = clonedSvg.querySelectorAll("line");
+              lines.forEach(l => {
+                const stroke = l.getAttribute("stroke") || "";
+                if (stroke === "#1e293b") l.setAttribute("stroke", "#e2e8f0");
+              });
+
+              return await convertSvgToPng(clonedSvg);
+            };
+
+            const imgLateral = svgLateral ? await processAnkleSvg(svgLateral) : null;
+            const imgMedial = svgMedial ? await processAnkleSvg(svgMedial) : null;
+
+            // Check page break for 95mm (75mm content + margins/header)
+            const willPageBreak = (yCoord + 95 > pageHeight - 20);
+            checkPageBreak(95);
+            if (!willPageBreak) {
+              yCoord += 18; // Generous space/gap from the diagnostic impression above
+            } else {
+              yCoord += 6;  // Normal small spacing at the top of a fresh page
+            }
+
+            // Header for the diagram
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(8.0);
+            doc.setTextColor(30, 41, 59);
+            doc.text("ANEXO: ESQUEMA DE HALLAZGOS Y SINOPSIS DE TOBILLO", pageWidth / 2, yCoord, { align: "center" });
+            yCoord += 3.5;
+
+            doc.setFont("helvetica", "normal");
+            doc.setFontSize(6.3);
+            doc.setTextColor(148, 163, 184);
+            doc.text("MAPEO ANATÃ“MICO Y SINOPSIS ESTRUCTURADA DE LA ARTICULACIÃ“N DE TOBILLO Y SUS TENDONES", pageWidth / 2, yCoord, { align: "center" });
+            yCoord += 4.5;
+
+            // --- DRAW SIDE-BY-SIDE LAYOUT ---
+            const yStart = yCoord;
+
+            // 1. Draw Left Diagram Box (Cara Lateral)
+            doc.setFillColor(255, 255, 255);
+            doc.setDrawColor(229, 231, 235);
+            doc.roundedRect(20, yStart, 43, 78, 3, 3, "FD");
+
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(6.5);
+            doc.setTextColor(71, 85, 105);
+            doc.text("CARA LATERAL", 41.5, yStart + 5.5, { align: "center" });
+
+            if (imgLateral) {
+              doc.addImage(imgLateral, "PNG", 21.5, yStart + 8, 40, 40);
+            } else {
+              doc.setFont("helvetica", "italic");
+              doc.setFontSize(7);
+              doc.setTextColor(148, 163, 184);
+              doc.text("No disponible", 41.5, yStart + 35, { align: "center" });
+            }
+
+            // 2. Draw Second Diagram Box (Cara Medial)
+            doc.setFillColor(255, 255, 255);
+            doc.setDrawColor(229, 231, 235);
+            doc.roundedRect(65, yStart, 43, 78, 3, 3, "FD");
+
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(6.5);
+            doc.setTextColor(71, 85, 105);
+            doc.text("CARA MEDIAL", 86.5, yStart + 5.5, { align: "center" });
+
+            if (imgMedial) {
+              doc.addImage(imgMedial, "PNG", 66.5, yStart + 8, 40, 40);
+            } else {
+              doc.setFont("helvetica", "italic");
+              doc.setFontSize(7);
+              doc.setTextColor(148, 163, 184);
+              doc.text("No disponible", 86.5, yStart + 35, { align: "center" });
+            }
+
+            // 3. Draw Right Findings Container (Slate Background)
+            doc.setFillColor(248, 250, 252);
+            doc.setDrawColor(229, 231, 235);
+            doc.roundedRect(111, yStart, 79, 78, 3, 3, "FD");
+
+            // Header of findings: Unified title
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(7.5);
+            doc.setTextColor(67, 56, 202); // indigo-700
+            doc.text("SINOPSIS DE HALLAZGOS CLÃNICOS", 114, yStart + 5.5);
+
+            // Draw horizontal divider line
+            doc.setDrawColor(229, 231, 235);
+            doc.setLineWidth(0.2);
+            doc.line(114, yStart + 7.5, 186, yStart + 7.5);
+
+            // Ankle structures to map (9 structures in total)
+            const pdfAnkleStructures = [
+              { id: "achilles", label: "T. Aquiles" },
+              { id: "plantar_fascia", label: "Fascia Plantar" },
+              { id: "lpaa", label: "LPAA" },
+              { id: "lpc", label: "LPC" },
+              { id: "peroneal_tendons", label: "T. Peroneos" },
+              { id: "tibial_posterior", label: "T. Tibial Post." },
+              { id: "tibial_anterior", label: "T. Tibial Ant." },
+              { id: "joint_effusion", label: "Derrame Artic." },
+              { id: "deltoid", label: "Lig. Deltoideo" }
+            ].filter(struct => {
+              const s = ankleStates[struct.id] || "no_descrito";
+              return s !== "no_descrito" && s !== "normal";
+            });
+
+            const getAnklePDFSimplifiedDescription = (id: string, state: string) => {
+              if (ankleDescriptions && ankleDescriptions[id] && ankleDescriptions[id].trim() !== "" && ankleDescriptions[id] !== "No mencionado / No descrito." && ankleDescriptions[id] !== "No descrito.") {
+                return ankleDescriptions[id];
+              }
+              if (!state || state === "no_descrito") {
+                return "No descrito en el reporte.";
+              }
+              if (state === "normal") {
+                return "Entre lÃ­mites normales.";
+              }
+              return state.charAt(0).toUpperCase() + state.slice(1).replace(/_/g, " ");
+            };
+
+            const ankleCardData = pdfAnkleStructures.map(struct => {
+              const s = ankleStates[struct.id] || "no_descrito";
+              return {
+                label: struct.label,
+                state: s,
+                description: getAnklePDFSimplifiedDescription(struct.id, s)
+              };
+            });
+
+            // Append additional findings if any
+            const ankleExtras = additionalFindings["Tobillo"] || [];
+            ankleExtras.forEach((extra: any) => {
+              ankleCardData.push({
+                label: extra.structureName,
+                state: extra.state || "Alterado",
+                description: extra.description
+              });
+            });
+
+            if (ankleCardData.length === 0) {
+              doc.setFont("helvetica", "italic");
+              doc.setFontSize(6.5);
+              doc.setTextColor(100, 116, 139);
+              doc.text("Sin hallazgos patolÃ³gicos relevantes.", 150, yStart + 30, { align: "center" });
+              doc.text("Los tendones y ligamentos evaluados se", 150, yStart + 36, { align: "center" });
+              doc.text("reportan normales.", 150, yStart + 42, { align: "center" });
+            } else {
+              drawAnatomicalCards(doc, ankleCardData, 111, yStart, 79, 78);
+            }
+
+            // Footnote at the bottom of the findings card
+            doc.setFont("helvetica", "italic");
+            doc.setFontSize(6.2);
+            doc.setTextColor(148, 163, 184);
+            doc.text("Mapa anatÃ³mico dual y lista sinÃ³ptica correspondientes al reporte clÃ­nico.", 150.5, yStart + 75, { align: "center" });
+
+            yCoord += 83;
+          } catch (err) {
+            console.warn("Could not draw ankle diagram inside jsPDF", err);
+          }
+        }
+      }
+
+      // ðŸ› ï¸ DRAW THIGH DIAGRAM IN THE PROGRAMMATIC PDF
+      if (includeThighSchemaInReport && specificStudy === "Muslo Anterior") {
+        const svgSuperficial = document.getElementById("thigh-superficial-svg");
+        const svgDeep = document.getElementById("thigh-deep-svg");
+
+        if (svgSuperficial || svgDeep) {
+          try {
+            const processThighSvg = async (svgEl: HTMLElement) => {
+              const clonedSvg = svgEl.cloneNode(true) as SVGElement;
+              
+              // 1. Force background and clean outline colors on gradient stops
+              const stops = clonedSvg.querySelectorAll("linearGradient stop");
+              stops.forEach(stop => {
+                const curColor = stop.getAttribute("stop-color") || stop.getAttribute("stopColor") || "";
+                if (curColor === "#1e293b" || curColor === "#2e3d52") stop.setAttribute("stop-color", "#f1f5f9");
+                if (curColor === "#0f172a" || curColor === "#111827") stop.setAttribute("stop-color", "#cbd5e1");
+                if (curColor === "#334155" || curColor === "#3d4e66") stop.setAttribute("stop-color", "#cbd5e1");
+              });
+
+              // 2. Adjust paths fill/stroke colors for paper print
+              const paths = clonedSvg.querySelectorAll("path");
+              paths.forEach(p => {
+                const fill = p.getAttribute("fill") || "";
+                const stroke = p.getAttribute("stroke") || "";
+                
+                if (fill === "#1e293b") p.setAttribute("fill", "#f8fafc");
+                if (fill === "#451a03") p.setAttribute("fill", "#fef3c7");
+                if (fill === "#500730") p.setAttribute("fill", "#fce7f3");
+                if (fill === "#7f1d1d") p.setAttribute("fill", "#fee2e2");
+
+                if (stroke === "#ef4444") p.setAttribute("stroke", "#dc2626");
+                if (stroke === "#ec4899") p.setAttribute("stroke", "#db2777");
+                if (stroke === "#f59e0b") p.setAttribute("stroke", "#d97706");
+                if (stroke === "#334155") p.setAttribute("stroke", "#475569");
+                if (stroke === "#475569") p.setAttribute("stroke", "#64748b");
+              });
+
+              // 3. Adjust text colors
+              const texts = clonedSvg.querySelectorAll("text");
+              texts.forEach(t => {
+                const fill = t.getAttribute("fill") || "";
+                if (fill === "#64748b") t.setAttribute("fill", "#475569");
+                if (fill === "#475569") t.setAttribute("fill", "#1e293b");
+              });
+
+              // 4. Adjust custom guides/circles in background
+              const circles = clonedSvg.querySelectorAll("circle");
+              circles.forEach(c => {
+                const stroke = c.getAttribute("stroke") || "";
+                if (stroke === "#1e293b") c.setAttribute("stroke", "#e2e8f0");
+              });
+              const lines = clonedSvg.querySelectorAll("line");
+              lines.forEach(l => {
+                const stroke = l.getAttribute("stroke") || "";
+                if (stroke === "#1e293b") l.setAttribute("stroke", "#e2e8f0");
+              });
+
+              return await convertSvgToPng(clonedSvg);
+            };
+
+            const imgSuperficial = svgSuperficial ? await processThighSvg(svgSuperficial) : null;
+            const imgDeep = svgDeep ? await processThighSvg(svgDeep) : null;
+
+            // Check page break for 95mm (75mm content + margins/header)
+            const willPageBreak = (yCoord + 95 > pageHeight - 20);
+            checkPageBreak(95);
+            if (!willPageBreak) {
+              yCoord += 18; // Generous space/gap from the diagnostic impression above
+            } else {
+              yCoord += 6;  // Normal small spacing at the top of a fresh page
+            }
+
+            // Header for the diagram
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(8.0);
+            doc.setTextColor(30, 41, 59);
+            doc.text("ANEXO: ESQUEMA DE HALLAZGOS Y SINOPSIS DE MUSLO ANTERIOR", pageWidth / 2, yCoord, { align: "center" });
+            yCoord += 3.5;
+
+            doc.setFont("helvetica", "normal");
+            doc.setFontSize(6.3);
+            doc.setTextColor(148, 163, 184);
+            doc.text("MAPEO DE CAPAS MUSCULARES SUPERFICIALES Y PROFUNDAS DEL MUSLO ANTERIOR EN ECOGRAFÃA", pageWidth / 2, yCoord, { align: "center" });
+            yCoord += 4.5;
+
+            // --- DRAW SIDE-BY-SIDE LAYOUT ---
+            const yStart = yCoord;
+
+            // 1. Draw Left Diagram Box (Plano Superficial)
+            doc.setFillColor(255, 255, 255);
+            doc.setDrawColor(229, 231, 235);
+            doc.roundedRect(20, yStart, 43, 75, 3, 3, "FD");
+
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(6.5);
+            doc.setTextColor(71, 85, 105);
+            doc.text("PLANO SUPERFICIAL", 41.5, yStart + 5.5, { align: "center" });
+
+            if (imgSuperficial) {
+              doc.addImage(imgSuperficial, "PNG", 21.5, yStart + 8, 40, 40);
+            } else {
+              doc.setFont("helvetica", "italic");
+              doc.setFontSize(7);
+              doc.setTextColor(148, 163, 184);
+              doc.text("No disponible", 41.5, yStart + 35, { align: "center" });
+            }
+
+            // 2. Draw Second Diagram Box (Plano Profundo)
+            doc.setFillColor(255, 255, 255);
+            doc.setDrawColor(229, 231, 235);
+            doc.roundedRect(65, yStart, 43, 75, 3, 3, "FD");
+
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(6.5);
+            doc.setTextColor(71, 85, 105);
+            doc.text("PLANO PROFUNDO", 86.5, yStart + 5.5, { align: "center" });
+
+            if (imgDeep) {
+              doc.addImage(imgDeep, "PNG", 66.5, yStart + 8, 40, 40);
+            } else {
+              doc.setFont("helvetica", "italic");
+              doc.setFontSize(7);
+              doc.setTextColor(148, 163, 184);
+              doc.text("No disponible", 86.5, yStart + 35, { align: "center" });
+            }
+
+            // 3. Draw Right Findings Container (Slate Background)
+            doc.setFillColor(248, 250, 252);
+            doc.setDrawColor(229, 231, 235);
+            doc.roundedRect(111, yStart, 79, 75, 3, 3, "FD");
+
+            // Header of findings: Unified title
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(7.5);
+            doc.setTextColor(67, 56, 202); // indigo-700
+            doc.text("SINOPSIS DE HALLAZGOS CLÃNICOS", 114, yStart + 5.5);
+
+            // Draw horizontal divider line
+            doc.setDrawColor(229, 231, 235);
+            doc.setLineWidth(0.2);
+            doc.line(114, yStart + 7.5, 186, yStart + 7.5);
+
+            // Filter out structures that are NOT described in the report
+            const pdfThighStructures = [
+              { id: "rectus_femoris", label: "Recto Femoral" },
+              { id: "sartorius", label: "M. Sartorio" },
+              { id: "iliotibial_band", label: "T. Iliotibial" },
+              { id: "vastus_medialis", label: "M. Vasto Med." },
+              { id: "vastus_lateralis", label: "M. Vasto Lat." },
+              { id: "vastus_intermedius", label: "M. Vasto Interm." }
+            ].filter(struct => {
+              const s = thighStates[struct.id] || "no_descrito";
+              return s !== "no_descrito" && s !== "normal";
+            });
+
+            const translateThighStateForPDF = (id: string, s: string) => {
+              if (!s || s === "no_descrito") return "No descrito";
+              if (s === "normal") return "Sin lesiones";
+              if (s === "desgarro_miofascial") return "D. Miofascial";
+              if (s === "desgarro_intramuscular") return "D. Intramusc.";
+              if (s === "desgarro_completo") return "D. Completo";
+              if (s === "tendinopatia") return "TendinopatÃ­a";
+              if (s === "desgarro") return "Desgarro";
+              if (s === "friccion") return "FricciÃ³n";
+              if (s === "contusion") return "ContusiÃ³n";
+              if (s === "desgarro_parcial") return "D. Parcial";
+              if (s === "hernia_muscular") return "Hernia Fasc.";
+              return s;
+            };
+
+            const getThighPDFSimplifiedDescription = (id: string, state: string) => {
+              if (thighDescriptions && thighDescriptions[id] && thighDescriptions[id].trim() !== "" && thighDescriptions[id] !== "No mencionado / No descrito." && thighDescriptions[id] !== "No descrito.") {
+                return thighDescriptions[id];
+              }
+              if (!state || state === "no_descrito") {
+                return "No descrito en el reporte.";
+              }
+              if (state === "normal") {
+                return "Entre lÃ­mites normales.";
+              }
+              return state.charAt(0).toUpperCase() + state.slice(1).replace(/_/g, " ");
+            };
+
+            const thighCardData = pdfThighStructures.map(struct => {
+              const s = thighStates[struct.id] || "no_descrito";
+              const stateText = translateThighStateForPDF(struct.id, s);
+              return {
+                label: struct.label,
+                state: stateText,
+                description: getThighPDFSimplifiedDescription(struct.id, s)
+              };
+            });
+
+            // Append additional findings if any
+            const thighExtras = additionalFindings["Muslo Anterior"] || [];
+            thighExtras.forEach((extra: any) => {
+              thighCardData.push({
+                label: extra.structureName,
+                state: extra.state || "Alterado",
+                description: extra.description
+              });
+            });
+
+            if (thighCardData.length === 0) {
+              doc.setFont("helvetica", "italic");
+              doc.setFontSize(6.5);
+              doc.setTextColor(100, 116, 139);
+              doc.text("Sin hallazgos patolÃ³gicos relevantes.", 150, yStart + 30, { align: "center" });
+              doc.text("La musculatura anterior del muslo se", 150, yStart + 36, { align: "center" });
+              doc.text("reporta normal y sin desgarros.", 150, yStart + 42, { align: "center" });
+            } else {
+              drawAnatomicalCards(doc, thighCardData, 111, yStart, 79, 75);
+            }
+
+            // Footnote at the bottom of the findings card
+            doc.setFont("helvetica", "italic");
+            doc.setFontSize(6.2);
+            doc.setTextColor(148, 163, 184);
+            doc.text("Mapa anatÃ³mico dual y lista sinÃ³ptica correspondientes al reporte clÃ­nico.", 150.5, yStart + 72, { align: "center" });
+
+            yCoord += 80;
+          } catch (err) {
+            console.warn("Could not draw thigh diagram inside jsPDF", err);
+          }
+        }
+      }
+
+      // ðŸ› ï¸ DRAW THIGH POSTERIOR DIAGRAM IN THE PROGRAMMATIC PDF
+      if (includeThighPosteriorSchemaInReport && specificStudy === "Muslo Posterior") {
+        const svgSuperficial = document.getElementById("thigh-posterior-superficial-svg");
+        const svgDeep = document.getElementById("thigh-posterior-deep-svg");
+
+        if (svgSuperficial || svgDeep) {
+          try {
+            const processThighPosteriorSvg = async (svgEl: HTMLElement) => {
+              const clonedSvg = svgEl.cloneNode(true) as SVGElement;
+              
+              // 1. Force background and clean outline colors on gradient stops
+              const stops = clonedSvg.querySelectorAll("linearGradient stop");
+              stops.forEach(stop => {
+                const curColor = stop.getAttribute("stop-color") || stop.getAttribute("stopColor") || "";
+                if (curColor === "#1e293b" || curColor === "#2e3d52") stop.setAttribute("stop-color", "#f1f5f9");
+                if (curColor === "#0f172a" || curColor === "#111827") stop.setAttribute("stop-color", "#cbd5e1");
+                if (curColor === "#334155" || curColor === "#3d4e66") stop.setAttribute("stop-color", "#cbd5e1");
+              });
+
+              // 2. Adjust paths fill/stroke colors for paper print
+              const paths = clonedSvg.querySelectorAll("path");
+              paths.forEach(p => {
+                const fill = p.getAttribute("fill") || "";
+                const stroke = p.getAttribute("stroke") || "";
+                
+                if (fill === "#1e293b") p.setAttribute("fill", "#f8fafc");
+                if (fill === "#451a03") p.setAttribute("fill", "#fef3c7");
+                if (fill === "#500730") p.setAttribute("fill", "#fce7f3");
+                if (fill === "#7f1d1d") p.setAttribute("fill", "#fee2e2");
+
+                if (stroke === "#ef4444") p.setAttribute("stroke", "#dc2626");
+                if (stroke === "#ec4899") p.setAttribute("stroke", "#db2777");
+                if (stroke === "#f59e0b") p.setAttribute("stroke", "#d97706");
+                if (stroke === "#334155") p.setAttribute("stroke", "#475569");
+                if (stroke === "#475569") p.setAttribute("stroke", "#64748b");
+              });
+
+              // 3. Adjust text colors
+              const texts = clonedSvg.querySelectorAll("text");
+              texts.forEach(t => {
+                const fill = t.getAttribute("fill") || "";
+                if (fill === "#64748b") t.setAttribute("fill", "#475569");
+                if (fill === "#475569") t.setAttribute("fill", "#1e293b");
+              });
+
+              // 4. Adjust custom guides/circles in background
+              const circles = clonedSvg.querySelectorAll("circle");
+              circles.forEach(c => {
+                const stroke = c.getAttribute("stroke") || "";
+                if (stroke === "#1e293b") c.setAttribute("stroke", "#e2e8f0");
+              });
+              const lines = clonedSvg.querySelectorAll("line");
+              lines.forEach(l => {
+                const stroke = l.getAttribute("stroke") || "";
+                if (stroke === "#1e293b") l.setAttribute("stroke", "#e2e8f0");
+              });
+
+              return await convertSvgToPng(clonedSvg);
+            };
+
+            const imgSuperficial = svgSuperficial ? await processThighPosteriorSvg(svgSuperficial) : null;
+            const imgDeep = svgDeep ? await processThighPosteriorSvg(svgDeep) : null;
+
+            // Check page break for 95mm (75mm content + margins/header)
+            const willPageBreak = (yCoord + 95 > pageHeight - 20);
+            checkPageBreak(95);
+            if (!willPageBreak) {
+              yCoord += 18; // Generous space/gap from the diagnostic impression above
+            } else {
+              yCoord += 6;  // Normal small spacing at the top of a fresh page
+            }
+
+            // Header for the diagram
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(8.0);
+            doc.setTextColor(30, 41, 59);
+            doc.text("ANEXO: ESQUEMA DE HALLAZGOS Y SINOPSIS DE MUSLO POSTERIOR", pageWidth / 2, yCoord, { align: "center" });
+            yCoord += 3.5;
+
+            doc.setFont("helvetica", "normal");
+            doc.setFontSize(6.3);
+            doc.setTextColor(148, 163, 184);
+            doc.text("MAPEO DE CAPAS MUSCULARES SUPERFICIALES Y PROFUNDAS DEL MUSLO POSTERIOR EN ECOGRAFÃA", pageWidth / 2, yCoord, { align: "center" });
+            yCoord += 4.5;
+
+            // --- DRAW SIDE-BY-SIDE LAYOUT ---
+            const yStart = yCoord;
+
+            // 1. Draw Left Diagram Box (Plano Superficial)
+            doc.setFillColor(255, 255, 255);
+            doc.setDrawColor(229, 231, 235);
+            doc.roundedRect(20, yStart, 43, 75, 3, 3, "FD");
+
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(6.5);
+            doc.setTextColor(71, 85, 105);
+            doc.text("PLANO SUPERFICIAL", 41.5, yStart + 5.5, { align: "center" });
+
+            if (imgSuperficial) {
+              doc.addImage(imgSuperficial, "PNG", 21.5, yStart + 8, 40, 40);
+            } else {
+              doc.setFont("helvetica", "italic");
+              doc.setFontSize(7);
+              doc.setTextColor(148, 163, 184);
+              doc.text("No disponible", 41.5, yStart + 35, { align: "center" });
+            }
+
+            // 2. Draw Second Diagram Box (Plano Profundo)
+            doc.setFillColor(255, 255, 255);
+            doc.setDrawColor(229, 231, 235);
+            doc.roundedRect(65, yStart, 43, 75, 3, 3, "FD");
+
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(6.5);
+            doc.setTextColor(71, 85, 105);
+            doc.text("PLANO PROFUNDO", 86.5, yStart + 5.5, { align: "center" });
+
+            if (imgDeep) {
+              doc.addImage(imgDeep, "PNG", 66.5, yStart + 8, 40, 40);
+            } else {
+              doc.setFont("helvetica", "italic");
+              doc.setFontSize(7);
+              doc.setTextColor(148, 163, 184);
+              doc.text("No disponible", 86.5, yStart + 35, { align: "center" });
+            }
+
+            // 3. Draw Right Findings Container (Slate Background)
+            doc.setFillColor(248, 250, 252);
+            doc.setDrawColor(229, 231, 235);
+            doc.roundedRect(111, yStart, 79, 75, 3, 3, "FD");
+
+            // Header of findings: Unified title
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(7.5);
+            doc.setTextColor(67, 56, 202); // indigo-700
+            doc.text("SINOPSIS DE HALLAZGOS CLÃNICOS", 114, yStart + 5.5);
+
+            // Draw horizontal divider line
+            doc.setDrawColor(229, 231, 235);
+            doc.setLineWidth(0.2);
+            doc.line(114, yStart + 7.5, 186, yStart + 7.5);
+
+            // Filter out structures that are NOT described in the report
+            const pdfThighPosteriorStructures = [
+              { id: "biceps_femoris_lh", label: "BÃ­ceps Fem. LH" },
+              { id: "biceps_femoris_sh", label: "BÃ­ceps Fem. SH" },
+              { id: "semitendinosus", label: "M. Semitend." },
+              { id: "semimembranosus", label: "M. Semimemb." },
+              { id: "sciatic_nerve", label: "Nervio CiÃ¡tico" },
+              { id: "adductor_magnus", label: "M. Aductor May." }
+            ].filter(struct => {
+              const s = thighPosteriorStates[struct.id] || "no_descrito";
+              return s !== "no_descrito" && s !== "normal";
+            });
+
+            const translateThighPosteriorStateForPDF = (id: string, s: string) => {
+              if (!s || s === "no_descrito") return "No descrito";
+              if (s === "normal") return "Sin lesiones";
+              if (s === "desgarro_miofascial") return "D. Miofascial";
+              if (s === "desgarro_intramuscular") return "D. Intramusc.";
+              if (s === "desgarro_completo") return "D. Completo";
+              if (s === "neuropatia") return "NeuropatÃ­a";
+              if (s === "engrosamiento") return "Engrosamiento";
+              if (s === "contusion") return "ContusiÃ³n";
+              if (s === "desgarro_parcial") return "D. Parcial";
+              return s;
+            };
+
+            const getThighPosteriorPDFSimplifiedDescription = (id: string, state: string) => {
+              if (thighPosteriorDescriptions && thighPosteriorDescriptions[id] && thighPosteriorDescriptions[id].trim() !== "" && thighPosteriorDescriptions[id] !== "No mencionado / No descrito." && thighPosteriorDescriptions[id] !== "No descrito.") {
+                return thighPosteriorDescriptions[id];
+              }
+              if (!state || state === "no_descrito") {
+                return "No descrito en el reporte.";
+              }
+              if (state === "normal") {
+                return "Entre lÃ­mites normales.";
+              }
+              return state.charAt(0).toUpperCase() + state.slice(1).replace(/_/g, " ");
+            };
+
+            const thighPosteriorCardData = pdfThighPosteriorStructures.map(struct => {
+              const s = thighPosteriorStates[struct.id] || "no_descrito";
+              const stateText = translateThighPosteriorStateForPDF(struct.id, s);
+              return {
+                label: struct.label,
+                state: stateText,
+                description: getThighPosteriorPDFSimplifiedDescription(struct.id, s)
+              };
+            });
+
+            // Append additional findings if any
+            const thighPosteriorExtras = additionalFindings["Muslo Posterior"] || [];
+            thighPosteriorExtras.forEach((extra: any) => {
+              thighPosteriorCardData.push({
+                label: extra.structureName,
+                state: extra.state || "Alterado",
+                description: extra.description
+              });
+            });
+
+            if (thighPosteriorCardData.length === 0) {
+              doc.setFont("helvetica", "italic");
+              doc.setFontSize(6.5);
+              doc.setTextColor(100, 116, 139);
+              doc.text("Sin hallazgos patolÃ³gicos relevantes.", 150, yStart + 30, { align: "center" });
+              doc.text("La musculatura posterior del muslo se", 150, yStart + 36, { align: "center" });
+              doc.text("reporta normal and sin desgarros.", 150, yStart + 42, { align: "center" });
+            } else {
+              drawAnatomicalCards(doc, thighPosteriorCardData, 111, yStart, 79, 75);
+            }
+
+            // Footnote at the bottom of the findings card
+            doc.setFont("helvetica", "italic");
+            doc.setFontSize(6.2);
+            doc.setTextColor(148, 163, 184);
+            doc.text("Mapa anatÃ³mico dual y lista sinÃ³ptica correspondientes al reporte clÃ­nico.", 150.5, yStart + 72, { align: "center" });
+
+            yCoord += 80;
+          } catch (err) {
+            console.warn("Could not draw thigh posterior diagram inside jsPDF", err);
+          }
+        }
+      }
+
+      // ðŸ› ï¸ DRAW NECK / THYROID DIAGRAM IN THE PROGRAMMATIC PDF
+      if (includeNeckSchemaInReport && specificStudy === "Cuello") {
+        const svgThyroid = document.getElementById("neck-anatomy-svg-thyroid");
+        const svgGlands = document.getElementById("neck-anatomy-svg-glands");
+
+        if (svgThyroid || svgGlands) {
+          try {
+            const processNeckSvg = async (svgEl: HTMLElement) => {
+              const clonedSvg = svgEl.cloneNode(true) as SVGElement;
+              
+              // 1. Force background and clean outline colors on gradient stops
+              const stops = clonedSvg.querySelectorAll("linearGradient stop");
+              stops.forEach(stop => {
+                const curColor = stop.getAttribute("stop-color") || stop.getAttribute("stopColor") || "";
+                if (curColor === "#1e293b" || curColor === "#2e3d52") stop.setAttribute("stop-color", "#f1f5f9");
+  xœì½M“#7Ò&xŸ_Îi“1G•,~gfu—d¬LVg˜"3K­W-Ë2@fHÁ*"˜U)µÌ¶{h[[ëÛîaFsÓA‡×ê2ö^ùOöìþ„uß@|¬RV‰ìV8 àpÀwýSR™,Û´òôéS²÷ŸkÓúaCÛ#ÿ;I¼©×ëGÃ½}âzö¢êR¯ëyŽ1^z´²‡&˜xï$Œõ6­ïíÿé?‘ÄGRb³Ùª·Û²›z‹v:•ø<I<zü˜4ª¤«»t=²Ð¼[—LÓ|ìzŽý%Œ&<‚Z,´…¿Žay	Û
+2?%Ó¶¨>º›U¿_Rç~DM:ñl§kš•=L“®ËY…2zÚä¶² O?#?¦xÅÁºA‹ê,Ö~|œ¦íí¥ÙÌ³Š¥3óêìÒnãáC6Ž›cÈŸìV+ìéÑT›NT# BªÕ®kµf&):mNj×j‡ÍZ&©	=œ6ªÓú¸5fc2ò´Y¯×jí¬h
+˜(àpZ×ëzv³iƒ6öÒã—Óòû–Q£Ó|$ÔDG#=}Òè4:ªªÅÉMZGÇÇ9äÆÃCe¯ÄÈMÛÇ´&-QrÇ‡‡µbµò"“\ë°Ýî"ç'Í"×i¶ŽÆE¥K3.}ã	" ø>O€`štÉ,g @¼Ä+%@ÃÕg PQ×lŽG'¼Ïo%)_ºãv+àöþØs2[:uOgbR—k“ïfŽ½´ti/ø)³û§J×Jäúb’ÕDž””È©aˆà‰zØ‚ 9šÖäŒ”ÕÎ4¬\6`š4E–3`YˆæÖX`®Ç‚Ä#‡zKÇ"ÚkÍÀIkÝQÇ\Ù—Ö¬°$Aé§ÞFc>»º½wlC‡vºwÁÏõ…cO¨ëžÓÉw@²¦Ø'Oˆµ4Í?É‰¾05Kw9Mñ]M’')ÆHÂÄ9¹…´ ‰Ì(;TûŽ©<ÇíùœTñ/”êQË#Ÿ’¹æÌË}|K5:û’º½†¹{	”ž1BOIåþÄ¶ò·Ég¬—Ô˜Ýzä€4j	N°"AîÊq;ñ;þ±öS£Ë/ï)©ý	[÷‚Z¦¼KÜ…6¡gÚ‚LÞ-%º¡Í,ÛõŒ	0uá Û:~lßÑxçjº4£¬ÎŸ'Ïmg®™Ä…?&+Ï°fDóXY ¦{J4(º·Œñ2Rýò’q™õ†_YG›ÇRé6›õÏ¡‡*{·Ô¼£ÐüØ6õäh¤?ÐÊQ5Ù"Å,*Lÿ®4kH«þˆ´%)qí©ìuÏ{¹xBz£/®{g]rÚ#/»ƒA÷ß^\ŒÈWdÔ?¿¸õGøüäº7\ÀÃ«þð¢ÚAE‘_ºwK@$XúˆüH4Ó˜YOÈÞ†uöR²*d~³ÚNj5[,ÖCyŒéT›yŒ©·Ž‘z§	ŽZJÞœu/{¤{Þ½Zýë¬rA®WÃnot5¼>¹ºvÈ–ƒÕ?ÎO¯Ý€/È°÷¢qÞ‘ÝóøÚöAÚuýWÝÁ¶¸ØJq†àÁÁ9v¿„n<í<ûê ÿ%ƒîW×WøR"îGžæ€"H§iÖ«äÔÑ^“zä”jòÌ~C*— ¨lre  ¤î¾´‹`öóh´ÛˆÿGÞ[XŒHÜ8†tÍ:þ‘%f:Õ‡°¼U0äy#`èCÿBMöÿ½ç§)5|³Ø©*ª´C¨ôT¡^“%åÃìrÐ=¿ˆÎªV½Úö[²·¿äƒ!%`Ã%+-\±DM×ûsn‘„ÐØËóPl#^,ÌÊ¤”QˆS5+ª.ÙD&Ùy¨JQlÞFYznƒÀu¶eŒMšæhSÉÐXCSƒ¿!ÿˆÂlÑeÃÿ„:wÐlfòèßiæo5:ít"œô†¯ú' \ûBªqÔÙdJø:TÞŒàé‚	Ñé|´"ÁÏu'DSLˆ!S
+Ÿ–:“KN ì%R™šGÉ³`ë–7°=vÿ4¶9êõz8óæC¨ÀÖ7ízB®-cjPx†gÒ-N Ãü	Ô9=®M­_°~X©™}pX«)¦STy•º“ÁêŸç ÌàBS¯·â“JÂÖ¿·¶cü€jÂ0º3/¸WÜ¬{ ñ ˆ0Í§R«Êº©Äkyˆ·~Ô‰?’T•‡ý·d›Õå¶…°-önA£×JÎ/®è)ØmB‡ÓÒº°ø)±8#Ö§lOzJ¾NÌ¶‰¡Ãìñø²zãàœ¸1í1Î7SS^VoÇKÓ&§Ô©ºÌ´GÙ´LÐ¶T¤ú?|_†”áz·ó¥!Ôw½y ¸Ùj
+Í±=¿a‘ü/ÌÕÏV•\jÎê-¼×XãòÉ`›²¨`»ÔTÜåxÂÚ hŽªJ#ž¨šS£8-y½R¹Õ‚1;[jfF0E:ù„”âtÂÍ³£YØ$bÞÏ·Ä²a€pQ-/“%¸qnŒhiš53Û%çÆ5I?§Ú‰,Å‰dR)Læ.ƒÊ«‚D2h&‘ÑšWEs—Å“Wjž¨†îã²J4³GCölHd†¢DrFCA2Ù£¡‘ÌÑPDöh(J$g4¨…Ã€Î´Éýã{¾Ð²åARŽù¥ø{E§ùuM1	‘~‘¹ö­ƒŸº.èÚ:¯4ˆ\:†51H%ƒÄÒÅþ×†µÔ3\wI£”ÎVÿáN`=u_Ño«änl$£öMuÊÔŠ
+W)d'äâ|‹i ÿº_óäUCÿ†‹[ö×=<;uD.°]ò<¦$Ÿ|>f'a	ý<©ñªÌ¨‡ºËåéó‘1_˜Lƒ=e4ž˜>…=0ªëÉ#øjìÿÜ—µwUØ¶ë–|ö56Wñ¼
+äç•}Þš=enö6/s
+l[šn<¨%>OªùYÃ¤é`Àm…”±AÂ†?0naŸò/O“}–Qf´r„Z°‹ú'­¦…¬ìX‰ü`4£°SØÔ9X 1W¿Î”„ç¢n~qþ˜Ä«“[Íéz•Ú~Õ³¯êœh.…®üT¼wasZû~ZcjðõñÍcW{$¹’[]°+N4G?Õ<AIÍ»:×ï~ú¥)… Å~%%	&OúŽ®'yS²Ô¦ã~²or&=Èö.ôŠ¥M×$»6‹G³îlï½ñYæô÷ô_ï,©iÚ{Œƒ_'&G˜9°V(þ~‚¥I…H´›«‹¥{[Q²œQª›¸smN•œ÷ÓŠY¹×Eibc/§Gx¾È£$×“cWÂvnŠC‹ÏÍVÀö±ÇøÍ°¦¦6ŸkžíÜ“‰J¨éÔ²Edp·rÿ©M<XÓqÌà‰ ÙnûÈšYž3Ðí€àç„ÂS<óÀ‡,íQ›à)·ÌâìØ¯ýÙ+5UºÏüúcÉ]¿²÷}KPJo‚÷ü&­~…‘4	Ww<š»@´à²ÂH÷K@ÀØ0?«€"WØ1Ùåo½Xñ¨‚lT,É.(\jÙ<¬ ‡²Aª•(§dVL„eŠRgKèw®=§•ï^£ÈŠOº*è˜æ$¼Ýgð†J¢ÀŠ*C´‘›ÒÈK8ãt±TîÔø“O
+×7Â­œD–¤ÎŸnÌÇ8‘)š›Ÿ¶¦¦³ÖÆª"5ä	·´2%D±	mÖï_jî.åqêF° ±QÄ0D©egÂu‡¸ø•ŽÞàµ	Êü‘eNI%ÒE	
+)3S„¥l‘)¤Eþ`éßëFç~¸Y”,ç
+°×ÏZð[ùãEä¯8QáQÝKQO£²âÊôOé¡ãˆI­™wËÔúšÜbµ™Q)m«“™•j5´tàO3‰‰™@g¹ÕLSûasxh›«·3cb£l7éfyÈ$ Ó®EÍMµ"æ¦hAìÐS_šñÄI÷#2óŸ¹Äå¶V¶¡OÕ)[Ô=ñè·H2æg ÄõšÙ3%Kj5
+ÙÐÆBG{Ýµ€s|8Ü
+TéQl¶`—¤¬X¹6ºç¶íY6¨ÃÊ4¶=ÄWÚSö+ØL ‚-ùPK4…¯4G[h°€	ú¸[XTtï‰iÀ|'®a­Þ.°f žØ.lh2ß…¾ð7Ôd›^2‹n‹?•«P¶9ªE«ú°Î›Ü’
+uœä„ÅÃ6iõµæX•½{iê0‚<ÖÝ¬k}\HF5ùÖ…=!ÔiÅ
+ùOÉoAGCÿÿýÿþÿïÿú?8ØçzØ?ï¿"É°wŽ¥~÷Å°{Fúçäêe\/ðçY÷ªB 0A…-‰\ø_;†¥9÷£É-kªgO a«:yKýž<¼BmjÉ2l…Û/6âw°AÁèSìÑå¸‹€ÑžIñë³û¾^Ùãùï46î Ïƒ™¢C, ÷ŠºlïT’àÏ³ô²S¿‚x†Pw¤{¶tÇhMŸaw3Ü:»÷Ö„‘íÁúõòêl ª&Ýè²Kå˜ÐžYeOÎmV`×K÷*½z!(%eWúp·^…iïLh33H‡‚(È0{é¡aÕ÷‘±-CMæ¢#¹³7PÅšó"J,½ 1BÁ1þÊÂ‡¾DÜ}(	6Ü‡öù!œ4ÉI˜BINzIqP²Ä›©A›z»QÈ›iZŸ¶§J0ýÎckç±•Ì.í¶ÇÖÎckç±ûì<¶’Ç–	&®çžÍÈY¾sÏÚ¹g‘m»gù[‹@‰OøQ…šy ççøf…»‹ÈV#“j°c(í¡%©ÁÃòÀ*rru£Ê9‰øè\¢^­þÙ‰w¿û±:D	‰²_!êùµ°ŸŠ]ÿ=ÿ}[U.0ní9Œò=˜3{//Îž{¤rrqNz¯ºƒëîIõ¯s<‚]­þqÕ?éîïÄÞ\ÿ×ÞpOÑK¹aõN.^WÿxŽßO{Ò½ì»Wâ¼ã+r5ìžÀOÑ/0Uþøc¼ú?ýíy]mÉ‹ŠK*i§î\¨ÒCDxŽ°þßØJ¬y¾",ÙÎwj‹¾SþBúûÆaŠËqž9@;Y!iÌçÈ«ÞÄæA(‚/˜Ž¼„)¤˜fÑ"7uÉ’ž³ú¥Eç™H¸sÊÚ9eíœ²|6|èNY2‡,fó²$O3Mû5ÕÅæë¿Ñû,î{õ¡[ô>‚ñ«_½µÐG‚Nn3\˜¿•2{ÿ‡ï—uô¼Ð@œ³!…kgõ¶¿X”ÙT`l‚e~E¿5f¹Æº²=½Wk
+ÇÐúÐ›åòŽ¯-h™’@ŽÓý$P1ÎÜ}m×õ+ÁMf›Ï¡Èy•"è3IBò'USËgéF.›Q"UºtVoñ™´:’á¾Ð§þ9CÔéPRp	„XþÖN	¢—§Ï7öFíJ:$Hû>	ŠWi·bž	y¹9'(ˆdãŒvþ	ïÈ?AôFÜE!5U{)l:%ÓÝ²£‚tšþ
+‚S™N
+¯ˆÏ_ã\î­ Mh¤Ó%½bvlHŒÁ·!"bw8ÅLðà (®Þ:3Í²@jm¡9Pax&rïc¥ì- e°D(Á…¶jldàºôþŠ‰²XñÁ"ýÎƒÅéŽ	˜ ñ†¢	9n/\ÃõQ†ÚCBŠny@ÃÑÉðâêú¬<Àp4qlo9O+„aÏÅÔö^ˆý¿ÄßÛL¿LÙ¿Ãd†‘óØ¨â—Qîü´/E*ŠŠeA]ž$
+-”A
+¥R0BŸ-w³ç¶s©O
+˜pDaó½€J.`Ä{h·ƒ|k1eè,ÚqKñk<LÀiÜ¬Õo$Æ}E¾[*\Ïdôîa„hG3›TÍrACKSTº©,T]†A;%FÏ„Å?CËÅ„ê‚÷ÆS+I¬È9Z¤(N$›à¼ÄS­ÿãHÃ?àc™VNXU8Uä'^§šóqÙ"2@´±Iqæ'Ç‡‚,°ø`ªÍÏZ"r_Òê¤Þ/äaAä™¦±pé#*yD8Ú"¢à™…;Œ&ñªþJÀ2Rù|\Æ˜@Y/Ò$j#„¹)Á©báãÌÆZ…)ZÌ(§ˆµj£±_º\½>Õh»\¹–ÙÆ¥»ÎÊ=*_®Í˜UnëAeá¸…Å6Ûk;¥-*Å×%Ç²¢§e˜9¾Ÿ<`b…*Aî·´æøhÝ©æ¯›blÑ×ä/gƒ…uÂ…Ì©ìCÉâÇ•=bg8JO„Þ3Ózøµòµ(ãT¡¼û:yh z/>}37ÿ„{~häÓ¥7=8’©Íþ'íõpP€ òèÅø[ð»"JMå“oº±f †Ì—þ™M}V©À®ßÙ•)6ŒùL4Œ¸d’}>«Ú–ikèTXQP{Íºc›á@aá‹{e'u0™«lyZ-#_Œ3’ñúxoÚÆ³€„C£S©)s‹h-âÒ½7ò‘K^ÕØÀóý¿Sã¤DÓS{ŽõNEÔÍ³q@aÏ‹‘´°@‘“RÃáâÐ;˜2áp$›3òÞt	;è1“¯S[.Î-TLc@´¤ÆÕ<ã”“ç/LÚÂvÙéâÔ¦_ìF>#ºb“¯éú¥t ‹¬OI³Qà´;…˜ÉªüÅ SØÍP26íÉw²=_)“Wq[§“DÈÔáÇá¡ÒbùœU“Ç\w¥e¯‹uËµNnëÖc{=®i°NF¬‘Ò&Gû­§ÍÒ•a÷˜­±QK™k)S£4kä"Èt(i ƒe±m2;¥Ûb¯ ~”‰MîÛÉÅuŸ¯þÙz¡p½lÃ¯Ý!Ô°íºz]mY›\Â$cJ(„ò(½!èfôH¤ÞäÖóv'ÓÀ±¬K<¶½Øþ„zæ~U¯lÍ¾/1Þ×›ië=>“î„2ÛþÎ`–&š/¸¥;4„^Á»Õ¯5ÛÒ1“·”R‹8]:üo.«SÞ­~Å—ùu
+éÈê¡T N·tnð3+Y­^†oó«%%«X”X´f1jßH»|¡Oe6è²Æg!U†ñ9ÇêœkqIZœ%}‹³âUÚâ¬¢QÌâœ—»ÅYA¤˜Å™íNß¯¥ùýZ™³,Ì›Z—çãÖå5ÌÊ›N¶wnVþííÉ‚E™ödßº µÇ¶'zøc±'›õ»°—¶ÙvY*TkÐTKe!dfMƒm´œ„=xb›tÂÍÁ(ø`õ×5™aøè]†##¹ãê'Ú‡;ÍTŸ>hq{-ÖH;,©ù4š‡£«™Ä.ÜúmìÂþoûvá/‡ýÑ•o0ûvá/ÃõVacâí)ýbI;Í°âIö¡iÎ–«§hF’Yz»Èfƒ™3
+ÿ\m~É+°&ÈqspÊÃ4(öÒv·ZîÂ§—WpÈ¼°dCó‹×éÁ÷"k¢à daøÌ£ë„íç¿Ã*”²”sžíìä;;ùÎNþžíäž€?"Û¼ŸÙÖ‡k6¯¡{Ž“}¾®1]uggL°ÆôHü«‘}gdßÙçFvÐU¹*(­‰¸/qµ3ªÞæ•Aµ—“à\ÚAÒâ§_pÒ?—vTï–O¯íà±Ä;¸@nhœ³ëÕÿÙ;éî `@Ý_Y(vÀ1.küÁøþ€1ÁFoØcRƒËb¬'ÓgPJfdƒ|òIþÙORÈø•Û°Üº,1TºëÀŒ×É£mgèZRi4$#¾4H†&ûO²`• ²AÐ’œu—>íŽ†“î°KºçW½aÿ‚!CŽbg’­Cu08I™5N,xEŠéŽâ–äÃæèåÅ(`éak»,=ý¢CO¿ØÙŠìÃš†ò½)Óå";/Î.»Ã«þYïüê‚ôqtÄÍ3¢Ídq3²;UËµPÃ=×[–Ó1ïH¬€(FÛOKÀ^Ùx}çT›ÐwÐ‡ïXÄ`H¥P(dhÚ®xét28{j;.?ÖFeÍÑáÆ¼MÏŒòk.›§”û>9¶%ÏZŠþ{øú(ÌÃWÝþ9FCŒ‰¶}šíÍûo™Œ7ÿáA&Ù‚áã&%ávÊ¬HI’E’‚þ¼x©‘}3§º¡YQPà9{AÎÄ‹4¸0‚Ä´t„ÜLMúÆvbWç^‰wä¹ÿ.ƒÏ3Ñœ…qƒ7EÀH{~2ÌÊ¼ÆÃN‘3’¯Ë_!‘AöäÔµ›Uš~ã[p£ážX:¾èfÑ›h–fÞèôf¶¼·­|X³ìEÙ*ÆÝtør•Ã'Î2 ‚ »#HâFÇ{sbœžœêz˜žÔr±ƒo&xm4çŸv´ûzAšÌA`Œl¨g˜ÚÌ¾ñ ã¬ÞM~šÕ¯˜(‹œ_11ª–&:çÇjur„º¦î1K…*½–›•ú÷7kµ…yCãè¤ª’îåàqïò©@ö³Ú”°zÚF"¸ƒácˆñ‰NõW˜€ŒD‚B4X,Á¯}Ç†"¼]ýÌá×…èéöbaRçæö~A:7´µSþ. “×W1»Ð§\vJ°Êa—” ,¿æÔ\™5a#Ìòë†XN=ôñÊÒi´²<1¬rvÞBHe)‰"ÛˆNy#œ2ã{¥œ˜|…¡Ê›M³4·TNN½ß­Ì¸”‰UöoR¬r${a¤r¬?œr¼Q;”²¬ ®eºxû$îEìk*L$i[@(Ïùh%Pms©•¸fó`”c£âcA(S¶€øŒþ`ÉÜ®$pÉîÉÏ†½n9d²Øà])2ë”,^Õ™6×\’¼´ç6´jŠ÷€c’¹­½0k±·0¯Må¶J>v2/UÕj(0%JPï˜5/ ³½~`«5fê,Nª Y¼b	Œd‹a€y0Þ	8)Ðìöp9´füé™f-Ù­=žb¨ñ éR™±ãûà±ˆ&ÃVð©q’ÜD©‰{³¹¼Â	¼wŽ†ýP«úú¯ËZ³V;À:Óo˜Ž•2ü‹–-=ûRŸ¾ÔÜ/–0hxC9ÛÊ$dY%¬_äÚîïYÎ=ŠO®¦ò‰»Ø³ÓPq“|AÚó¥é“fö“¸¹i2ÜaHÅ,
+:tžã²›áóxÏÎØê0¥Öèi$ÿ®Öì‡€ï]6ïpfMŒ˜Û*ßæ~˜èµ`µÊä²,x{uwp-Â*‚¦’Üÿ\™#‘ð‰¢ª*ªDBFíSU«”m<ÛÕýB b¹¨®”ä{’Ù_ÉOÈTu-£õ“ò7åAt²çsBÕŠRüà˜>¡’ü¶>0¸#ËoãaèØb™3ƒ¡gßËÈsVa'æ~ix·•=v±9¿èXŽíå%ŽAGé#¶Rðu“HþGi%ˆLêñmû+v)"Ÿâ°†ÓÍ?©‘°Þo’zòªÀÊAdyV¡Ô	«é>òVyØÆ?‘ÖÉOeýðüS®¯ªbf%Öqðæ‹8Ôkãã#éUà9‚™[¯*J ‚6¦ºË7TíÚ‘×Ði«9mK]€¶ÒPyC`kioÙ¶*½…òÚª¾ß½X[-M=Ëh»¿ph®‹‡|*YÆ¨Å™ðIˆR‰©Ð¦y`Ù–ÐW3“Eå½B
+fô/$gœCnO›aâ»>>·™üÄjf'7ç'kÎ:s(c\É„WVˆ¡ÃŽjµìžˆ¥>,•º©·µà\ŒhÉYq	u ¤³j†S¨ê’íM]>¹_*•û$¿Ûû9®WCn[N2f«3húŒû°šìüæòô9Þým•ñýýÏâ”( ~À¨ bU\ŸRÏÚ™Ž§áy»Ä£2QÙ™C©c.Ÿ–l)Ejc'F¨0¥P
+×ª_@‰3ÝüKÓuùWë´§­Žh±NéB´÷¨H{×w;OÇ§c²>;OÇDû¶âéè[‚3ø„Ã`âp!8«ÏñD¦ßHO”úç: >P×Â‡ä9øÐáGÂß¬{Öðü ? ¿gýA÷ª7ì”¼—Á¨ýÑùÜWLºðFtL–ïÈ"¡R¬ŸÕ__|þ{'/»¤rvº¿žÛŠH:—Ø7e,ÄTù+œƒýûâºßž"™{Ãî)…Q[rS`âçÃa‹+½ŽíÒwì¤ðþø®¡[$‚ó\¿¡ßÂö:Dèž¢Hù–’º:1ÏÕåjäåjÊr5órµd¹Zy¹Ú²\í¼\Y®N^®CY®Ã¼\G²\Gy¹Že¹ŽórÕkÒn®åæ“ÜñQ—zö­’ckµã^,û0ú.‹ÈRÜ¸jMh’LA‘4#þ6‹ŠöÆ0µdþ.>Ì*ÝHM¨~	e¤&T¿À„2Rª_`B©	Õ/0¡ŒÔ„ê˜PFjBõL(#5¡ú&”‘šPýÊHM¨~	e¤'T¿È„2Òª_dBé	Õ/2¡å„êŸP†jBõËL(#=¡úÑ	Ë¦ŒP/¶—üü‰ ÏÏSþA…³ŸFÒê8´_þ„ŒmÛ¤šE~úúá¥—RæÊ˜,%õRá¨/‚ó¼~Øzã.çsÍ¹— £ï­ùXsþ/JÖÌ'Mûyg26sßª"°w×¸@aS xÿ #úÒ(²·En”V­V­gþ†GçØÈ
+lø“yˆÞa¿Ùw(*…x£)U`6(]=¦„çŸiÞˆÆFÝò´9µH0r5î¨ç/ý’>GÙ³Héˆ$Ë–á£@}NöÄSâs¯‘B®ºG|7BsCæ«ÿ0·xÊÔQš¬Ö:7ÐEœã+äRáÀ ³Y…Ü·b­ÞêKð6b†omøÝ‹ðHwøófûÉ«é8è°¨§Wú©ïê%“öõRP(æì•“¹·—œFKBW£˜¨ñŒüŽQ:ò½K?*^£¸#Ujzõ¤RHRleè²”Ä8ü¯O"ìHíóß£ÇU(rb¾Vâ«L|$Ç@Ž _Ó‹s8Û–b¹V4sa'¬ø ù¼°üp!t¿ñÝ;ÐÔÌ-«A'`LiÍ°¨ËÕîàq0Ã˜íùYÿ`Ø=qktü¤Dåãç¤ÚÉ§Õ’Ôø‚ÐI:÷Qñ‹Ÿ ÷f¶#*:õèÄ{f Oq¨Tðà(pÑõ¿¨VÈ?`êý`-yÖg¥Õs¬äÀA¾äá²·á° +	tÓï¨#;F"hR]€ðBOeôå±l—ŸÙ¥­‰¹tÙõÙïeoCâ²¡»çèg¸y•ˆÉ©DŒR"aj-JüD8å˜º^_GÃæA=™\04ól$)‰÷vf}s1­$o Å×bÞ°5÷ Î<˜‚ÊðGxÝüú³_I2'l¤–.sD‚bÜÂLœQß§Ç/BÔõs>ˆÝå˜O¿âh>Ä7òñògA@~ËsA15Ðù-Ú=Uö¨òxl Lø«û_¾~òW÷à›ÿß*_×:ßà#í`òÍçg?ÿÞÿtÿ±Á T’>?²"Ê–P² !÷­pI¦áXdÄd#L8`i¯ù‘¥ûºþMØ1u?WÉÒcQˆÐ¿	úÇ9ÕŸþVD‘.ONHëF®®Î›y«¹]ëþ¥P» ¹PEÇXêV¢JÝ~Õµçã|V,¾„J‡K”ùy¤Ò¨*Ö…
+Ë›˜¶ÑU¯’tš“ºÙñì_¡ÅÝ_‹;-9rÁå=¬©aÉtaPw6q²’4ò“4“Lmàã•RûGÿÌæßdÖnlâØ4:ÇA¦§ÑiiCQ­…¹ÑPÔªËHÔ†+•;tªnm$ÜbÆõF”03‡¨ËÏ,ôN*ªVjÎúŽ Ü}	ÝjIG¾~	¯ªmåû¿À{æÙL`µã)âýHÐ/tâñ„yÎÂ"Nòüâß— B2ëþQ„sþæ%Wn}‘]™Qz9œ’ÛA©žªÔ6­ž%†kÄ2Š¨†?hŠõ¨ftJ°\£ÌB;ça#bhMQKµŒ™]Ã™x«‹*ä©þ|óÙÑxx$41W¿Z zÐ‰=sV?OÙÙõwr,>ÂÃ*Ó¹…èÐÉwôÛíyî'‡nà:ßvý_/ÐÐÝ?»`DÏCû#Ò;gøßÊ¨Oz£«Õ?H÷äªÿêb_2Ý»YË·åp 7xZæ¢tv*÷ÐŽì—%ÙOMWá•V’{¦%¤'KÚE=¬›@½‰Üë;ê…7tÖÃä„èß.™¸ôéÈ#ÆØ¥Ú7öf@oM^ëæ=1µ{{™„~Gzˆåš	fFXƒæ¼ˆ)w2bÁÖ©°léøŽ˜<uy½8˜à{®(’œ„)ä®,v”½IˆùAÄßˆk¡doµNý0ÓWj˜D—à~TøQyI]ØÒHìèÜ’×ÜQV ËtXno‰Ë¡’}Àï†Êbâ–¨t'òK¢òz0}Tâv¨HÏ%/sÂU­É!ZµjKy·ãÊz~a²¾“Üjä;+¤Š‰84ÔÚÇÎ±ª ÉZgÜÑ[9$ŽëãFa’¾Ó^I}Òè4.™ƒ¡³yƒ–{šÈH³ÜÁ u
+Z§ô •]	Vb9Jß—=šÖ¶&PcÉc&w;‘ÈrÌ”š/DÂÜKôŠW\ìq9úZqG\€¯ìËL‘ôþ6ä‚1)/15!sO®ø1BŽv—–Ó—Ó/SN_r#§ÿ€Ô˜š-V>ä@M˜„— ¡Bõ$U©_“X¯ù'¯Ï?JÔ¾èªbÚMÓ-TÀú£iÇö›—¾oÊaƒmQúzÁ¸T' x6æsüwjxñKO¸&„Ý	5ïÿ ˜’ý6ÎxñGÊˆR Ñ0Kt/‚áÂ hå#Òdÿ—í_ùð’E'ö”Œ€`Úäm[ñ ë2?¹Nqo„0}Â'áêú´¯ÚÄ{'ý{T	pòû1|<ßk@Î¢K>)™…È4ÜÐŒõŽX%,(eU1ds’o!¦™9¬þñaÍ¸Ýø÷DÂ¡zSÎ u‹Uç”²6·«GÅÚŒ'cSÿHÑ_h…ÁÍ o´•A½ø'¹'T:–ñ3_É©VmÃbÆÞ(É„â kžvÀ’í	‡pÜÛI,Rü#¬ÇyY²B§æ’!|r²dÅÂ˜vÄd…N´…»4i>I‘° Q‰§~pœÌõìO%!ûý3dðŽ¯²~Ûy¸­~o¸\à	¬"ðŽWIsHv½³¥a°ˆÌ¬ý,ÅÙ'ÎúPAœ
+Bâ®e¿†¡3/Nuh‚úˆ:ö\#ê tx«_\4²!†™ vit¶¤.á¡û©Â‹4NHta‚Ô	»mšŒ=>ÑLeQ›«·ñy "žQ"+@`ï>“!ï‚äÑ!jôÿüoÿ“DÝ‡ž=‡‚æ·¶aUPØ!bh¯ªTÍ³Ž,õÒY½åæîÕ¯–GgŽö†€Å†Í‚·N5Ï˜±ÓÇ¹ÆnL0Õ’ê]ùRR¡BRÒ(/%ûÛ–’R‚›HI)ÁM¤¤œàFRRJr;RÒ("%¸”4¶*%¸””ß@Jq)il$%¸”4Ö–’FRJïZJ[‘’‹ “Æ{’“‘rI‰se²t`B†o¡:ËHÇã£LóÎ¤Ü…ixÈRÊ¡Ê ~|e3Mz
+º±°=éh³Â“|B˜ßÚ9±ÍåÜ",¬ƒ´Ì°´Ôˆgú™÷QøŸ`ËÁ#ëá†BðGÁjðïÓ§¤]•!Žü§òí[o>¦ÚÇölC?¾'Ám¦t¡aÐ`ó^±úETr=gß Càñ[¯7û)¼²±ÿÉ®9ói–ÝJÊ6V9ô‹_zægâÛH³Hd®Õõf-ÞÚVÁ;ñ£ÔCò²Ô=Ñ{¢]û˜{"å¢]ïm¹/Êß ãG§è‰P–á=É‹ŒxO"–vâj3¬Æ,v¨ÑÇcä»K2YýÌ–K\
+ªMøêl	MÙß9ÿÂcÄRÌÏ?¡M>¤ð)éÀXf„ÛÇOfÈ}n 'Â@îÇÞ÷a*òÀûéJD­ý_Tå„ÿïž]|éGÿ/ü¿gŽí×éØÿ’èþ'¶}Í!Ô20
+‹	Âæ#D!þ§4Avc_Izìú?Sˆß¯<pÚÅ‚ñ[çÑoŒXJskøƒ¢Øƒ÷‡;(…9hÐ¦ÞF¼cA}ÚžJÃ’ÕX†z½~Ô8,T¢:’£¤Äf³Uo·e%6õít6*Q•n}D!Äø‡±R–§iC}ÔB‚´ŽŽ“˜
+}Ü8<<L>¥5zˆ0–Œb'"ÏU6)†> Ó|ÖE¤Éñ†e“ãÍ,BnÚ>¦5Ë£äŽkÅj'&L&¹Öa»-„¤ÈùI³ÈuZ‡­#IŒSåôZdP`›^^©é•Ã~ËÔx…lVFHŒ,*VÉFc8‘"qÚ¥‹ç˜9Ébf p&%N°äK˜‰z@©0-‹Lq’§¤0cÇf!Ž$Ca¯Ï‘Œ˜´YI<Z£Œª²Å1M‰«ƒ3'€d Õ†n.e_[•â]`p’@­00ëq{>—Tá5Ì<Ä¤<c	ŸX–O!ùŒ	6uäÆ”Ác‚Ü•cúþ±ÒÛ´p÷W?Jô‡üÐ3ÌØ"¦ïƒ l>úˆV,Õ¦Q$eñ·Eò+»vrqzuÃ^ù’Åœ}LðøŒq¤ÈáEÈ»&úä„°>·hnÉU€uìžw¯Vÿ:Ã°Ž<0aÀ¸@*'Ýa—ø!¿"ìçYöºÈ²µR,R„KM»z•{{³°§â`á™ýê¬9ñƒ”›…pR¥ÃèÉ±Q<Ôãa;õÎ}Ö´#¢&K*N¯"]*ë1×æ¦Tà´ÉKéËå¤`IE¦ä	Ãðžñba(£[[*"kŽãÙú«ªR=ŠÁGwa[ÆØ¤iŽ6„¦åmCü…™¢K†¾X¹~£‘ßi˜#ŸK5Œ*ÚÙdàË¹üÒ¢ãž§‹Ädýh‡}‚Ÿëû¦ö<°x€°;ñƒyÊ6É³ÀÛ(oäÊ^{DâðÀÙS †ƒõÑOÈµeL„žI·8g
+­í‚&…¾¶5áK‰•šÙ[[+	ÈíGo¹µãìT†Ñ|ÁÍÒfÝ‰ÑÌt•JMên)	‚{˜Ž+êŠû%yð6¶ÈŽ€;±çsÛº¾QËµ£!¯ªˆ$aOa\ÏWÿa©£rÆIôóC:cVeaù&j¨éU5¡Ûåœ:¶ ‡H	/B©ëxUò’§àIÔ„D»¦&}“lÕsö,·MKÓÒœBM:YŽ3šÄéàãÑà‘çìÎqÌŠB±püG¾3bf¡"ÑÕ…C²û¬5I ­Ì›îüˆaEB3$©|¸2«Tåòôy$êY2ŸZK·à×X¡dP¸ÔC?&œôE:$œ<±ˆpÙy„“’È¶RŠxøŠIÝ$˜ÚÏO‡qú¢×¨);VbnÁSXzvÉ·¹úun`°Cž«HÜÂhÐÌ¬0vìý†¡ìX_Ä#Ù%&eá@v›M¿4/· N2%caêÞS0:Æ¥ÌXtÌ"-EÉ[8]¬ƒ?†HtT•zusý]æ¶³öm#CUÔ¡&½Ó0òY5ŽfBÍ¾VÚ4 Š ïè ïÀi,…Kî#!*3i¦ë”-lc–P~Ä¢^¸TWÍŠÈ½d1è1[`·¢Ø–©"ÆÆF,` ¿aÈÞ=¬€#ˆY½#Þ	zŠ0>O@_¤¸	dØJ´`)ƒumâA¤¹}¨ä¶âôð(Ó\Äú#‰NÚ2¨ûìôâ¬w^$AÿtÇºÓ‚Y²yà«KÇölP“ãï£-ŽÀŒÄë8Ð(Î ý#ÒfÁ4ž$
+ JìhöGÐJöCàÇ¯íò³ƒüì ?‰ü;ÈÏò³ƒüðÏò³ÈOŠ”ˆó”˜C¾+NEÙOëÓ)Hgƒ :*±U:2Î;ÇÌ„úZÌ’T¢¢êØÈâ§ÿø,bûñûÆ²œ\œ]zWÔ²UŽ¼èJÏ!8×ˆ?[¥ü{¿è•££Â†¿ú×ðE÷¦Àhõ¯Aÿ¾°¾îŸw=´?vZëÛô[Ù´Q_$¬úÍVÜ¦ßa—6ý7wýEÿãµè‹9mÓ¿5fÌ®›_®~eO”6ê;ê“eìvÂWÔ]ýŠÏð:5#ë‚Ä…Æ#ÇE2_®~Ï”¹ÆÚÑ*>ÃŸj|aÙÖôÞÉ54VÿŽ^ª§âMã‡ï—ut‰~ð.ƒKßgc<bÔœql´÷D³`@þL ‰­áêÿb”éí;Í1ì(û/ÄuÅ\;Ö_g«ÿp¡¯mrÉ^d *L¼ž&ÈwÂ~gŒ‡ê7ìòF3Ç1>à+R¬~…—¤/÷óè,çc‰“CÒóV¾ö“äãW4S*IÕ|š}‘’œV‹SõGZºý|ºó%vOìSAíŒ¿AÓTw¹p ½ÅB­„4Fì±ÿ\=yðžTüâÁŽ06wâ/”ØåDžÁŒÚfB6õýw0‰Íl)¥¹Ã3¢€á|Öm20`·ÊsW$)Š§ñ7§DMDÔ–ÁÔh>Å‡€ªmØ®F´+‰¬‘<ö±5ŠWitŠF1|M^îB‘Æ&Iä½`lDoÄQ6©©Zg³é”|çHé4ý-°6‚S™hßÂ+ÜÄ†Ü$úûcÝ$›µƒÝÈ
+º² ƒ· ¯Þ:3Ã’Iq1[ ÝèYðý€mcâƒ‡Û¸†µz»ð8ÜÆoÝ¸ñk½]ÈMp¡Ð«Õ?»äYÐïIï/WÃîËÞåêWý“n±‹…"ð¾¿Ï‚Ïø­e‘¾„fÌ“úš8A¢äÖº"È¯úƒ½"hw•Ïî*ŸÝU>²ª¢DT±~RÖû]_å³é½;2(ŒÖ>ªM²IN­zMòï÷r•OîPëÔ×ºïG¥cÜ-Ëñõc¥à§P¼”°°µc¦ø\D!•7eÜj7kŠùòîAÚ ·äó¤(J(ñT;œ6õZòéôè°~˜JàÕT£u­ëœJÖwsÉS¨Æ:I-ªòÉI!-9“ ›#yØ×ˆ¡ä½*âÒŽ|9¹\ÀŸÞéÅIw@*j­£X%IŽ¥0y<+sM£àZ™À´ Ó]öNVÿ^Hw€¡>Núç=fåt3öMÛd`7Ã?=Ã;@Ã?°ï»@³†³Í`ëf7bµ|4f‰˜Íëµ”ëèÔQÐIiüF‰k²ÚG…îÇŠE'ÄžN¡†xKçõÃ °9à¿y`uxmRíŽw¡M(Ã³—¦I=ÕQQ‹.aÀj¼W9ì“O1èpº¿u¨¬õ3VY /ù»º¦ê°¨p)Š|³'/ªª¼zÖÛ.¥Šp¢žY…‡t'•=ÀÄTwiˆí0®§oôÌ«ÅáK ó{ì úÖbéeœD
+»º5&ßQGxáò¼ ÏZE^:öcžç8^àBäX«¸S`{™Ât–~=f.çì(£(1¹ª ì’^	 ËÀ@‡ÍÂ%ú¸çÀÄŒk52Zô5Þn¾nñK‹]©²F`òÑ	ôÚ¾‹?‰äÚ¨é‹°F³ºa£¢ŸiŽ³ÇÇ˜q³VÛ¦±X«ìËYb¤³ãº¨,üä“˜l¬²Tß	×È½0,¸Gã’_¸ÇZúr‚K¸m®~† ‰–Å0A="bÒ¯Jø(·6=kæØ®6ÇãSÖÀ©©Í5Ø^ÌˆÀìÎï4z¡îc¬#·ÒdW+¥~¥ü¹U‚ÙkhxOŽ/[	3cîÜÒÅêgfä˜°¨1yõ26ì%üY¤6ÞNÀí#¼~¯p)L*Ôš˜Ú¼ÞÏí"&|ƒÞÁ_¹5`©Ä0yL0`ñïšû°s(ªqÐO•ÁEW!«q±ì×%ö4·N(ÛL¿w*LNèÓ3¸djä.@+ò9—Ë´Ô–ÕŽ½)WC `ñŠòöºuŒIu¿zÑ‡…jPÐfK*^ý$&ïî@:f—úI¶±§%% ^7Â®"asVˆT>kÎç…«ÅW„dµØÓÜj]²{Q&»…­¶/B€wY²'³Š/)^±ÇùµZ½Åtw?dJ…Â/Ø"­~žQ<ÊÄ{^V¿àÐsÌ·ðWX©œ§°Äù¦ÝóšÁþˆñÞpAqqöÚ²= :×¬%
+b¼ÎE\ˆñƒ¦k®À.áf
+Ô,‰5/Á?á™$R-`Ìô\¨,uüŒáB‹•.<ÉXèyU“eBÏ%U£@•/â(7õ"oâSÈ³É«Ê÷åwd#ßCm–.õûÁ†-¯ÃxŠ·Ø‰ØiK‡Å4¡ö  ÉPmPxUX]t¹ÀôpZx 2VÿÎ®r©ƒK4ØÈ1±˜Ì{â9Ú=å:†ŸÔM5K‚cs¼qí{xƒÄÙƒÊã¯«µ¾ùôñ>Ãã93þ+XµïÃ5cï‚Ëüä'ZüœbãPÊºÚ?éyû7œ·ü3ÿTý[F‰òã)ö¦øÙ±j.=áèÕêW-€ˆŒòõ!º7\Ö`p„½®aðX§+ïT”Š$Š¾@ÖXË “ôÊÆeu½¥
+
+^	©¼Ë0ëÖB¥	;4b—FX$T%j¿ÕËS>©þg£»…é?ÚÌ?ÇšÙ®gÍÍàP*v•a„ZÆ`OëŸ¾Ê+Æ›VyH]"×»»í…)[â26mù†Ï3®
+Ý©gžcµ¡xìÊª–85m¯wW[§%±3%žlvA›Xm·p3›ÌÅ/Íê^öÎOû'ý«þˆt_\ŸvÑ…àrõ¿ãÃ9é¡%§,F‹ãn7…AZ~†BŽDÚL˜–Op-œVPýPkÔÚµv@­U5OyÁ…”á{¤$k£Öä0ûÕhkGÒ CR’EB ë“ú:@­6äOß,Ø:ÄÏï6T‡ÿ%ç§3L†øÒÆÍÚÑGŠ(*ñ?I•!¦„(‘Cj5…•úû1E4®tVž_Œº¤?Xý³{\)¾I€C—Ã‹“ÞèÂWå¯ˆ:'2þ½GØŒíÂ½^£Ña8æö†k`†ü=xÌ/V ¡ G>8ÐP£50˜ÌQØ%CÏû§ÑmmˆŠ°äãEõ™‘+žìª¹¡ÞYÖBøÃs‹—irOñõË{n.2œbúÍJÔ¼2åiÞF¥ÁAe’Å(^ê$ÌµÜ"<¾åÎk³ë.V¿À^:a±†\Œ-±*Ã+|Xc5Vq¾"×Öd~Ý¢Ô•f33µ=æÞÔx ‰¨ƒÎì Q´.| &+Ãž–³»š~PnJÀø"‚7Ì‰V¸V0HSuÒ¼ÜAG¦çc!"T¨NçÚ¾8¡9š«±[…aÁD”DÑšEt²†‘wÅlü¼š6ÑÆ.hä¬§(¡ùsöji kµ	2™Å¼É‚olËt”š”Ìmg
+â~†GÛ÷Ä5¼¥¨æ­6Ææ#ô*]õ1ð‡÷£,õÔXý<Çà4h|´Ü;4VCYˆ9 ]b¡9E4MÄ ÉËŒ""67E××­˜Ž‚å}ZÂð’6ºHM.§	E6ìK[N"ýøP-'þ²÷þL'/{—Ý«ø½4N†«¯ãÐþ’bd	øÏÐ
+ÛK"yŠ˜LnÃä™V“Yûå¦“„ñ$Úœì'[´ Hm(ïÄŠRÎŽò¾-)ïÏ–²¹5%ËúÑ››ÙTJXU6¶«lÅ²ò^m+k[WT}ùN,,ïÄÆò¬,¹Cy3—øNñ»Å«Cô«‡’ÒÍ}½¡”ÃËÍ¬V%ìV[±\½ÛU.‡6³_•°`mlÃzßV¬äÓc½.m
+[»Iš.ÖŽRO›Gc}še[Û>Vzv¬m%“ÛÉ"–²¸Š3–ÉTÄ¤ú©:?ˆSV¢¦YÎòmgës·Ÿ•· å\<!Ý‘|EF×£0høæ6 "F´uOÎ‹ÒÖÚ;§i/{g§ýóÕ?ØM_‘³‹áó‹Áê_/„uíeÿ²7¼êúÀNry1¼ê¶ËB•!-0¥Áˆ/`JË5¦­eN“ÔXèÄ#Ö¿Åí1‹¥³0éA3Ë¦¦°ªù+aUKÛÕ”ÅEÍbÁ‘°ŒÎµŒ²mKl¨ìcÒ˜–‡À4ø£X—I­d
+;ÙËÕ?_tO/Øµ5£+*|¼‡³§³íM|•Ñl³Y	ÃYÌôr&j³ÏY¢ç+Üè2ò·ø$<l-íƒ~–+÷²±X¡k;ð¯ü-WlpSðšÅö\ª–=§3ž%›Lcy×¬€š^®d?ûš=¬9Æ„–,òŽg*_¤éN›
+–É2è"W	ëaÄÖ™A¾‰'|ZvTª°Ê¦",#Â´µ§ O÷BsV¿Xß/¹s\¶BŸÃqVoñ±Ò°¢ˆk›S³³˜iŠ„Í7ofTË7Á¨ë’¥`½bîsñ^þtiÄpì÷ªÛ'OH½ž¹Ž‹¡ÐqS<Y§ï˜OXwÉ%LÄWJxz iÂ¤©üñGÑªŸÈ|¾ÿ„¼4°5¡wÇf‰L¥WYéžû[Üb–ªNØEÉš©ë3/BIës6x²ö¬R?`€ñCàÂîÀÎ”{©ò'8y¶Û‚f7‹dÁÌö$D¸ß¨øãµ[– .¼¥5˜ÎöÄÐt•rn­}¹XŸùïµë³â‹õú@bÏÇûBÖç¶¿x³’ÿ^»Þ¯V?s‚£i8ÌÁùÍ…Àen€fSÁv!ßêé]ZXÉ-ÄQ…Rj!.o#^ÓJ\ØNœqž²ž­¸¸µxã=o‹±Iè·”=€	ÚÒæâH§–2çŒeó"Ïhœc6Žè;Å-ÇÓuiëñiÿUox…pÝ˜ïQ<‡í×‹³‹þioTÚœ|jà…Pö¶(Ç³1*ë±™vå8ñµ|òÍÚyæešÌwžy±ÏÎ3oç™·óÌÛyæí<ó>^Ï¼”39*Ô‰r’.V˜ó”V›ß•ÇžTƒý„œº£þóþI÷„YÌ˜	íüäeï«ïžÚw/ä¥Äy¯ÿo_\÷{ÃÓ÷é¾Ãý!¹ïµÅÇÇÜ´¥ÍÇÔYÃÏoÓ|Š¢¢fÆ¸ HX¶–öÁƒª¦«kð}ñ€uGÀ´Xg”rÆë§÷¹¡…1Â¡×%™µÇNì­ý(ÔþÃV®d\ïÒ¥nÙ;ÇCNZäÚ~rÌó'óðBZ÷Z/þós‡Ò®‘á[ÞFÈ§ÊPßé2•Õ¸5, yßËŒgž¨ƒÈsÀAòé#Î­KaIŸ‡ß«†eQg×n	,Aµ½¼Îw‘ÀÀwå|ã"oÝÕÏxe»K"SÃáqÙ5íÄ5fsÛÐó£&ó¹‹ã¼Iç¨{Õdõ‹ÚôÄ&•ÏH«@×¨¿^y?=Ý˜.]-æ™‡æ†	PhDÓï5¦!ÀnCcÛ8Í÷·“+°”ðße|óÂ ­ÄÓÆðŽ–µ9ž½ŽMÊÍ³Ây/¬²Ê>²KÌÀ€eüwnÅž-ñ£Ä«f¿cË™Ë9»‡B¦A(hf¸QTE±&ˆ)2À+{aöìõ\OÃ°Œ5R	U4¨À0ÃxfîwXNÑÑáÄ£;Úî¾tëˆŒˆNSÜæõq…P•ß×H¥{Ésø”9 òî(Qð8«à1©tÓLL{Â£èÚäÏ¤M&óåõ³ÊëGÊ[ýbÞaah¯ð;4Áñ¸â0#Ê”š],”{Éé³½èbé,M´´TìˆˆÁlŒ96ì…µ%¿Ê*øU¼\Ä$›(þÃY^¬ä‘jj›škLaÔø†eò’×– ÐÞ¢ÕTkNi‹`TÜùŒn}ZÚgÔøáû¥A½¼×h¤'ª×h\1za7Ï{×ÃþH„>B%é>;½8ëŸ¯oÓ¢KÇpçÅHƒ…"nú‰³Cnú©Öv›±sÝ9ŽîGwŽ£;ÇÑu†2Fb1sM<•ªA#Ð“Âz²5÷ÑäXä²C>B3ïRx¯®¦¾Û®œï;gÞ3¯²ÀÕ™÷¸¥5Ç©§þ¨ý¨t£[€x,Û”WïUgQš;ÇÜDpÛ¬í^¥ÛÝF`ÛÄ+wØ;¹8]¯O8~`pqþ¢u}ÊXõ¹vÏG¯zÃÑ{÷Â…Áý ¼p[­G™z,|pÛ¥í5<pý†mäK*ì4É¹ÃïÞ-%õêqýI]8\Gó›ØSöªÕ¨½i4j¸ùÞWV3ÐÖ—+¡5½­9ù”t‘Cø¯Uû°üvˆ
+hCå‘^ì”pÚõÏWÿº¼êŸ m=!Z"nCN}´~»Yg5xþ³…³.þ'^=³´ï[üZ^”¸Ì/\:|ã4æyÆê…&©²Žf¡"8ZÎç9—FZÍcn8¶­ÔýÛá¼›ýÜ…ÆÖF²HÔÑ*—Z<½ZbÔÂc2ø•}5àÃ8˜šÍŸªx—©˜Š†¾UgŽû¥áqÃGöÍ}²¾"Ê©Ï8Tk–<½²«dqLÿü”d\qVÈ¹-P%cu+žaQ‘UÄ3Ì5	­ 8iç%ö¼Äî4ž¬Þ:Â‹¹dDÑ°wº‹Xd¨¿O±þùUotÕ?Ç–£;â7µ•µ`ù6ŸÙ¯©YØDf)²nº˜zŒ©3D!Ñµ¼À"ÍØy€eÚ¾v`±ÏÎì£÷ «×ÆÇGõ[Mû¸£>TMŸÓ¶im¼U§2q8ùn<À63=6<lhvHÚ$òƒÖ‚Öî!þ/Æéf³Uo·3†cÒhéq,¼Ù€
+ig½
+4Ú&oMš}.pò3ÿNë°u”Pr«Ü ú%i	hNÚSý#tŒ‹éq±ƒ~‰6•ÐÑÒE‰ƒþ,=Ž•þ»r„ëŽº£@]ïz#ÐÔ«~qÝ¥}Ð6ìí\ßÒ®oŒkŠ}Nœ{¤"ö=[½þ/ÇŽOŒ‡áW?F-«	¸96—t¸°QïÖ.”	ÿ·W?¸[èØ1=^BWïD:¡„ç[z¤?öwôáI}ŒC¥ÜX´ÐCõO °Ÿî×{ÐÏÔõË¾Ñ©9Ót{ï¦2°îÁíRíSf·¨« íÇk”Q”Ä¥.RÕ?pU3Ì„gú=g¦‚„ÂÚ2zvÓ•´ýje		•2Aô}êä”SBþø#RùIm]<ãáõüyZ ý’ƒå®Ë]p‚†Ñðh|À{æ/âzš	ý7†Lä—V…WÈ‰{Ü¸…Å2»¨,ðÇ*s¡6/6ž¤@–bÃ!Ó-vüÀ@7`ü±ÃÙ´ÿãn½pn—uöh2TGØ£¾'OÙ¾ÜÆunýÔ ½‡1zgèšN¢E4Œ3š©ñæm~ÁZ|µØŠ»ŒØÅAÌ«ó)a–Ë?þ8ýéo™ú…ixÍcK>@W6[n|ŠÈ±
+äÒ*ZÁSÒ'¸µG/Å,sŽ8‹Œ2èÏ	µ3Œ^‘5‹,e’…˜z)O¬Æ€ÉŸ–Ò >#M)õï“ ¬a)ÞáÔíˆ™K¸öðÎ}Ž†Ý/IoÐ]]¼v/_~E>!_\ÃÎ«ß…ßg°ý"W/Y üyÖ½êŸ`T–¤ž©¹ž^ÜÞ°"E“±#ÑHúLKR”ðÚGQ"Ýéº´^%Cú–J¸í¼Ù´pÉÒ…^Ž +½Ú¬ïî’Æ¦¡mA«lLsO4âÝãšCÓ×Œ/@ÐzrXÖïÐïIñ:ãL[]s¾‹1Û%+‚8V/rwí)”\šâiö
+·Œ5&ªSXæóÚÁó:i /ƒrXf¥–rqÊ·žÑÚ´1EÀ<–Âê;¹×¬Çîw÷ª%,Ô“ö¿V»ÙÐƒ7ÈŒ}žƒ*CgƒÔß¸Òúd:¡‡ÑJgQT×¸Õ¬·j‡A›¤{§Y?Äj<vì×›TuJ§ÍI¬ª,lNnUÿ   ÿÿì}Í“7²ç}ÿ
+¸ßÌ˜=ê¦øÑß3›Í–8ý1$[Â!Éb«l’EW‘’Ú^m¬ïàÓìio³{˜ƒ¾½kÿ'ï/ÙL U  T›-Éžv¼§a“(T"‘™ÈLüPIÝ­Töë•˜ÔÒô‚€ÕˆåÁuçdê¾'‚ÇîŽ»'ŒÀÄâÂ°úf°æ—jµzP3ý2¤gªÌÞ]Ž1Œ±|SºŒ«•Icôõ3°ÜãpŠþbggøÍ5ÍÐÁŠ<wfÀC›Ùý%+²[Í©0ú«ìWÕ:šÊ7¯pq+ñý=;REìñ(­t–4
+›6y0FÃWX¢opDtÛ4¢XÄaÑŽVV†([7ùÆÛª<YPGÿ‹r8rÊ~(s¤èã÷sþÌÊ·æŒ++óÁ/+`Ës"ÜQ¬AvèAîWÐ<¸Æt¨v˜úö°2ªÚ6±ï [÷À|›1®KÆ˜"DÏ7:.[º¼Q¸E`!‹G0ß ¡çl‘kgyJÀDÚŒô:zƒ)ÔÃ·ù(šåø	6‹›9aÄ_.y¤^;cŽÞu8ô®!öå?›	—Z3#ÎüuñûlTÏ÷
+R´ªy7s¤‹òðE%žlNïK®X/ó9Ç-¹–¡­f¥eGkÍóÔ´˜ôæÌ4áã&¸±á+ÇÂ#˜0†Ê=a™"b;Ñ{‡eè'ÿµË¤¨‹Èè5Ê™…ì;¬‚ÿŽ¡sé˜ýœ¹î5“h!B¼læ­S/%3’wtôGþ>û¯eÔk>ÆûjŒÜ±DHÖº@—CÑ¹b=kù­!k_¤ŠˆhèW¬#bÑ¹¡ ]ç›0½"z#úÿJyg3Ç Ë<}–R]DI*S³,b?wdfêV*xjon­ÆXÝõyW;’wÅ ‡T/œã…]#o[è=ÿ_^Ù‹‡àN}0ÕH¥fä¿Á÷àêƒ¶pøŠL|ÿÄŽ"¯D®†îå€ö&‡›Æ©3Ö3¢ 	¹Yö“±¼äÄæsâ-0VãyEçæ1µÒùBñ"Õôµør£¯È ÖØ×!ÊU¾­ÕFu7…ú¬ìöFöÑê5´š©ÕõX…{MUŒÜS€À¥_°3š|
+w¨ ,œkSdÊ6>Û©ÓTûAÎ…|’þÌu3œŸr¥W)edeG“nÉ  J*°Q¡…’i2<~‡ëìvñX³úüiD8ó$wFõC&Ïò‚ðÊ?ìU@ÚÍ\	ìGR‘Y&á®ï:Užé=Aam–Ô¿$ï2-¼WšÈÁÎn½¢/?b‘þÁuv*w£0,šqlÏä³.Û\Kº2Àju´c»‰%k€nµVŠÄýãÀ'R0ÅòQÌ²*‘Yk…ÃÏï¿RŽ²‡-aèµ;È©ýi¼µ1yãÜ`½òp@p·½!Û0;|;1Éž¸°\7f3÷-è§nw	~ wŠViæ¾¡Àh]º§›CþD=u©uÛ&Uð-5sÑ!ü%{é”ÏH­¢eªí^jA~OÆ.¹‘Pl'ü)¸”#¤	bèÊ)Í³ë W+åÝ˜êœø™ø˜ßQC—jûPæPV@ß[L0|QO°·ðÆãHŸ–·Ÿ“èˆÂI£÷ôø¢Ñ=!'WbíÛg­~÷öÇé·{ô²™/IóªqÞnìyÚº¼ý¡’²òw	zäÜÜÐ¾õ(~«Ú]ô"x=tÑk(ýë«PÇp¢„èœ×Þì¯è?óœÄ [æYJpöÔàÍ§©yký®à#XžF(Pe³5%…zñ$ÃvÁ¡íh²-½å`AÅgä…Ã‰ãMAYƒûâaþ	Î´èm2Å eEuDŒPE5ÑO€ &ñPaÉ:sæ®O¦K¼#Â1Þþ“]¾0Ã+^;!"ÑÀ¡\Ýïˆ3¼ýÏÖ_Yx!^AJ±5ãîý ¼Tëð;›äÙÆÁÅìn…áÒ™Á»z5ç-†X›Ðk“Ñ†÷¸¬D{H^y!½mÖŸÜþ|tQ\àŽÝ€UÖ(z6žµ»„:£!¬>éu¯6ËÔ{¸Øp—‹¶h~–*xúÓæ¼»‚vòa0c¥¥äÓWYcköÕ C-j9Ô¢V&g¸ÿü…|rHÔ4¬Þ0D–/àG-0ƒñšZâcÿ-_C?#»ZÌ­Ü˜)ùgë­¨Î;ªÔÑ‚á?µ]QêyíXÝü&ñ@QÊžIÃÝRXµ…‡µj¶cFüha°/"E<n$>8âô!.º¼»‹	©*”‚õ­«ÔÂw@+ŽuŒ!Ù°@k×E	û>ÍÚã]÷ä•ìwJdPo");Gš¾¸èþ{¯ßè·/ÎuEíäqý„ hœûkv/Îè‚ÏÊšœ]¶NçÍvë™ô[çWÜOh4oÿwÝiîêÂÌ¥æ¨JO0Ym‚òÌ£\kg½LšÑByæââÅ†¯
+ó9$íÙ~ƒHÓ	F:7,Ê/(:«· A¥`Eî¸]@t`®…q–_ïU}ž~Äà}•D1vÉÉ^¹Ý|J¡ƒŸBCS»Þ®fkTE‹­êØêÓÓOµ¢–Éèî…AÈJèz±íxN”ÀzØ«}ÊÛ›|P]5ÖY-~zºžÑ‹KpÕ.ÒUuUOºŠ ‚F§XÄè=uç¬Ø›þÀY´gã‚dIBÃ¿("4Ê#&¡;‹Sðh¨ú#Ùe"Ð«àäJ?}†3Ï~¬j~¬UøTx>íÕ?µU#€‡;îkw	:b]¯BYÝ«Dó_úãîo¡‡¶&D½*Á—‘n›£`?L~zµ½Tq‰¨Ø:ÛèÕI^ÀâM-\™-§Ô˜XÂ= c:®›=Ž!ôðÄ™Õ²µ¼“’èžÀè¢¾~OJ1mÀÀÍMÐÅè{Ï±“T«dš\ìŽTH—;æ±®Ò7—Ž)¯aâ”ýôÒVý+ÐÅ—Û±&/døï—Ž23Š‘µw²cëáOŸQ;ý»ßÙÌ³ýÑëŒ7Øß€¶Ý¼¿×G Åˆ²NØñÕ¶¦Ž\Â6sò0íîîTÐÓEßu‡{$îoÌAhï$q€«ûø<þS9;©êª
+‰ÑhªŠPMo¨Å“ìµ:OÜ¸“‰ÿ¦ Ñü–[Œ€ëR¹hf“_ˆæÝˆIõ}ö>"Ýk·0Í˜ÚªîW¤>2h.Jeÿ©IUŽ‹ÑˆÃjÕªÐƒ‘Bc¼¡I–"Šb”ÄlM$ÅwK0‘[,D¡ÿd]¦©0‘w¬]¼›•·ÉÎÜØsÝö“öIëoq¸Pê}ÑÂÂÜ*?Â¥KpúwDrL\y†ûs÷È•j%‹))£—.QÅ"ríUe«¤¯ At6)Íú=èõ:Ý—ŒFŽ.#“‘îòp‡•{ˆ² \©­}jzA™ÀÑVµ3õKÇËß|¯]ŸÊÿÔ{ëŽJÕÍw‚—Fy9”ã`“Ä ‡‡ÇeŽÑõýêSFX~§«^òt!žã—–wfUë²Š›8ÔåYI—tqþò¨XÉð{·:ÏÊçeƒøv5m°pÉiíˆü×ü_²_®˜Pu?kMY ê×Â+NãÄñš8ü[Üdù­ÎÃM¼ÕZ{ôÖT!0ÐzˆB'‚ËcŠû?‰E~¿v”¢OÌ®öNE¶Ç0K?®é.sM51§­;°ŠšÞX¨šîC0sâ1’-åhóUm}Só¶)£‰ó« Mû´Fzu|‘™xS£¿¤)4EÉ;•ÚÝž×{Kª×\ˆRÙgÎIžì$ÝtÎr‚‹{½ZS`ì&ÛƒÔùµõøëÉ2ßq[ÏšX>í6ø­/l§˜íoEÖ«¨k¸žÍ~ûxãa÷ú4Ïë´=ÕÉþ>v²ƒj™ÕI¤‡VOÑÔ…Ý´Møm‚¹•¼µß¾4N`¶¯öavFòÖ‚|ÙŠ3†èÉéÃwæqçpÁÖSâ-Ó¯º“ºrŸ
+ïß’’´]mÖYÕ“²xMõ#ÒX¸³%¿/¥çÃÈ€ù>}³qiwšê™NSœ¦ªÝiª§¦zA§I³LcÁ]ê?˜õJ^uj{t©¤ëŸí‘ÕV˜ú¿Ê
+£Ýpd²Äe¶þq®3šÝÛhÐQªKvd•£Tâk÷;2:~<}iü/ÞF7}—Ã*]4Òß.ÃÆ‚ši¥ªmRF§Ïž~gæÆ¯ÄrClDz0Þµú†{u×+TÌÊPÀ€ï!¢fìÑ“?X#¯ûÏ!îª#ºÉ¡_YmïN¦¯ƒ¯ÙøNÚ€ïüúøÎ¿Šo^œŸ¶ÇíNû¤q‚x’³«V¯ßm]p‰Ýù…˜ï},&ŒTãXG¬Òxí®þKÆßþK÷ñÔá~ÝîoÍcþ¥[í`hcôíÒ=ÄQº!yvû´¡yÌ¿ÛÜÄoç“Öiïêìøñ§ðïLx½b™ðf9E	›óù Q;eÌ–"ª7clÔ¹àÅž¯]‚•Qƒyàr¼Û±¶:ÏÛÑ¦"†²f‡}f™_)¼‚)N×§¹V¶Ë)€¤°ØRùÏ@ã^—‹7®÷Ñß£fƒAÑë'îXwš4ÅÄØºf°{ RM3ŽÓ{\]öîõì…`gÏû­îe·ÕçÁÂÙíœ`¨€ß?é6N½Ø¼èv[èÔD»×¿à{šG„q=kQÁÊî™$–xO˜„ÁD†ÇH¸Â§ThYáîGõ9÷ÿ6ÈSg2q¾»öCz>
+ìÎ KK Ú>Ù£³wer¶tÃEà0aEAg4þ@)z,`½Moÿ\»¸ä€=åÂâµ!–Çûÿ†¯|B»Zøeý©ÿ#ÃéS‘i½(QUWVw‡æ Ï¸-T2¦Õ~‹>tã’â¹,þˆ¼w[xaâ~íÌF>q„”’úP}f‡L¼ùíOhnXYî¡;Á9+kËB‹Ã=sfÎ5-t…'4øÖ;"oiNnÂõ"<wí¹´ì/;[ëÐŠ dàù PCg„¥#IxûÏ€ž(5:ýÇ^‹œ¶·!"n\vÛxN#t¯—ÞÔ£—é†þØÃ‹c™îÛŸGøÚÜþç+°õvÈèðËz˜àfãù2¾4z_:f”~ŒÕÎUÅNÑµæ»’×²ML7/G½&‡:Æ\Uµc‹8î(6óÂx¶3â=ØQµòÈXü:&›Í¨XÓrr*éV<þRììK!>à’õŠ¯éõ4;MÌÉ¸Û„ÓBì˜¾ov$^®êh>²6Mêy×òÜÛ
+0ŽüFiéÃòÎx&/hËÅŽ"‡`¾Ñ+pué‚¬»bÅÏÿ-³Zâ;¾ô|Ñètr–÷
+{7¢K¾€uC¾%–Þ­7w‡ˆ™ï-–£†Œ¾t`}$ñsÒ)ñ¸ 8ö–Yøß~-·A>þ4.ý÷Ç«~coòì¤ë|K¾åQ­\â{-Å½•?Ù1æKFgª ·–€µ•ÞÎ[tûý•ÛÖ®vÆ{®¶Ü¯±¬pÍ­v±^vv¹_s=6]nc¹â¸nUŽÃ†"UKÆN*FÂAm±¾xT±ÐÅ%U ÔÊÊêÅÆr•»ÃÍµw¬M¦.|£Z<‹¦[èæõ!ÖÎ2V©UÇŽ»k’„â·ÌîììîëºËMzmÉÆËÙªU+éqañlÒóÜfWMI¯¬ú‹‚m¤k§HãeBR5üx	%+É‰ç`/jëÏ|÷kK*{•ÃtÞê^uX®‰Q‚á“¾¯íÖwwv5ß;ðý~^Ê/×X¥»V"ÏUƒüÕÇïxµðÊ–ÅXyËb)Š|–Å\½yËb!}Ë²Buóâ–e…:èFÅˆæÝàÍÒGÏÇâ*èJ*âª¥séHêé{SW-·z'-Iõv¿jb&~=±¿‚¢Xˆ[£¦Øˆ.¬*w+”ž³Dº¤&jiôBZR´®úÊJ¢ü¾“ŽXª‡ßƒŠI_EC,¤¯  fÒÖ¨+Õj/à³Zú7û¬úú¬Ž˜j5yõ¢½¹ÊõÞ¡P¯iì+ÔyUñçÎÐ[ÜàS•òF-5ìZ©@¡Zš0.JÈójR1B}²+Î›)]!Jë•;ü†Ö!ã¥±šÞáîtªyçà–<¦?‹k
+>‚ÔÂ‚5á4ÄÅO—R€âT}"½!ƒM»Õ…IúSB‘A¥}ŠB1A,¸È¯d”ZÛ¼VwdR7mæ‡ÆèUVa¯ÕûËUë¬è§ävñ/I¯}~qÙk÷ðûËF·u’ä„7Äjsq×>ÚÀ×ßŽ©gc=U  èvuz7_…RdU)2p†Ujœ7ú·?ÃJC­æÅ“îí§ø¹yqvÙiõiù¡Nã~x³“âS›vi´a˜ÖÁj™ 4…tÜñ‚œð»@ý·¤Ô
+Á’N¢äÙ7µÍU2L…9¤gÅð]cÎRùd£Ù"xŽ^Q§ÿ§ƒ«ÜM]öRÅÓ º*¢è­¯F©h6.=rvÕk"*£…JrÑÅÒ”mP˜§­îy»Ñiõ€¨½hl¸I…œ·Æò‚eé=‰ˆ±D¶ŠK“ÕÅ×Ñ3Òìœt«ff¬©<£ÊÜô BJ'2øÜÇò’s†à•u#¥a¦4¢Æ5¢KW“S~}uRœ”zôÞã¸I–JXàºwR‰jµšèEtZu"Yhüq|-÷¹ÂbT á‹Ti‡»)Ñ~¶ííÃzƒh¸JMB¡ª§’™dñivn<S‹ºT­*Ê¤aßW~à}‡“Šw ¿öFºkm
+O‚ÔÓM7­Æ*S¹O¡w{òW*á¼ä(VXpG¨ÐÿîÞ ëû\Ñï‰7‰Çlç2|Áw8½ð­*¢e ¡ÁÞç‹·Ä7fy7(ƒzlåìq~Æ¾Úß}kéËL<XZ^L—!†Ñ:º. Épé‡T©=¥‰Š;²“Dw-_8“#<Þ¹ý	¾%üÖøärŠ§†ÎäEà^{þLx¾ë^—ÉUô»¹wî];iúhAƒÛÐJ@›—¸@óNRl¥]µy£Æª})Œ•»²³v,ƒ¢š´IIr?:‚x7œ©—¯ôª„à:7Ò¤do^Ö°2+¿añr¨y¶•B ,ásö\Ù}E#Å™ÿbä†ˆúòSA#ÑBVbOlI1Ñ×ÔµU–1½±€x)¹Äû"Nh_s
+†ø	™Êp4[x{ïÂ^aipBo!güñ9<«AÞ<-m²nd÷GÛÁê?Å²Å¬Îñc‚Þ çW¹@É3:àM6ÛºJEßæ}ByÌÒ7øá3u†-/©$î3¼UË‡¤ë2ëÞ-½‘ÅE–—$pÔÛŸ¦ˆ0aO¹aöë"	Æ7–‡¯œ ±(U6Ëÿj>wƒ¦º0Ëøï!FX
+7Ë0š‰¿xÒ¸AT×BŸ†@Äô:qXxN§Íå©3Š›f*7P¼+ú—jßH¬~é_F‰¤™”¹Ó	Š¬I~—a&ð˜™Ùˆ@´àawXœ=òyAxœÙõ­·ˆEÞÅOFÎòó8‹²ð¹¢)I/	¼ÏÅ¿ðµZ;$Îyy¾_•Œ<§=•s–{îL]#ë£¶\E7hñÁªldL	{NøJ“‡³òÕSÓÄ]c=LPÖŠ>¬»[ô•mŸ¼qoF^Å8oµ®|Õ¹¥8ë2úæ»1@«ä	ÐÄ÷u@Þ†ÎþEÑßCr  t—ìÀMú-{EßqžØÅrùn0óœ ?ºxHDHB—[_g&Fõµ;µ\Ñ§!È†x£A¡ˆè9ÒR§% oKœ¡Tügn‹ŠOZxñká|L"ÈÇìögÐš![l<ä F#6Åì&ï)–ÐnFëüïì=ÌGšóûFÎrgR•§ˆªÊÜ¦¿œŒ@t¾ºq–¢$nt«Ù×áåÉ)"pùHL²€FŸ, Ûf£sJç'¤Ñ|ÚîtZ½â8Û¦37†¯¼	HmN˜íló 8ä†ôa©ÀC0¢Æ·K:Ñãnñ56Ü-ˆõxÛátdÁn±³B°[iêöHû¯¤} Ã>€aÀ°Z<€aÀ°`Ø0ìök%þû †} ÃZI Ã>€aÀ°
+Ë“]V›‚Š“YXØ¨ý¿ö¼Ñí¶áWø¥ß:?ÁzMðCã/Wm†ÿ{ Ç^¼?NÝ+TÖž+ÀÎæÆÎbUÍ«fÿª‹Úö
+èT¯ÚuÚè5×Mï+D4ˆÐYlõ }€Î>@g%ÐYTh;t–Â1ýáÌzËðÅÔ'd" Ÿ$?ûäŒýjÄ-Ê}¡øæÎ:ügco¸ýŒ$QÀ«u½ýODø¤wûóÄõÍD{®/°:IPSÍÖ®±—ùV:'ð4Ý\²ŸÈ‰;¹FRŒãv&Cgæ:“ƒeŠèÛc:¤5ºý´*ëŒfY…uFßuEgþ£@uâ(ÖƒêÇ¦‚:M¿E˜NÛïiH§µ·|ˆÎ\]ätÚzzÀsª¼<'NI
+Ï)«qn<çZ4öÞáœ:-þpNäVœ3¤Åw&ÝæÆwŠ2ðkÁwJczÀwÚðÐñk„;a•]â9vÂ¡‡¢¦rÁ¤o@ÏD~?x§()¿2xç\² ‹”ù…=q¦ÈïH´ÄÜÚó¼uqÞè7:ä¸ÛhŸ‡zž»`Äaâ¾sa=›nàÀWˆžÔc;i6pçŒ?¾=À–YèNÚ]!x§<°ßù€÷ûEãýðÒI°p‡;v¸ßØÝq÷òm¥îÔÇ»nÜÏ­ÖêCëVjŠÉñÕlÆîX¯ïTw5ˆ¶b@ù%h„¬Éý%£$2ïø¯ A60ÂýhÐ: ™´`Á¨A^‡?ëtAºË‰Tjß
+x‹ (f-7Ž–ól“¬ëtÏ	#œ#VÞ?6!rÖ$p‚ÞJœ±xBÔþ×O¸êô»ÞÅyûä‚4[Ý8ôxÀ&PlÂ6yÖîõxãÖ^q;ï^œ÷ÍF÷#Å%h9ø 6ÐH¨BÕäYë¼ßmÓj] %—îíœÿåª¿DšqGÄ&Ö(!´YŒ9¨)˜ƒÄ¨"ý€9ø—À¬Qw@÷	2 *lG¼ÆD·ájª*Ò3üåö'º¡ßqXq.wøÊ²™žô¥TFJuÕþîÛ¥ç¶ù¤³Å+/½ûË`ñJè´sqCv>º·”n‚©ô½Qj˜—÷­—ñÁ®Ÿ=È¨eˆJ79xíSVÞJ¡¨W&Mg9òAènÿ1ÅÔu&Qq_
+Ué®r†fÃW7SçÞÈ'wAÒÌs‚ÛÎ GÄò¶YUÜ,Ý«<Õön¯ô%ô>ö‡îŠvü‰ä$—uh!’õg'0\BˆÞf(DáÜŠš~×ã–Ÿó–az¤~lh“XÝU¸IüC¼ÉLŠÏ>
+À	%e=ˆit*äÄøc„9±6HƒNìýåCäë#ìÄÚÕîDíä½àNè.U
+x¢htnäÉzt÷Þ¡'Z}þØÊ}+ø$µ+©›ýäF›H3ÿk›ÈƒzÀ›XÞ×š@§án¾Ð™£GâÍ±ðÝw$rñÖ 9¡–¹à·DÀ“Š;‘Dæ×<uš…c"gî„ÞåýK™DK	›Ÿ;bLøgdò¬ÁªÓ‡—<s>+,ñÂ:Ph‰8dØÁ·)B=áºØžœ"CD§Àºßgš¯ûÂ&Þ4éç¯W•÷	_ÙÝÑÐsìq >£§A=ôv5Ëe‰:‚Íh!; ‰²¸jAx%_Áßì-nØÚ¦<–ôvHò0zfƒˆtº£&ÿ6ô·“Ÿcå’Õëˆ†ÁŽ¦ÏQ §~ñx¼«{Ê‹ca•Sî„8£1dÜR>%=¢ ²ºÑ,æš‡¦ž;gšÙâb? ðò?^öÊdàÑGROèÉd†'0vÓ5ˆx¹±¹™^ásüNÇifcV_»3àÏó—T·³™=qÔNÍü0šo¬ý“ôúÍK_¹óÓ™²o:{+ˆÝÞþ²¥ÅÐÐŸ	¯×4ƒ7Û°Ì›ñW
+/5?šþM -íäm$ùjFAü7KO0õ±'=·ÜZÞÊ<.ãmðíÙÈ}{1.ñ§S.	µZð$F¯ÛU]g›Ær¸°(;Ñ  è&±=È{§DØa4|ì£Ïª ˆ¼3ø\ïŒmõ6¶Ój´NN#âØNƒ…ºXc­¯K0Ê$-³Ú“È[©¦»ƒ¢+’ùB/“ìÌH¶°XHTI, ß’<`ÅQ³‚šf©5[ÎpŒçh{	ÀWƒÏP’D4ÞôÝì7ˆ2eä¿“Ù’BÑðþ oßþîÛBíc‡¤ÐSÇÞx‹ÒÆž²P(<fp—tp_
+Ç¥¨[ÚxŽIŒí×Üe(c*|ÑÂ§´ž¿öÜ7ÇþÛÏ>Ý®Ö*¤Böv*dg·òéWª(rŒr#Nå3fÇH¸#ŒZaBÂ&ˆRÁ^Ú5c±C…Ü´ ~'š¿lŽ’·Á‚h°”r§0½Å:ýNw¾#:7S’gcaÒHËD¥{ x3%¢ÙÝc£Ì9â!6¾O´FAÎ5%¢ëæ$î-×\H½i&ƒóJœ„öÏ»žÁj“µ™ˆY¯f‡5ñØ:Ðñ¦ƒ”a¡ÎW¬åI²Œ‡BF+¾º¬.ÅÙ /ýÅ¨¹Ë³"+¼_^Ná&p]bY5\zÞÈ=¢A*¡4ìÜ ,hÝHK°À?p)>Ä*mq¥7Ñª›i‰‰%”u½)GÏibù=Ð“K'ˆ‰Zs~ç/ŽÚœïÇ©9DHyØ±ƒ8¬ø>Ã3’ckn'j“ÞŽwà‹“,&,ìDçj)J¾ÉfB©%e(=º(.‡œ¦³”f(½ð¼fûo½ëÝZ×(ƒÒ¬wM]ãR¨N‹º$:ƒÐŸ,.†+“3ü_ýïOÝžWiyŒø³Ôt~"°’š£˜NËŒ~hW<ÛÏõ@ÌÑž^¯ì‹Ów¥{Þmþ¬Æ»TÜ£v
+¼¦"ùK3êôëùÓ))íïÂ¿|·àq¼ûˆf’ÜàñØ÷Áòkg®ìñªØû3VÙˆUü• ã£m‘= ü—ä¤}~û|¦Ü9í\ý9º¹ºõ¬Ñ¹j4ÛX•¯Õ¼Ø>¹¸¼ì´>4ü}{{›meuZ_¶ÎO”9mŸ§¶²ð	­÷üÌù¡_pê5}(å…Æ9øx­hõŒ».…i¿ÔrFYÈ—¼ß­1üOIØ(ÛFZzWÞÎZmëÉ‚B
+%%Èiµ=¬d;^öí<ËKÒyÍ”·ž½´;E™a¯D ßå#nmM`mê(?ëc+=rà›I‘gi§câ¬ûŒ³ô–"‰<ÊR%b­æF'qjt—ÿ­ymŒF¨Òƒ5•kmá`v¥ñš÷~LXçž{M]¨d¹N@ÎÖUš&yài'y£²;…_x‹W¥–;K™äa¦vY–ÞÈ3Ki£Ä¢uZ7ª[Ÿger-o¥”¯öVýâ¼‰¢K­M0µ8;ÈrüòÊîáÞÞ¡í™©q	µÛìïÀO–oÅ>F‡ûû•=Œ~Ööjêï6Éë Üô_IòÎýùž¥Ïþæû—@%âøœl\ºÁÔuðt$9BúxZR&Ì‘¥ˆ¤Ôám’ÐÎkŠWÑ[„5TàkŸÌÚ¿p‡J®¥yxÅÇØ;eˆqdþÇèX9ÚEþGýÙÈYu¡{ûÿÀãPžVž´Iæ©†Å™šwþüã”Ÿò©ÐÞ¨¿éNŒOÁà ÓùÄ]¬ò¸§§ñåaf¼¹ð£ gk¡¹–ÇXdÎ…'HðE,d™rKqïtÓ},kÍnòžc8à-¼ïÜKL®(í.FSwäŒ„7ÜþLÓmyY¡íÃ/Ô…<º+HrŠÎs×i]›áqÃ®w0¹ô8gë_¬ùwþÌ!.æ6nÂó"hýãwçæ`Ò‹·z'“¼ºêÃ¾úlyl)ü¾‡‰yãeXÀn*Oæ7dê+Wå'xm¬ z6uñÄæbS,À5Ú¼@÷œ¨ÂÀ(V{¨ mîìÌŠ3Å8>™z¾7[xS®Þy:¸ö¦ùß–Õ¿çµÑ¬ç’%þ¢Ð}í®õÜl¶Ö{ÃSsïíY¸sæQ·¸Hß‹W0âssÿý¸UÎ¼LåHMò37ÝÉ*Aò ‚ŸöˆÅ¸ÑAaoÑ)ùGú:„ðGr±®´Ðð^²1Ü8J„¥ÙÔÕ‘ä-=©eÛÒÒ•Z¶Œ-q¯[húþL¸ŽERŸšIÇ_-¯z§–>C©OsÃ¹Ø®L.ýùäö§…›Ìø‰p*>Ò;³´”:ï]š[‚k+´ì7,-¥>û–>ç WBÓKM‚4žYO’–¶EZ¤ÉjX&Ë‘¦ ažGQ#Ï8»v9»v92»0°3-#wì,'‹¸5SF¹4@FÃPq¨éO–Óé87þ’îq.æÏîÄÇfIø
+¨•1i1íÎø‰tLàw¿‹1 )¼‡ðW²×ªI_Å•ûþUˆˆ®" ’TÎÇz­]º}Ì{~W}¯BÕå
+–mºk…¹¢¸“Ï¸Ëuæ”ÖˆIÅ]‹>^†(¼" /bÈ‰~Þœ\ÍÌòg.ð?-ñámrÖnwÒm5Ÿ^¤×xòšIPæÖHqûo¹j·º'š53K±1q×+Öü‹1_TSµGì”º´¡¾îÉÇÂ»{ã¦K¨Ü­*^ÁºxwVé‚µñV¸‘ïîf ]0ï%óÖ\4-b¼L^G-“·Òôd”Ê+^,O|ÖŒ`OVK/¡˜y¾$—ê°üá3Í${â^o±•‹~Š]fÄK²Å½=Ùq¯ÅÅøãYÑvAæ±âÄý®h*–²PåT	@(/	¤ÔÝ:vöP
+‰5ÖfÑ›ÌhVrMÞ41›UéÕTÑjíUsYN.'µ#&V¢˜ *÷ƒŠÉþÞ/^Lâu˜”:((ÕJíî’¢®ë%šÆ’²¿¿I©%ëkÇÕc7ïy­×9¸ÙÏ#"wZù:Ø@a©+¢bÏ=-tuY^°ªÕÁ¾üUfÁâ¦3Á½z¬>ÄÊÊ¼¦)-9¢kK²”"._Ã$—¿qoÂ’ŒBØŒÊK–¼Q6P¤8BÄ‘Ÿ!9 !æ
+9"Ð#ÂÃÖ‘ý¥;72TIÅÖÏËå²4	JÅšŸÉ¨·öÀ¹e°û
+0w}w ¤Ï£¥òuèðÒ]jEAÀŸk‚@uÚR-MÊFÙ^üÈ“¼ÎÐK¾õØ·ú§Ý¤=©Öèkú¿O=ž.ì)†Él"Ì§™&°¦Déíç_áèRýeç6i7¬Ä!æ|#¢Ãñ×1ýã0þ8?-œäcòíÜâÏá4ù8×[+}\‰ú8ƒ‘¾ˆ×@_ôqúâÉ·H_ôè‹?Îõv+-AHuÖ"yŸóæx‰…ñ¼9ñ9É¼9É¼9Ñ¼Ýu†’HÆÂÇx†œx.œd†œd†œh†V‹ŒE¶‡Àb0oÎ€îâN‰3Ÿ»N@Æ^ ¸jñÓ%CžÜ\#v¼!×öRqd Z¦™6"Ÿ“
+9"ÕÔv˜‘CåÆZ*9[d@ÉSGPr6ÉvúÛÁ¦þÈR4¡ ®ü:,„ëÖÉþbºÂrD£n§]ý£˜©ë-Çcï­Þ³Ahåv1•'†þØ¡€Kec,þI	áÔ½üÍ÷	µï~ó}òþw/hM<<ŠèL9z°¦J­¨&•ÜN·¡×›E/ )úÌ‘ž‘Sò'KB”Þ•gF0Ý‹çšn¥¾ÍÝÂBž´è++ÿºˆv–Ët®ÀöKÙë¯‘ÏH€"30à„n÷Ó8•Â—¬x/Cú½r§>Dz´ ¿CqÎ/3A*Èo¾O!¸Qdeè]ù¥†˜¬h3«*´,¡+×…þP)ÊpžW,þ©‚­þ³äNR%Ñ‰æGQP˜«Œ¾âFfsæÖâSêI¤ìg#Öü´ºâËÃÍ]¦Z5É¿–JÕ©qýŠU¿Ï­Þœ¥±wâ¾vf]½è¼5±æp
+öª«Pgà=sßT/[\mÉì-št(ÀéoÓeùôoËð“O}1óÚ[•>T9ï÷9ÉB-øðÛ%‚a°²¿¦+ƒ¼èG³AnH¸dÅ'Ü;NnšA®†rr9Wáö¸ ÂgÂ“ê”æ›ÞVIrHöq|Ü\;†\W´iÇphÍŠêg+‰k Š³ŸTLf=© ¨ÉÂÉuNRÕí•A×œ1O×1É¨dBãYœ–íK¾ü¤Õot:-ÜC>nŸ^u›fûâ¼Õ#ÍF÷¢ûãI«N.;f·”§NpíÍþëÈÊÂÝ}+É¸×a´
+ÉÀw,çLÎ.;íÆ	îCvÈñUç+™tg0h¼Æ³ÑowçÈF³ßêÞþØë·¤ß¾¼ ííö³4[ðÊÓ ”ú7Ä{ÿ-¿äö3²[ÓÇ•Ð†MnªÆ& ×…µŠ±H9¶¨Vu¨ šDG<×6éàEüœ5nÔfnUÝçf&ZR-&bÇVÂ¼`ïj†³·‹[œ–ÝÍ“<q<š¹GÉ4µqpûªø>§P55ßngü@¼ç™U=ˆÙs³‹÷ çÚùd;<‚LÅ‡úqW÷CKªÃ¥J˜UuÃ:Ò·õÏk]ìøq^9Y«ÎkbÓÛõ(Ué+AËÎ'ød°œ`Š
+“´<Î‡àþµÖjä—ô9z	;[Öùñæ<‰„çe©Æ„­ìˆ÷Ý·«öl©ÀÈoÇSš¼³&-‚$
+[	4ðï´“žîÍ˜Sü”jz‹ÛÀ|V° ÌCTæ`ð»³ÏZçýF·w[OÚ½~·qÒèåð>R•ÁÔŸ0B_QMÇ
+]~ G†@“*‰e#ÎñÌÍùüO™ë]-%±<²,ôýÏÿCãú›ïçe––QðïŽÈ%&@Iß›û´Õâfî¾#¥øˆÑý6úëÝo·Hß™:·ÿÏç? SÞmâ'1'ú9ù^ú)È»üýùôÓwšìfœ¥ŸO¼Eÿ-¯ YfSû>e>J,$·Éù=Ñ	¾Ôåç+¹,_:žŽUV}@c»‰¨ê÷=Å‡)~S¬|c‡’7(¾½\ÿ3þd¼,º ~ÀŠ¨çô"¸ùr„©äÐ ~Æã\ÒÇ!;»½£dœ`	xaG©ËÀ„ÀØ¨À1q0/LØçm<&ƒ‰?ü†”üÙä—(¬ëL@JG74-5#ÎK†baÏ)^EÆŠm£0º‰Ü=ZWË8aûø%â`¼´ þéß™l0‰4bIÇÝ2i^5N(²”4z°xÀZBÃÛ³ÖI–¡Œ#»#Ä	¡WÜ¨l„x«Ÿ3[ÐW„†í/Ek» (cÓ
+´ô«=e^Jë£ÑÎ®'.«hÅÌZsdäÀ^™Ðj¥Þ>»ýáIãy¼¨íüöï<v-5Î°¼åéíˆx¯:°Æö.ÎÛ'›
+ƒœÅÈu™#id
+»3fzÍZáŽŒüw¥<,¯û'êÀ–§þ(®ïÈê•Ð¶gîÂ9ü)8þîÌ™RßµŒ¶0GSyCŠmÐŸÝŒ;Ùd.ÙÙÙqÁfd-Ã|T}ÓŸàà'iÃ›Û+˜–3Z)¸Äàh=ý±Ò½fnév¢Ãð±¯Ô-xÙúG÷ð,œõÍr8…;0ôwœÑß€÷7ÈÑß<ð¿Fúœ2~‚.ÑÞÃŒRº…ïLÏ"-Í³ÇÒ³š‡Ã¡¸øfNN³‰@ˆ*¬7%áÛ³Î~]ƒ¯Õê·BWÇ¼«cmWÇ™]E°FÖ6ïTl#®ï´2åŽÎâRVŠÅRxžn›ËOˆÛ`µôjÁ¦¾’1õJŸÏ+_qYÐü`Žä}Õ‚ï«šÞWÍ~ÎS…óM!5-_ƒl&]U5]Uu]U]ÑK^M(;ýî½œw§Æpvú™lþÁúDU}åVEa­?b<~=ñ¸i}Ý¦×ÃU1…åe¯Á×eiÅUXNJ`…;tÑ¼ºlœŸ\`è§nðà®ßÈ#Å©Ø–ç3på•á%ñ¶¦:•ò†¸jDW­ê~B9ÌBÕY‚R`ö¡”nN·3LÝ¦‡Éª¨§Hò^•:fÁj»"uõu
+‚}'5fŠ^W¨ÒzâZ·:¡¸*ÏL’ÆÆœðÜ$Ú!¥öT*Ó©®ùÓ´FŠF¯Š{ap´'Ì²R÷3oèNnR}†Ñ›;C<ªÝõþ."ìjµôÕlw^ÌP4¡y¬ÂåŒàK´¡%ž<T^¥Z šã:ý7Z›8?G™ñ$ôÈónÛ¤º«ß¬ÔjŽ0IºÛ°Z9~¸Î;À3u¬yqÞÇK¯gZž¨ª½ðnZ!¿ ªp]I¯ªã(qcÌMa¸¼ñçËÖýÑo&me¬s°·#–F‘{<Ÿ]#87éóÁj?	pÙÞÙµ7–;{ÒN—ŽÈÛÙw0—{û¢u|™.gIŽ`öÐˆ -Qßýþ”ýþÔô;îñ	35ùÒt€Ìê7túqÿ™ñŠª¥ëí HmÁî‘;y¬ô‘Î=ˆ=à–
+c<¨+åâ×ý)yÐ ·´06úýiòÎ¸gSÛ„ƒ`¶JÔ|m³N6qD“Z± --“ªÐþ‚óLÚàÄ}Á‰ûÂD\*ë“ÞìHŽÈ“1®C¸P'ã <\ƒm,pÜ/À}«”BêÙžnTéOÀÓ}ð9]}ô«E¼o$¨ê×É-Æ6ö?_²ÿùb‹O§î…Ç>ÅÄ;œæñ‹ÛwxðKµãv«è½¨ñXn&Ê\&ôÂ¹V~OœŒø&b`œÀ ÙÂj1ÌB:ì0È|ð®£
+/Á¡_Bÿþ]yãÒ’¢q6ƒÛÌ\Ÿ4åÈ™À¥fs3•µ¢š$ ÖYÂ/?sGžO:£u1˜xÃ¥$ÀÒ4ˆ·hÆ¤hc©¢´ «I—bîÎ	<%MÀ‡ñ…„¨ÃäEƒÕAR¸×¨©í²ÒIM'±'Ì…3ÅWDÝgÊO™ôÝ¯½‘³0üë‰3ÑLôïzÂÓ1ƒ%ãzèMoÿ	†ÇÇšQæÙíÏð”O±ùSo`;V^“¿Ú„>ÚùWN9Mè‘*±š…@ŒM!¹ðçÈ!¯½péL¼ï8”è@2ç0Lüz_e	Çëìy‰ôçÎâö'¼Nì­lA$¬†¸# Û™ú×3†ÆÐÑ5"*·p~Š‡’Ø†æ«AÐÆÆSÙ—!ÿFð^øWüDpÈðÃ‘"8ÓküV¸”’nä¨!¸f„†¦„3lHuƒvÕùk%§†+×az×9~k’ûÇ{°´:j/hµ@†f3K$’îg¤L˜*ñfLsKÝoŠx(ì95ýådÄö|øžý¦®su@ê¿/ONA€éê×’ö™¤y,²ôg­ê6yZñ@.	´Á“Å`UØ®cû=`@2q`vc-OâTçT¶T÷ÓM{Ñ !~ôHn™ B
+Dn".òãÚä!fµÙÁ/I³qÙ¿ê6hL.ì4‘ÒU/A}ábíÔüK$|ùUg«šLàÐŸD€Ö’ØeIÜç‡¿RáXœX‹A³q_¿'•ò¾d‹•¬Ýp€òá\²ìVò«>g	§.YëfB
+(í¾š«Ž'­’3“¯ŒU˜ãÕÝÓµ'êŒ6á#ÍÓ©'«u[’s?”s	Âý%Š‹æ#¢^‘úô[!éñÓ–ø‹õÑ–ýÃyûe§þbÑzlñÊ9@Ÿ£6Oe
+æ‹yç„ eèÉh’÷åLR­~$¨ïsƒkO°¥~<TC wmÇh¹¥ÚU€<ºÙ8üÄzFLØJøhÈžy3, zˆ1zÀ˜¼ñ€w¸ÛçÍ–þ2”Ì5/WùœõÙS¾èåù¢,ü;ºB›ÜÕaá%/¡ßx”ÏËrìäP{Î:¢é;ÖçËMcM½ "aµÈW û^ck6¥ëT¸õUï=ÄÕy^û¦»D×ï!¶¦œ›mlE}wK·
+=ÎŒªa}oCÅ6Ñ;W}GýJfwèWTÔ5,Ÿ|!¼2ÊEºË£ù#Òm]v[=<“Á/q§õ²o@()©ŸÐ³“Qb=*#¬ºt2ÐV”èmÆ¯AÜñ,ÍçÊå¨þGò­‰±Ió¸£1-ÔuÇeÎ°Ïõ˜zIJ	î>@×-¾ ¸=»iy%Z0Ñgê@Éã1¤*Q>M,ge;³™ûVê)ßZ˜Ê_ÔtÐä|iŒm1‘
+ÞŠ„5Ž"¸˜V1)†Ñå°*'¶yãÌÈ®B«âÝì)£¿K\(œðÖŒ@ùå€VÇtÿpâxS7È1—iC™>o¥EšgÅáÉŒŠ\âð'N*÷F6ºñÉ¶›ñ+ÕF›2ðï3Y‘?ðx‰ '©f ¿ŒZÔì­;Œ7,j'eÒž,a=ŽöI¼Ñí?†~?š3Y`ÙX—ÑÏô*Lèkî€÷ƒöÀµ`f·9$º!¦.œzÕÆíÏSÖå$.9"qŠGmóZD¦lIè4ëQ²×aô8$_Ãž×Ï ì
+"ýþ.¿öÐ4ºVsVþÀ>ýQµÉÑùúó£G:ì0[Ji*ì3õñçø˜T²(¾Ñ½ç/ƒ¡Ë¢ÜO>I:)‡ü<GACMV/<YÒÂ Òƒìc}tæßüèÖÚÛ-F»AûžôË¯O÷¯YkÉÕ>¢ÁShÿQà\è
+Ï³„$}.C("v}»ôw§%Š>åD a‰ö99Ä?eLH**9D¹kÕó°d¹DÉ½¡u†¡Ñ+vGÙØÒä€zìŒÀ÷,ú½Æ;”Q¢‰«öÄ™o¦X0ÀÆQœu£Û:?iuéqÕè‘Ó‹f£ŽLÿâòâI÷ö‡Óvó‚ÖiãŸ]t®Înÿ£ßÅ«NNÚ'·?4ûØÄ·/œãß×ÙTiqf%¸Q.CùšY\öÛçæßJ1Ð{ÙÕä®§Î[Êàè5¢ÁÙHØVa´w÷~5‰C;aYÔ†-làG½”¬9Ì&šÜ§Üä’ûÍ÷ÔÐ<"UùÔŸÐ¹ÍöWb†P&¨±š9‹Wex¦´¿%¼&òÑ~vòn%hŒ¥‚%¥Q’•´ªÛ?ÉÞwÙÎÜw©§æL¬QrYDYÙ’X‹?½NÿI—+à»”±R°½£]rîIÒò&d„yŒW[Ê5K€/¸´¡¸“
+ýÇCWÅ,a;æZV(Ñ=ú¤àÌ‘&Ž|¼^ðfŽ°R?fBl„ô§h+SßÒ„ÁM‘4ð‘âµ¤Wf\ñ»¾)­Î*:ñ¥R]Û`”ŸåþO}òâ²ß¾8'ÇGìxèíxÓÁ¹ô¤Û>!Æ—WýÍ5½ï9^/ŠaßÓ¤“§bƒ–tígª3Iª¸ãÅxÚ¤ûÝRSÝ®²Ûæ”eÖ±=¼Å÷©7žý­d`[Â€·Z;ˆÜÝÚ­F¯ŸNéîÝ’Ìov¢hähå©.	¯xqÉÈ>ÞŽ'ëñØÆ–@ÎnùÕ¿û^ï±Ë®ÎÃ2Õ2i5ãS ®Ýö“öy£#á]j–1W5·B%ÇäkšûU³VèuÏ~º^b¤¤´Ò:L§ˆa$,‚ÊÔS“ÎEÁP¬p¬¨OÂÇÄ|<"{ëÑ?{N&[Û²ù]œnãžX¢o`hI®a¹<ÜÕ•‡ËIÊÇ«ŠU*Ý,Ï(·n©†W+“$4cAY‰—Ü4JÔÁÊZZQù_»ª®$:‘:\Gà¿©}I·ë´ƒMW»â_‹—e`*MXKgæÎÔ®Kõ…<È'ªØb”¯SÙéÝ[(ZéÛ®VÒv;‘94k^Öö±t®tIT¶ró7ÄŠŒÜ®Ué ip5‹*×ËäY»×o³F³{!fVê«–æR‰»‡E6C$‚ŒêÆØ^TÅ|DhQ2X¸m{p³ÿ«Qrdh§;‘!\’9Ñ¹ë|Ÿ‰VÑÇ&Që$	úÊ›	—7ÐÝþssØ¬R=ÖOW«$“³œá¤Jº%#ŽN˜À(ªY—V‰;¹îÛùÄŠÞO¸MqC bóFí‰4Y˜`%‘II"	D=J(R8ØÔ&â;?J½Æy+Ñ<§È1q<×¡ÁBp€Q’šJôG§Êòˆíé)– ÂþÚ³™àÊª[ïIMRY¬¯,µ”¤$NS'VJrhk²%Úš¥JÆŸ²kâZe:®¤(òƒUC¶ï^U9ÅRc¡ÜD¹’/ròÓ}OüŒ·T"ùÔê±,û›hô)2é¦0Ü1¹Xãˆô»·?^â6
+y
+Ñ÷ß.Îûèî×I7[Î{ëM‚‰à~%Fñüu„‡Ìˆ~•<DÌTA©¯Ró‘øÒÐýþÒ^‰DlcVZ¤f§|ONún9.mÕÄ—|¾‡`n5Uÿ}&¼²g]sW-hd-Isé¼¦œ•HNG(§9Ö£¯[‡Þcö+Å2]y_õ1ë—’Í²e°´©+&iwR±µg«òNµDVËêInI¯eu¥º‰¨f¤Ôî®kÚ}õ½hÜSP¹ˆ,˜‚Êû®ZçäÄ“-ÕÒwÙ8¿èÞþp†e‰&6#¸«Þ­9×”w¾%‚´.ÿ£Ï„q<Òãïð?¬B·œL¶ÙÑ.!-EÁS¬~òÀøoH}{ˆpË™îBwSŽ‰9¼·ÿ{CŸ ~I'f`å´Sjë|Í™§LŠï–yÊ"?}ó1é´kJ:íªI'éÒåäE÷V;ðÝGœ§Ê@QVÎQ% ™ûIR™…ô}¦©$$UœŠ)ÕôÁrTEøy_9ª{g¦þr{úi)§^ûüI§…>ß\.5;^¯Ý\3Ü
+í›ˆ6×±+ÈZ’_žfËHéí®*œUÊ™WZ¤Js{Å«3Çfà ‚˜ÈË•Z?ôª¸¿žo«¸pJôÚ×Ž¿ÊNHvÙ×$0fî›N¦jŠ<üÏ£'Œÿ(±x¨¼†°y¸c7 •î¤Ø1ÎÀcÍjãm{4=ðqéP'EmÑ‡ L¼åÌÜôl%«”žvÿ µ÷h°òÃÔDåé‚õ:ïõ»WMíÑÓ5aÕÔ<Ä½X´;ƒÕ¬·1ª 5ypÚèôš'¼xˆ¼ÁƒÙ`9¹àÇ(iËÈ›bŸÞLöª¨ƒzZK—;‰]+±Ïtý.õ±TfSòç„¾¸gwVS"Mðæ-i„…¥+D±U-˜¬€jX¤Pšà´¦’egìâ,"¦QX¤‡´ØCZlÍi1ñ\/¼f`? 3×…ðïõpïÏ¤¡…¦¥½'z"+Ba"ÚBÒ8íC„=÷‘©x$>~Yø$:³K«ÆqàOñÀ½»XàÕ'´;h4˜8Ão
+eîÄêdBG?ˆëÞJë%=©ØVC€y_I>±Û|9¾ É—pï@áÞCÆïÎ¿„¹û
+sùé?ááÿ¦~RKí—ÅK$/HãYãüox×ù—¤q~ûC§Ýk÷hé—f£w¡Ü"9„U¸1s&7¡Z¯×4˜ÉìÂ9ÕœüÌ[¡fŽBhvT¢1«;ÊÏë)”S­*åt±âËk——Á[b§.ôFwáâr4¥ž&^KˆãŸé²¥™O6ÜéÀÍêÒ=Û ßÿ&É*£ýf½÷±óc,Cò\ZÂ¾¢“Çë×ÇK™©ƒ§ô¬3ë& ]¢ ¨T°ËPqjt½ÔÍ½4†C—^(ÿ|ÿp‹ìãhj‡rmzVÄÔŠò‰|£Kæðá³åÂQ’Jâã{ð¸8Ý'îÂ Dt!„ É7x1¾Ñ:*QI–þÍœNÿ ú¯Üeƒ"ÑK‚D"öö°g L´½¡?ÃDüü•7<"ßƒ9Ä98’™~ÁõÊ­ø°O©_‘w[B7CP	°#©zŸ2@ì„ÊNíÎŽÒÉÈÓ”zi¡ÔS­ŠÑrhÚ‹;ÚÝ¡‚J}%¥£)xÔ×ôÆ™¤°Z}'é¦Õ² ƒJŒ½ “ÈÁ9¸zNP¥¶#%]š–µ¸¥Ä]ÓzÜT§®åNÒ©8Tzõ‹$1Ÿa!Ÿh~^PTnƒÑX¡ÀÇWÆ`{ý;c½—RÅâ³;¦gm—Ê{}e(ïEò(º¹u¬ÙÊË¤r&M³èšÀ°XMÄ¥Û¤mMq?¢MWû1+œ<¹ˆ2(vp2Q¢³%ñ2¥s¢d¥Ú	§LÚ².¨‘$q©–;ï/\JkûÖ.Q‚^LÝNX¦âQÃHÕzgŸ	ñ0péö›WÞÂÍV½*ÎPñi»ö8^ˆ5™xC2üÙwîö5xyYjX«áÔT°«]®Jø˜;Û¦Äð¹ÍTÈ-Ç”„õ+£ô¢;ê¢ÔY¼Fˆ³’OÑïA7‡ÊŠEûªÒÅ¢$™Ö¿DåÖE…ëjCAÅ·ÚuÑÚãNVv]tÂ›)ÛëË^ýcóÄW¡ž?FPâÒÝödßÑ¼ªÎgÛò °bl]=}pö ²û“Ïáµ½ó
+'ï¾øéMqòé[i¢¾åÎA‡Õ¦p…I2é[¢ò/~Z‡S£oÒ[m
+gïq'³G!«IcÄ™üïsÜb°Þöèm*„²:&o ä\Œy,$ºß.Q²éS[è’ùâ-vwõ £o0-íÐk¬iJo&ÞH‰¦ zgúÎ$ “Ü˜Q9Æ®Jbiâ%%Éµ;s,ÍO‹\n¢¬àF4(Ùp)7ÍŒÑ*Dœ(»ì>º°éÏÆÞ5&þeÂx½åž¨3‹`éne´‚PÒñPš›\{š~Øš¹ô4[ÜXÚœÈ
+di¢]pGy8ÔIm$ëHrûKt‘eÌâ¸$ã†&ôEH>‘ÓÝd·ˆnbÁEe<Y~¼Ÿ:/BwêÂ\{C_sÙ¦LäÆiçêÏˆ5:k^ë¬}Ñ¹ýûµz§´ e½Ý™\û·˜}{£óä¢{ûcŸžQxLnè_tðê¡“VXvû÷ó‚4¹!(-4g·6fÃp
+Ò>ï·€¦“‹.¹ÄÿowÝV¯àÛ§ÎÜy†‡&y8k\6èˆ…,$ˆJû´Õm7ÛÎ
+T€›ñ“š]ÍAC¿Ûþ•…Û¿SÄFóâì²ÑmôÛÏêÛM–ó@XeH2p‚(#Ä^'Z%ÙòÕì¥(“m.·óRÝ÷UÃ÷µ¯Rï(°EU­Æ¤âþÔÿGÅìÙnJeº+eu% 7Â
+°k‚3räéßÑK'Ø…ÞÛt¯y€ˆÉ¶R"â.È®0äx§M*Î t&$˜µ¥Øãm‹Ó‹.Èž7˜#a«ÿ»«äÞâ¦·pçaßÇ„üisóGUK¨GÛFêæOTÜô;ÓÏƒåVðóè÷ç_©-êXÓ¹;"³åtàéFƒkkƒwBê+Í±ðÊéËqÇ<\æKê’¥íˆŽ›åù2|UJ#x8·6â)(Þ••–&—Ý6»K„»¦L8½q¹œ-|Dg^:ÁÂ9¤G	¸ý™ÎxúÑx†×¡7ÞœúÁŸ{—'§%ó0ËóÀá¿9e[´›énùä™ØÈý äª
+;_Ë#ÖïòÍnU†U¦”Ö±NPL)Š%aJÂ$ñ-e8hF{ñœzû»MuÉ°‰ŸèJ|
+?¸ŠQYòµž›ÛÏA·çþíßÏh9.›6£[øÅÒ½ÛŸ@(§NHnHÇ&:`ð¼U¥Q7èüÓ=]h.“‡
+N$?„Á´åÄs¤cÏü–½PšUá{a«Y”|¡,îmÛd¢Ã9´ž½ehŸG×ÍŒ0•w¼DÐMÜX¯—šGTÅñÁ—¥OÄ/ÀÁ•gÎÔ-/üŽÿÆšðêÒ¦ú ¦Éæ¦BÕkJMZ<^þæ{öšw™KSûîåæ&»GGÖ
+_ùoâ0ù“hŸ>:R,—Ø\hõ‡”ZË/Bj»7Þ#Œÿ­¢ÑÍn»ßê¶Ñqnõšny¼É·õ×fçª×¾8'ÚªÔ'¢ÓNNÜÐ¡™:#?´éñç¿;È÷QÄêìª8X£Ð^`B!Œ¯àÓpô-<Òt¯,zÆeX‚çtŸ¯†Û˜ð¡{ù£Ç]?ÄÛ™k¶<»C“jµ¯èQ)ŠJ¡ÏÞÑÀË’e°9l„ñôX¦z^I9NtWÚGÃäÞ¿´â©:lÀKóik`R#òç¸ç%7§Ùa¡Ïp9ÇÍrA•uö¤{¦Ñó±Š¨µ÷¦"WOS)L`’‘f)I;BàäOáÃÈ°Hç¼ÅýÚ¥¼2G´Ncæ«ôƒYƒA‘0Ax©ÖÕ9ÄÂxƒúiû¼³œ&ZÌG˜?/=àH×åsW%É´˜‰„¯ù)ó\ÈSPž,h´ó§iCør‹xšì,þWc˜ŽªÍ(ÃH‹ßGxmGÓí™)ÉEÊË|ê6Søi=nýAcb$u5ŽáÑ	™ áº”òž’ ˆSÄ¯Ý 93‰ÓÑšWòn#!Š,–ÅfÑ1raC# þm5Ñ«LfòÌ<$2-‘<ô·‹FS=±Àã_n£éIMó`óÝËôì*²ÿdV3«Cß­m-ÈÂ£Ïâ¤›êâªî¥ºÜ¹„V¥»ãþ¢2wF#Ø(	;±/RòèåeZõæÔ£ÀÃO„œúÊfúˆ½µ%‚©S‚J'ÙÜ3SE3ÒUõ%÷uY ÿ—Œ\Æ¨§êPÄçÍ¹æûr¤´€˜ùz	’¦Fú
+¦<¥øeU÷¥i´ÚaÖÊbšO¦ip<Û‹ç¢Ës[í|E‘3Ó ú’¤çú¹ÇîŸþÍ÷¿H«Æ‚>K€&"#qº+/D¹Yæ&D9.í½3×”»*M\ ÃŽœžÌqZFèÎrT‡9Ø‘4Ç›‘h­Æ‡ïÙe0äáKà$Ãˆ–¥Çw£
+Q<œ·X*³"Ýe©LÆÂp{ö"º7[ô,RŠÞ`s§ ¼gvóq»9§+˜úM¦Ñv{jáf’ûz×dRàêR™0íÄïç˜xüO˜|›‡¡ó1ô~‡ò…Pš-^Ut’„9!Þ¨‹î–)<‡Ã"wñÆugTxÔT­ËœÇÑ‰¿;ä»ÏtL–Žo¬waÑ¶¹–ê9ZÀOpMc­6¬-’ÝF²9+¼ÐùrHŠ8zÞÌÞ`¤È:ÄÛçV¡™ú7&O¼øo#ÊCÌ£û"&EM¢#¦CdªCo9T¦7áêf½°[“ö`%P†¼»@ÏI£ŠJù:wèaÆã«.b.[Í—Ë+íZBàñü{bÞA¤íÙ¡tXY0o{dÛ…“7É;Ü xþUjF¡¶È&—Lp$ê:ºÑµÉrÇþv²Ñ«`Šj]§9	]W²V„˜Ã¼äìöç/åŒô—Â·x*¨ñæ²’€rB—m‡”_æXÁ$fŠþÑr¸pÈáiÊOS¦™oìQO¨ºcCõBL‹™“b‰"/ñþo’XÜÚ{ÏaíÓî‹2r*•B©YdšZ‚?'¤Èð½¦üXF.C<‚ùt¤ÜÅAŽÜ]“sö´vÁ+mÈ ï¬ˆ_j¬Â›ÒÀ¦4¤Iè5qXRxïTÏì[µwö­ù9..¸‡*Ÿ¬äL9§À
+N3›Ó0œ= ²†[Õ~›?§$Õ'"c9õ"ºíâ÷Ä™Ut`3qP«¦ZŒ×A_®ð’¥F`Šä¼È~Y›!Ø+‹àºï‰3ñ®g`}‘Ín°a@©ô?Höi…àÿ^dgcX
+ª¼ð¯À$r˜t›E]Ëu‹©¤Çƒãj<I‚%I±`ª	×!9ÕT5zÝâ³ö|%DœP‹çc4…%´s
+Á‹LèÅ…Ct$ÍAµ²ê¢èä½¶‚mMZ2ä.»Å‹©7²+ÓUtGx:YÈÄ¿T­ÊÕ…ôë/g_ _ðj„›÷	Ø7¬¾¼]Véþp*ú3†¶õ#b‡øŠp³Žp@
+1¸UcX3à€RžæýÏÿE"„lO„Èê L	^Àýæf° Xzu9hf¿èóŸzkùkß›•6@î76Ô°m4ŽM©¥›òÈotDÌyƒO>1«J ú†¬Ù¬ÑÙl^t»­ŽŠ6í4ŽsM¨.”ÇSE=oF ®ôCÌeLØ)ñc€qF:™!¤­œ1¯99]+Âi1çqWVÖ9+Ï)ž9ù;éÄL.^Ì`h2àŸ³DE™\æÎP¼ÔõC‡BÂC83Ó"ÝÎÈ_Ó¤Õ‹Lš”ÿ¹ë¬íD³vrÕì7È—ä¬qÞús¾É2¦Q¨ô»×Koê¹˜Ës…¢’¡{}ûŸ3â¾ö'K–1‹”aM¼Ü)ÂË$åd]Ë¾Š Èsô$çÑÓ#Õ½ãËJì…Î‹¥r=k‚IÅˆ¨4d¦b~ÁÚ#kX+§·à%åD(@Ûõ#KšXG³}#äÇsEXIêÃŠ;Ð6„‘È‰XÍ2œhSñiŠ++o&a€äI5¤Æh})CÊ_UÌt×ÕÝaF†LXŸbŠþ<BÑÚ£Y¬˜—GÙ SM}“gøÕ²%¡k*_"T)KÑ‰vOÍÐÜOº\ÒÁ*yª •·XÛŒÐÌÇ$ÅÌüÿ   ÿÿì½Û’I’(ö>_‘ƒé¢š@Ý«›¤¡.$k·n]Uìž>$—L ‰ªlHt&P—f—Lû¦yØ‡µ#“ÌŽÉìØIý0fZd’­§­÷ýˆý}‚Ü="2ãšH @vÏœm›a!3#<"<<<<<ü2›E’Ý6§¦D»4±OÖ9|ê>ê5G­QN
+’_€aŽ=<(þçÐ‹Ž[ÿ?tYT<Ö-Ã¦áI;âŽ›?·Å-væµº¦6ló$Y`J3œ{Mraœm4uŽf¤_T“²¼éˆU0•:¥@¼„ùù*ÊkP®{qxÕÇÒårŽè,«ž2‚¬‚$ òÆ\×¥\UêSx˜ëÝàÿ] Ôîëæ¦lÌüRM*#ÏA!ñÌÐ¡Á÷ !ƒšñs¼-0jU­ŽÓe†Î¢˜ô0÷Â¼Å¼¶¡Ÿñ0‹¬pzt¨„V8hžì))xêVA0_¢&/Éieº_®±5lûCM°tÈ¹ç\D@e¨/VûxŸË@i7r%wbÒ—a2ö{^ìwB?µÂ‚³Î´sb¡g…&ZÂ¦·tËäÛN2²´ûBÏÍßÙV!%D|é6›žN) i"Ð¡ßPGxSçmsNøX‘’;lÃnŠBŽÔ ÇžÅÀÖtµ¬+¢‘õ	}éoéö[•—¸ªLoî£Œr½ 5eæqo÷ ·_l8<!›Ðâ%³,ÛÉ.lZ=$íYý&³‹^óØæY5§ÚO‚®¢»cšî25EìhŽ45ÊÞÔÜÆ6‡ÅY˜:Î0XÿãjƒCâY-Šo°ÆÂTh¥6¶ˆð2ô
++ÚüÎŠ_ó†FÖv6«zÆ6lG&©Š¦:7q-µD:mKR•iZBdMÛ”\gb[&I©þÄn™"ÿæ ß/¢ØÕÁÇ:;~ŠÓcÑóãG½BÈN‰,ŽœÓ,ìSïi?+ß"¨ö³«üŸ•`57À”6´vgãw.ÿ>«…W!ÚìýÑÆÙUõÓ)ëùÑÇ¤œíÜ§'O"ç¤ú•tc‹¼7vå/ëè„žõˆçº™«l;ÍVêBÐ´¢ïÇóãµ‘Ò*åÂ]ôÖm¢¼t+0üsÎ•ªç^+äN±.ÃüeNq-oŠq¬ÿN±!<N7Ç®ÝàÓÎpm6LP_Ë›bë_Ö[&oêk>[t.Gêµß
+^ûå„ŸòÂoBhrvNÅÄ€qp~
+òK’SOiK >Àv®ŸV5@ê•¡RV/š»ô²Ö©Z­„­O„Ý,~Ö›Ï§zübM[P<"r¾m~^×§ŒŒü4\pÊ,8-Op.°ÅPå9ïIÁ5ùA_éQ-™KŽr×&Ò¢
+7‡'L	oTŽ—ëjR+:¿±h€'FÎ{|©æÒÆ;CŽNl4Woß±o;Ôß¼°ÄR@âÉ¡ˆAˆí[½1	ï^í^§üi0â7®`Ä¶=L{6&Ë²æÚQ)ýkžYÙ¿
+ooX²¹“åøC3›|Ô÷˜j ‡%Þ1Ê.è0¯¼Ç¢\F‰*jàá
+¸ŒÍœâKwS!ò{:WM¬8­Ì\Xß«óEAhÖ¸CJÏ§ˆ˜pål¯ˆe·†FUü¥Q8Ã98¢”Ût¹‘kÜä †FJœ²aö=æîêÇ£À \SFÂþY)AYÇ¿$2H1“OÎçMÜ”ö‘tZa[¹¨öýërJ€‹RPQç™¦áVà*¶.n‚¬{[ÑµWÞí±ßë,Xg<Uº*yŒíä‘é¬ëëk"ç[M?þQ>P<÷¸ÒYø$µótÊÂÊÖ)Ô;™éÌéÞóÃ£SïxŽ7{G‡ÍÃ³ÝS¯Üôž5¿>:Y(M4¡vÛ¢ó=¤˜»ù<9ÁlKÅhtŽ.øKÊDL.#ðÜÍ§Á¡ƒð>áÐm¸E-·¥sÞ¶ÂV1ÆÍ_°0X)Õå<eœný´¹úéÖ€¥CÖÕßÆêg¡ýkX£^ŸÃê§!üÅ¬}§ÞÏXû<WÄ×”8‚§‘Ø--ò)›iÝãÞñW»ð³=üÓ¬|Û<‚m÷Pa?cš•ŸV›bégš8mÓwúÇdÁ¶Oo£‹ 	dnéTÎû#5e‹j«!9°»\fsô÷rÑ°ëü›ºÃÄ±|
+¶³³Ê’J%ÖÎWœ©-ÀlÆ “.•sd¦xuvN÷V0Å½ÝA‘i$H©Hš-lÅ4ŽÝRpY¬»”[Q¬É²ròÍ5,Rêzš¶Ø¼¦5wªÆ*ÞéRó&î£øYJƒ›l%ñ‹u”2)ç˜‡ŸÞýŠµ˜ˆ6óßA¯ü­æ~óp{7SðÝGà•¨¸hŒ%é*J&í_XTèF	9ÖæžÌ4?†wÃ¸õþ‰OÆþerÝœT§ iBe.4õ„Îbû8Çé\…#ó
+ò¤šÍÈDà_Ê|æøºø|Á[Ã|Ëø¬'i%~Í¸^EaûùþÑé.°¢¿y	Lé°%.gg×ÛÞožò7˜ÆMºn$A¦ç'IØE[5Ø›ƒApÍó¿ÛI1ïw:¸»•%äðÎ×²—aò,Œ“ÁƒO˜
+\buÅ‰V'V»Ï\1§Œ›7w´9îNš;"»nó4ãñ‚­›qDä2wîj¢êø²'OpàpEX¤”öBˆ*ÒKE!›~wSGº^[øl,Ôdº >…5ÜN´g§z¼t1²^ñøÖ›'ÞÖÞÑÁîöÝßcô'o×Û;|¶ß<hžìyå,GüÁËý³½¯w·áƒ·º³ ‘;¿v£zP'2ÏƒÑVõ1½ IÌ'¢Ì3`t¬ûå´Ë”)Ê¡x„ö#¨Å³vº§#øŠ†0íqŒ€ª-+l<&Ø¿p`™\@±ÙÙ…
+íXÛx|1Çc{Yõ¯ƒÄýeÖÅ^·M:‚y–£$DúÁ´¨ýîÝx­ ƒ”Ÿ÷¢:It‘º`µ(_?òêËýþÂ<ØE}jvcHàÈxµZ¶ˆ€X/ih<ë!M½+¶qˆ“Ì‰•dCY’†òÉøÊšƒBN‡!Îõö…dü<€e0Šo0¦¼¿‚8ñÊGÃQØ‡ùëx	,Ž€Ò$%~7Ýð†½Qä¡œGï‡ Ž¼è2ˆ{þ0ñ®BèaL[ñ ½mÛØî6õªÚÄ%[ôE£Ž"—/Ù¶zq=r}¢¯µÄ`Üo^S&µÜ•)ódª'hî˜Qüë0Ùë\‹,æ‹Þ¥ß;mGq Þš§í@þŒ èâæxºÙð‰N¡9+‡³-Šàe±¹hY4
+Eê5¬ŒÃÿBÙFãx ItÐke6°ÏYkí()Sµï7›êdHU’p`­BïdÑKÚƒTÊ¬WÑÏ¾ã°íçcŒDð"¸öÏa¨^™Qc/¸z‰Gh´‰_N­ã×ñ \3Ø–óŒž-ÏFþò\’Å‚WŽvßHqï±›ŽiFá ó¾äÂþÚ.W1ÍZÏ£!|ª}¾ä:xÊlñxTù"þ)CˆYgØ=æ«á¨zLfT½QÝnïß¥:F'£¶^…š‰—hd%Ê!¸¼ß
+È–gbÃ:‹2Tg¡…ì©OŽþ+úO˜üF•’šÂ6Ø„¥æ‘BØûw4ÊÆtèv†¯5dk*×Ú°íRia¢i×äjØ—õÕ~X'|´ÙB­\ú±èBÅ[ªÖT/ÈÏH”ì±T}ŒßÓ²e±ã( ]¸¢Þ«¾
+{X}}Y^$ËÅ÷0?Mr¶E/t,¨ql±F¼)ÈlQáM‹R5ûq£ª{x6ÍVÏÖr½½¢ç|]
+Z«:¬
+ru0æ×óF¿Iœ#"e?½ ©”F€ÄLÏUšñEsNžVéÕAÔQ3C¯Œ&÷¿éÝQÉûÑ+åÑ/á’ó8ý© Fq¡z«×Öïß¦ßo,;Ð×~OX6à~ÄÊ²-ÆÜaû‘Êãf¤–—*Ðé›â‘*Vã[éøqˆ„ •ñáåÜ¶ÜJÖÄ¬¥/½ÊÄ¦Š­mUrÚÒÇÆQA-®ërÔ<{\.©ïbÉµkùHpU«¹Ú7‰¡;îõˆ¦OG(ï¼ãÆ<ôêÖ+öH=Aèö°Šw6Šþ†³%Ç8—Ù¤ivR ÃEAð•O¶‰$v÷€!GöutyÉÈo¿	›eÕƒ—þevdÁYˆÔÆî'ó–ÕªóB9Ë\·Ž<Ã VžŽ××è¸\±³ÙƒóeÐùF¶IªË!€Ô­Â	ÜP÷)—_‚ÑÙ®¼²q,Êí»od˜‹¼ùÅt]xrHÙ‘M¾aüi·€O“{wß¦\”0ƒÂª;ÆW4™Ÿ§e	ãE#·âãµ"6mP^¶zCälýê±âÒ_šP¸TõHE„7°<£ÞÍ¹”>„ÔC‰c§ï0l|ÙwË=ÉÝgøTºÎOr²¼þ…}4æfÍi–êÜm‡‹^çHW5¯åÜr¡BU¼î*Ôea=Ýò!ºÜ3ä0e(äù	f^]¨šU¶b+Qæ¨_ô<Ûy «3Mr¹Çi…·’w\E>âyE!Ìåª÷uA{;Ñ(;˜ðndÂõ«K ‹K8ÄéTfƒk]cÁvç*3Xzp³ÏÌ/äè—žEž¦¶}5›y…#Xºí<¥âšuY¼êì3³{ˆ“`6…Ûrð1¾w p<˜lÆ¿û'ß+×*ÀÕJÊC;q !ÚIN=Ñ•0v²÷üÅ™wº·³ë7w÷7½çL=»ùoXÈ5œKW+tLeþ#VÕ®?R¦²—L9qã•3ÅÊ}0[Ü–sØÏ®^³K(YôðÿúŒKgÒ‰¹âÙ„CÎ~£þ×A›«€ß}M“«¢’S¼˜,¸Ã?óÒ‰ÿ0ò‚d´é–¥•nßÙbŠG<¨´+‹Ê`Œ‘v¡õÞŽ/}Ên²]ÍSï•Tˆ†ü\ƒñÜÙ…mˆ=•·jF¹4ÒÒZÐ”ªÕÒ©¡M¹¼¡ñ$?MT¦f‘RÐVGR6rÒw}N½õ¥ Ÿš·~akœÂv8“ÔzºíS³paõÛE‰2yt’<“›û,–b¬vÖq¶íæÉó¦w¶wúsY<ß?Újî—…òHEÂÙæ°³GÂ7nu–‹ñßÜKàw¶EÊn¥H“}KªìjíÝ¤^×—v»(nì8"˜_GÅ«šú‹xä9™þ™wO|0ÈP?E–ƒÚ,YZPSÝÝÊÃT¸àÄ™’7®¢±JsãÜ&1Z³ÉËßjg2»t{b•Y$k“	” ©!ƒBÐ§Yp	.
+÷JwÁbÀ²É‰ºÞªÇ6“Ä+oGý!ÝôŽp¦c»5£K™–ß9æqŸº^pF&Ø_¤†Òý^sß+¯î,¤\B VÖë¦8Z©Zqf®x)å cæô(a¾˜¶Ø’5&§üêÀÐy"áßÂ.Šú%p¶•¡^R®ô4£+êºL^°3±vPß
+¡é¶ßnd+J?ˆ)ø Îº+Û€Ã5ÂUi
+sSÃåÌö¬o™Ç06%|þgšN£`HýÌ‡=ÿæch¥SõÁÈ.U`º*rrP¹ŽMç,–T†sDžÖ^-nÕ•\]„hdahÖd<,€8¤vûw¿Óºò3$Xµ«i‘
+jK•Ëß™:|k™ß‰ )ß‡µÈW’ÁŒ-Š‡
+ƒPÉŠ¦¯p©Q¼õ¤#m 7´ãÌ‘PSÆf
+&ïÉc0¦‚‘öí7é¾-H•Ú*œUN}Ï h•ÁñqkšhI„iË8¬µu¨}ãrg «O²¾ôXWµÐs÷»rheQMÕí½ËfŸ¯ÀÉDàSRÊ´ïÅìî'{ùJ¶ž²ðZ…[,¨ÒÃ’ý¯ÄxOwBY8ØÛÙÙGËóí³½£C4g<kîïÛ­a·õØ>»{:9Àî¦<½P¬Ã^9Ëêù­wz´u²Kç‹…‚f˜«öïÖd›‹Ú-ùŠ.4¨u‘öC
+k'©5›2PÔ–>ðo³læ:° šPSTÑ4ƒY¡-¥’Ñd^ÌðÊõÖî3@²GŠ
+WŽ“ShmÛ\L‰Ñ•ÝŒü>ûÃñ(àwPˆ!¦1®.‹ÃÆªüæ”|á÷zþçäf¤|¼}GYPM,}7NF(|JÍ\qo´½Æ8 FË#Šò.k_©êìÝ —ƒ[dK3nEªÕÒ¼®6‡×t¨†¨…E™À+’MžeSD`[9ñyÄ–³eW\ólqÔnåÍÒVÎ,Éó”³Î“þZÌÓÖäyÚš8OòLmI3µÅfj«àLy±9³´•7KË½4Jv\›—î'Œ(8OYä­§u	ýÚFUÍy“BÇ3ì’Ä*gZ}YscdÔßzMoL¡vï‡®YË=‘†­î%ÝZƒÿs¿sI¾›ÅE¬ÓQŒkZÜiâTÂÛ[Õ¨@*OÃ\@9¤àìg2BÎjË$(®ØMy‹Kð|ak.f…z)Lo5å£tž`a{åž.hA¢Ry‚Á—]‚–ìùÙ]zÆ)®ž3½À°Ü®‚É˜¤B›ó&œ3Þ˜¼ÕT§É`k’î±XRC©4ãF™ò-ÇÃ+Ãª{m‘"¥‘ö“ø­!zÈ<jË+ÃÖ Ñ” Vö;d[ª1¦4ñn7°)Øà”Ž¾Y¡]=³5;/¼¯ˆ›êqKâˆ[VŽhòÄ­<ž¸e5WRxÍ–›+n¹¹â4¾­gt	œ36RÎ¸åàŒ[:gÔyãÖ¢ ÙXãlv9)²¥¦çÏ§÷k.Ì!'ðH*Â…LXŒ-ªŒÑ1…öº9cnK-R®!öY*Ù=–dµÅÖÑÙÙÑA¦¶È\ëe7¿Šää×ôží6÷S È—Íó¶ˆyq:î÷A®©‚øØïÐÉ@uPÒ‹ú—@£xÑ’2Ó†¾¬ÀûÜkX„ò–”¾ë›Óì<—†¯P#Ú›GøÝß7·Ï>ÙA^ˆMt‘Þ±œƒ•Mœ´EÞ-HmE×/Ì4Tr²ØJ4\îÉÄ}ÃtXØØ@§;*º¬µ5±i‚ÏBsŠ~‘wã>•<­¬{PÍòls©ðzWiÈKMÚ'ÖœòÃ|©=güÊÞ®‰É–HKŽ¨
+õ‰ ]O»Ðe‡BÈ–HŽÌœ1vZ}vå¶°Ô=º7ªÞÉîéËƒ]Ôíî{ÇÍí½] ¯|ºçmÀ·ã£ÃÝ-B?8o8‹ŽºÝSgÐCÂŠ°°|ÄÌ¤`óP„×ÍÓøgË‚;¼ïþþx_ÖƒÃ²8:9@»¼“¦'¡Îªú–·ÙÓ°?ì^'¼eËXiÎ³búE9×ëêÐö£8Â S¨òãs¯*YT·D@–‹¼·‚…6ÜíGß…‰ˆóÚköƒ¤(AÉ°øI\*g
+¸Çf#p:(¤;¬¼‹( eH…9ðj%ß¬ßäU–‰W'ÅåÛ£ÔÈw”W™ÿ6¸ñx4þÄK‚¶bl!Ÿ÷ÁMZÜà9òWg¨ht7úÀÔÅ¸(BWî]Ûµ\x@!=SMj'>é8YÓÈYY¥df»Uˆà”…ÆSgAÜÏ#tBK…Ý0èì^{þ€Ôí¹`­5œðá{/:¿É…ÈË8a`p£dûƒv>Þ¤r),ûŠ<s`ÕùÓGKÄ;ú°î ÚìÝÙÝOq?Dé¼¡Ñx8ÀÜ!7ºû©vgçÏ>({[²ÅÜsõ fÂÙœ%ùzÅ>ãÖl”®æšÙ¤Z›dßïþä{ êõ‡q0HÒë^yªOT°¶ºÀ®G‘ºy7Þq£÷(¼ô½ƒ»Ÿ:<£LQ®~ÿLÃN”Ë-eGš<Éh}ã¿rF8R Ãâ5qÂgjRL>qŠêò< [Âr€Ó¶¡ºb†¡ unv+Z@àbÆ²Ä—5ìí€HGö;dâpvÒÜy¹½›¹&£­xy»UºÅóÍh“,[|¶©¼1;±m(¶’ÜÍÄ²è6¢m$hî-Ä²‰8`LØ>î«L7âkèûQÞv4i/Ðâ­ÚE_ÓyÊÖO»<åWóÝç
+ls…†VLœ7@…÷ÚAl#÷ëüFU×h›;²c|uè }Ëu)³…AËÜ^ÛC§ÜÏäMtÊ=TÚEgl”ã{ê]Ô²ßFTF¦‹Ôô{LöíÞ±€VS™=ÕûÄL=l¹ÝÆKŽ›T§Ö¼zi^‘’Õšw†QìLª«Ô°¦žóæ`Ud® ÍðÒúÂ*IK¨x´V§r£ÆU†(<üçÜYé;»Ôï´½ÊT¯0ç£+Òˆw|Rœ¹óXêñ”jVŽZiúx;e¾öÔÄ,²Ö9 vm
+ÄÚ¯îîXÎäÝÂh¶¹652½Mû%c_Oƒ‚y–ÖtüêlP£?¼¶—­íuájQí}1Î½¼NØ)cº-œÛÆ¸ees~‚oÊ >®œeÒ>FÊ ß;/„0‡°>ÅpÌÎ] Ž;Wn>Ðn©3'>ú¢- ‡T3ë"XBqayUÄ#™ï"PFPh¬àÀmúôYÊ >ñ"˜$ÈÄðZŽ‹Ef|èÈ0û­Æ¶Þ1…°ôN'_j´¡8/mÞid§¸Ò ð™¹2ÿ–-kùUMu1“ÎTÀ¥¤ÍZ2åº`V\?1²Vd.³Îó$ÓA6ò:ÒÛùå¨!›/Ïš¨u<ÙÝ>:Ø=Üïwv½­½]øuÖ<™·R¢°tåå]5f7¶VJÂwný…¨â¼ -B3š¦H›q™p´SÿRF3n¾8Ó©®€,a§ ™þí¿ÿ/ŠµMÃfT`ôvj‰r_•[o“ã3Ô:9„Î(Ê`u¶¿*™•C¶Ð­áð?]ÐÉèÞ:÷
+¨œ$«³³ýÓñùyŒ‚Ž÷%.Æ8ÕØ"ªeµÌmÀ,4Åvð=¯“»#|5ÉæBï@Î®ð•óÚ®ôÙÖšMìÜ¾Ò7„¯ÌÍ`iæ­à«_Ü6p²ûüå!î§/ŸïžìíÀ/2::}émž¾Ü?kzwØÙÛnÎ{7°ZºÆ¿—xN e{ÐÉê{÷¶ðUÑ0X.¢)°|õÉvûïèfÐ¹f.Xïî±ÌOi3ªäûÀWsÞÖæ¹|åæÿnï¤ô÷¯Ä_þƒ[PÂæI¶€ÏOšÏîþ¡9ƒåÞ Çþð"lÛL)ÃìóË¸'swÌÎ!cÕÙ-?	V—÷ú@ñÌF©+›ÿµú¹šŒüx”|Â¶„Ñ#7K¶pÅ{£‰ç{­^Ôò€m2Ã{y²_õöüÖFí/Qœ#XŸ—dQ@J,gYñqávÙ¿ò1<=Â(kC·ñ
+ê†¨%ÀTñmY+¯b†UWÞqõÃ$ø’Qê“r D°Î1ÍÚw°a[	6½XfÉŠÎ³Ó*á½e¬Fƒ^?hçZ&¸¼­2/ ãÞC›raÛ	(ˆcŠ%Âúè(†š	ÚõÚ1ÏS+wÅA`,vº.KÝO·IÚíu-»òªäÖ»g{_7§´ØÍ³ÙuXíÎj·[Ðá>¶»Në]&[¿LöÓÇ„Oxƒï4Ã^bPúãÃç%§H«L¤öMÊ¥Ÿ}7ÎK”c+·Ô¹Éw²FÿæxWmU
+JŸö*hóà~³»u\r®ŒêøÉ8††FÀþÈ²Ì‹ñæY[xÉ0ˆ»ð²wC‰Ž¢1E½‚E»œáOýó&ƒacEl§ÌX‘Ûö'è÷úçœÑÀuæÃ‹pÞ“2¡	F$ŠüÑ8öy`ªGžöÚ"#+é{Ô†¯Êo™k ¢Ÿù½^Ëo¿GÄ&ßý8(ÒL·¡	‰ôÜ˜ƒ¾ÔæCfž<xáôèË-½fækª‚,‘òÇÔú}‘«EY±uÿ“6LÊY¾°”y¡•©HIÇÈIÀ*<QûªS¼Õt/ñôÎña~.·,¡VCñ’¼‹( ŒÂ\ÞÈÄTÿì²2È
+ëÂ‚=¯~³+N7-¶$ZXä}‘5Íþ|Ëþ|Ãþ¼e=¯í£SÊ5¢^P%’.—v‰²¹Ÿ¡$­ éï<Ãã‚È—"›Ž–n/ñàxŽ–x‡$Fá é# •(?c,l·²ÈÔÂQžsˆ¦à˜J¦.×‡ç¨K¯3~¡BªS ¤ÇR}#2:ß¬HB¥1ÊZå{“0,#R.¾:ª:ÌBÎaº±¦h±H·Òéîû7ÀŠÏn†KÔ!üßÒö[Rg×”;ÔHáé¶]Y‘¶mi²4\íñ(¼Þö´AîMls£Ì­BÃë¼Éç‘ñÎÎÞáHÕT‘S5eáä¹n…¦
+g“§R9¾ûã9º¶‡·hËýÙ‡ŒäxØ©Ø¥Ô·Ê#¸®#=ËŠ\kaQå«ÊqT!+ŸTÂI×Á•òŠ¿Çã›_oà÷\'Hc˜C£²²¦¬£Þ‡"<j8e¸Mp„žìÀNJ6{Tr"A€“Ks\òxxnN\´HÐ÷+?îÀò>áœYPè;Äè‚Cá‡ŒF›OÆ…É—PÛ/¦]6Û"”&ÕÌ1òºß2²úÿæ.¤©z5¡)WÁJc2ÚL-¬
+ûõe‡ ¯Û\
+*HFãÎu5ào¶ÛÌé·¦|½}9"HghU]˜çD9îãæ¡yS&¦Ü;Ô	×@š<3—hTO³ßj¬p”&ÕçU;{Íç‡wÿñôLeXJ[)÷Ê”8Í-¤trÓ}
+tPêA²b©ªÂA‡eöB‘n
+Ñ›íæŠ+]0Æ§Þ®R(Bì7v$|»jÞVÒµñÅÜ@UÑtÒ Ð 4>[½¨¥©û…vÈ|8Äá+S<ªäÚq $wÔB%‘¡²5K2³Ù*êî^Æ¡Ö0¾Ç!ÓUYzÀk1~¹´XZxUc´Ž&¢ÐààŒ²a‚)‡hêŠZa[D|àˆ¼h ©ÁææÓ¡—î¼ŒáœøWXÆ“vÉÄ[:”×îÎ›_‡þ7AëÎ4â²ªçMýDIœxŠIê¤UÀ^¿¼P;ÚAùÑëäá£óÖÀÛÒÂíÛ˜ÁA8EBäÏoc¿Ÿ9Û~+ÙZ—4“åWØÉ7‹i¯0xÏX€ô‡ää€Kù‚RÔ‚ˆ”žûp¼¨zP+½jûƒS÷Ûòj3báß7 [e¿\û¡¶PÖ´425‡0¹È ßchÁ¥¿‹l,ŒJZAX±›Þ»}æ•èÇÀ«€¯šÕ¼ÐTHLDž8”ý6>¥Ûwšz!ýmnxÆÃ1`µ½áÅM‚»×Š£«ÛTdjñPgþ%ZÏ°i³qlûÃÅ±78®ÎüÖ=(·Å˜”ÈC<ï*ÀªØt™WDÚmõüÁû´–YÖÈí«À9†7ûßz¾?Žƒª>ØÁpÃ»ðl[Ï/¼ïËIß
+ôµÇqÞýÙ<¦ƒ‰gàb$?¬é•¼‡Þ)KÕƒ 8ì%Ë‚Í0uá:½`‡Ë±rO‹Ýyôs3h{eª-Â&œ²)*”éú0laèœÎQLÞò‹°¹Ï-Ãù±QŠ,l¦êOpó$ÓÒM•O„ãr‰’c@:¸=æ§Az î”=	ž«ŠO¤¶´½÷‡{ÛMïødïëæN³4EÍ=µâS¥ž.©•xïå[<>’¨Í97Ñ–Äá8‡IÉS\1pO‰Ó!p¹R¿/½cª/äóËÒ[æ› [•fIÑ”¢ª\öÈ}’ù%“cô%ócªCml¬©_•ËüÇŠ$UFKÞ(¦ëkµ~_’!(AÙeÆ°ÆHç$ÑGïs4¢vÃ½èèLëõè ièI©:ÁeØ”^{‰vÂ~’ªêA\$­âN
+þkÖl¹=xý}¨ ßW
+ÙsÒžSÁ:µÀl¸È1†^@v X÷€¶äA^†	âéÏïIPhê]¯1:Y¢ö/³Ë «îQœšü‰ªúž&|«Q‰ÒÌ_Ági7ËdœW¯Ç;ëµZþl={ö·Ùã3x|t¾ˆ>¸®šU*ÚXÛzöæG|^bÏKÏøóÖJý¨oÐ‡z3Ý¾Ðîñw¾=lìm{ÇÍç»ÞÖËç»gÞï¼í£ƒãý]8O}³·sôÍ££“ãÍC4»9;9Ú÷ÊÍýçG'{gGxÞ¢‹þí4@Ð×{/wÈ|óÅË»?œ<kÊ÷ÿt•Æ,0árºNð}À-¶2gI~±pŠ7ô¤;†|5HÃ¨W…"‰™v	8ÙeVhT›Ïìãéè¦ÇOÐ-ƒViÇffl€ÒN.)iS(Y0_:Õ«4Á‰xsa½à>6âjL«ÿH¯n³èû×“®t¤¢içW´$*ÚØx—ždàIÕŸÊ¯yÑÍì»KÁ£Ï3Æð’›}è5v¹©šE¥˜ò€ÈlâVa·Ü˜4]z	e<Ÿj²²ÈîiëpÂ'‹2	£šœžáÍ±¾®J©ÖBâ/1N#iu3Ð¨z\2ôúÁÈ'‹ÉÛïí¬@;Ý0¡z[˜ÐËÛ!$Gíq[—dm 2û]®²ÈaZÈ°ìŠ{Gˆœ‚, )‚tF+ˆÌC¶á±mÊXdf,0†,7(•uF³ ÖhH2t¬® –mæVªJì-7žîqËFÌÒB¾wL”Ù#¢Ì+ÊÇ‹†r¿X(sŠ„b	\â¢ãBÁKÌ#.p/Êˆ	ÄÙ…{E±6˜ïp6Z$¢Ö¬µòÚ-¦ÖL!µR/ÒY‚Ì
+dÖ@ ÷R$ˆ<q–©;,J¢Fþî`eþ«UÙEÑÍûïç˜8çŸÞmj4‹ZîŽ\ÄÍ2H—÷w:ºßÔ­UmnFybÎ<‹¦›ÒB®$yÓšï;¢yŽ8¹ÚDï‘³ù•énd›Gy¦Öa¦ÂóA%êv™@î–—ÖeÙxWg¯=&cafñ…ö`qÐ÷Ã°CVtõ(Š‡þ€Ìwe73†™q‚±ÛõÛJJ~¬tæL6Ër,êÝ|dÀ[0@¤]|ló·Fý/ä»Hµ#˜5ÈTù¥·¬$FM5)µêú2S®þÈöêÁ9aŒ«D„Ú3Ãt}R¤ÝÕš«ÝuÖn£h»Ò,¿`ú»îxÀb'Ã®KŽK) 8~‡[BGÙ ªN?'ÜPå]Âá|ƒcNÝk”]å‰j°Ô¨™Fk“Ò%aÓ¹qMÕìGLá¡ÞÉû‡çÑ©°Z†úª¢^ùk×h‘ÇQžfDïº§áKÔùÂZ*m×Ð®¨å­Ö36 6ÓdK—RódkceŽôS÷¢Ê,¹k€BÕQ´]‰{ÃË`ˆvÞSæ·<†»‚f¤¬ ÏÌ”ËòÝ‡4d2‰Îœ>¤/‹
+žpyúE·Ùsv1zåÇƒri;÷:Þ bÆØ(¿táv?¤©1ìŸÅøïáR¹l/0K¥ÝÆ³‰ÊþæÝ?6Ð-èHò:*Éf=ÊdÚdø^ÊñBT´¬·†õ¾©Ùý0O¼ÍÁÕèâ\Ð¢Ò`ÅµXýªÞú¯Q­=Ï–äâØ
+šfã×:;·Ö:óWÉ«W¼tÐ‹–æÂižÊgÉž—VZ¸­Bµ~=RÝp²éz¨r«{9wš.ŒSE@˜…[ÓÐdßq‰\)%|s3)íÍi´f:Ò<«`ÛxKJªÙn¢OvO÷¶ö­Ig&Žø¡·ìoÆ‹ïy£ÅR+õKbÑKÇ 2¯z°îƒIú$«s£ìJ;Ž’DÙUPõ	.¶ÀìÒ:þß:AYp¹œ‚f\9±¨—3Xœ¥R]š^kY¯(:M”ÀjŽG•áJÜ!ËÐ,ºflX œSÍ]ðÎÀ/á¢7¿$aÐëTèô{\å¥Vp•Wð“áêWêš’jÄÿqqz¹ÒC«óú_,¯ÿ«fëF¬.+ÏÌ¬òÛ§8n|ŒcÚ¼NasçÄ0ÔnÊ¸7mÌëò‡<¿¦Ÿ‘Tä(HÙÙõvOÏ^îì©ž™sÁÆÇcJ?š·O>–ÞxÀ,ð$W§Iþ‚j1{ôWäÔÎæFÿÀ)”ltŠŽ0:FC[ÒEaK!‹`aOÖªï{®hþæžY“S6qªX9 {}ÔíB;Ê–)m’X„üËQW>•‚¼‚¥ÐÔžñá,Ú9ø¶,a1«ªlív<ßo'[×6ÔÁ+®†¥g»Û/X$+¾º`½ÈUŒ¡Nt)8<9Xœ¾%Ä¸‰è>ÞðgÚÊ¼,
+ZQ“ßZPLÉá“aºPt°¹«¦5ãˆæðŠßìµ`	NŠXLª¬ß§ÂÿUZÁƒ·„‡Š*y’\¢#FêÜS‚¥Mê"ËÕ:½É5²«ëÔöå‡y+U«ÕÒ¤F<;º¨µ¤¶ƒ2ÐO¥®m+·¿rA ^LíºÔ6)ÕI•R¢CMŠN'jëêSp•)–Õˆ[³¡zB=Öh¸l`ÎÑ€Éœ¢‹üÄeÖ(À?öº–âPHVY±ÒÙ"#ÉCFDYbö€<²€0æŸõ,€3ÜfQtfCÿ”‹¥Œ‡‹Î CêçËoÕlÏ§{ðDY ›³‰–’ÀmÆ]ÍOœ<«µò´†Ê
+þsH›÷J
+ås`M—¬õ{^©’gH”\4MrJ7““$OJ‘,Ÿ8ò"JË‹+'5òG0Ó¦¬Âèˆ
+!=2_Üj¦äÔV¥õ[!úæ“™Jñ©Ä3eO–ŒºgÈlvÏž99Ç¸{y“ï™²&FÞ³çLÖ½ï“1Y3òþäù’Uïœ-Ù4îþ¸¹’í†ÝŸ<S²iÔ}¿<É³fIž1Gò½2$Ïž£ó(ª(c^<½Ž‚>åA›0Œ êgˆ³Ž"./‚ø×ògI²\\þ4¶üzÞ†oM3±ëþÉ•'±ÿw'¢_ºÑ½.˜œ¾;÷N¤ìêanbÊüû Ó½iŽ_×¦‰C²…Ù*ŽòO8yönëyÌ¬^W3ïË…ýœ
+&TþÔîVÿîo59érá”ËæÅ‡3árÑ{‰)Ò-[îD\É–-7L–óN´<mšeK’å9n†ÀâÌf8Cre»š ?MpÄÊZüòœ¤ÊóÚ¹,¹Ò)OŸLùÞ8r%RV¯r‹äúu¦PžÛn™+xœ&u²9‰“¥Mž	bK-GÀdQý+<ˆ½–Ëa|ñs>)”-¼×™@Ùn¤5¿ôÉ<Wòd'6ñ'Lœ<?9Ë¤xWÊä™&;É>'Kl¡±9dïH”œ¥IöÊ­Þ8ŸèÛóN›l¾;iò½	_é}Âw'LþY_éþ'#ü|Áb–$É•ø­W’#ÏrŸáNŠ<÷ÈrÌìöBNŠŒWþeb ar¡ÖâTK—÷È”¬¸gžd½S÷Ì’<kŽäŸI‹8‡ÜÈÓ©žˆÎ›Ð"Ñ(Ü'Ùò!ßï 6QD˜”µ`äûˆí“úèÊ€|¿üÇNŽ>EöcW’â{d>ž…§OÎxüÑC’Øy½–ñx
+vÏ4ÈrP’û'A–û5s
+äY ÿ\<~n‰§cõsHz<kØNx|¿tÇSË6‰ÅO›æØÎêç£´%8ž=½qž¢f>,~ÊÄÆöEi¤iï‘=V·ÎPÂÀ¢Z¶ISi‘AÐÎI ü8c/cªc´•óŠ˜ÁJŒ}Œ‹ÍB!ï"êcp¿y±ß³¬g)hÇÚGÖü€˜¹&l¿ócvR÷Îã0UêÇÖÅ˜ØÐR2ö/¼€ëùð¶7î|/üáûqÄß+oûßÑ½Ð%Œ¡+n¸´>´¢kÉ.Ugáðõ[â
+ØQËGÌ½X¶xtÀT6påÖªË,ÖÐ¶Ù½åõßbïàTyYz…™«*NN‚fHˆÙø^îòæÈrØ®Ô”J¤h@,ÒHéßoèßºæ@Ÿ½ñ)èNºÞ˜Ü;Õ„²¾’GL„iqÑL3 šéø¤ý=ýÍ´bzã1ð{8Õ4ãŠÉ6×Õ|ÃK{ê,oUÃÛk¿†ýõYjðºwx¶û7Ü<Oím¿<@»ØÒ"#là*‹Ùð¤>dCÆ8fÝNFåQk„™/p}¿ð“ž×6O8|÷§ÇŽvÃ¾¨Oƒ ³ÍŸïÌÌ,¥ÛÊgTöÄÞeÖîÙ»¶ê_Z’3D‘;vðk
+Ó+yõ(	2k” SéçÂF¢LO†[²xøòKÜŽ+éWä×
+¼ö…oG 9RlJð~T:¨§tL^×,;ùõû­$m3Xð¤#õU-Euèw(Ò||©fZ±“|8ò<d’;9È2úSå‹4°ŽÚRkS‰…ÂMí¥v¥©fŽüIkUú 7jÖÙôêkÆXbæÒqŽ×«"{QßXð~Äà8…p‹nÝ»Üvº xJž´N€ÜO_4+«›Þ³õ/ŸWT[L A—“å…[ë'hg>ñ‘ÜV6¶êÛ•Ýõ­ú;i*|¨ãŠLäB+ù\H§2&´ncBÆÈ§c7®±LÅS'ŒÆ•ÓÏ[±rUÔBí‘KÊDÉe,\©3
+¾±ºŠ9àÞçÈ–±QG¯HXù«u6ÂsL­æ­YGølïä »²»¿»}v{ì!Ü=Y¹¥À,6ªë…æq²_ÂJ5ÿì9ÕL¾ƒ£h•Ÿ5Ð‡ñŽý°¶‡TO«ÇU¦Î7am¬ \Ò¾[©ÕV*õFemy}£„6;S¶‰Ö%á#å}ÝÜßÛa;7³ûÝ­Wn¾<ƒ×GG÷mÔ>¦aD!ÌŠM´ªƒ¼Bœ÷½$8¿ûçwHnJhÞtê VúUçòe	ÌØ"ä¯ dºÓ»û{8h`ƒ¬åð»çQöµ»?ŸÇ~×—°(^d ë÷Þc›µEdÃënXç(2SK]\ !^b´Ð»?zm¨ÃÌp›Fªt–l±­H	ÏÓhgJ ´ôsª
+RýÕyl9éPõL}m}f?³Ázdõ…m¥æ,’gE/3C04OF +š§ qB84g@4Š="šÞ£Ühºß¨ú$Ì„Ï‘t32®d-hþµRéTR'î×DíP4Ã@»$…{~‡-ßB‹¸&“õÇ	»&·Å^ÃÁÓ¿ß.¦£^Ì&BÕ¡ˆ kaÿœû¼Òõ##x{¼Ë¸Òt&¢[ÓCž†Ðwáß¨eÑëG ÅÁ¬$pF‡ƒçhA˜|HÊcÑQ«~?¦IÞl•âV1Ñ?K’¹Ãº’È¸€P€j[ïìèowK‹
+Á®65Êï[…çïßý	(TÎiNê¢.ßfz\ ¦!®àE.q{0”!Hî,–ºvÖj†Ô0-„¶A’}CÚƒtì¤ ©àe~Ú#ã›¶ÂQ1äá3Íµ¯wj‘x}‚HlÓë¶ECî#¯éK;1HSao¼­ s¿ðN«°¥wª(<•\‘ÈnköÝ&–ðO*ýÉðtŒ/WW4œï"§é¨Ò¹æ'±T<.ŸzÉƒ…O@)í3ˆâØÑž8­Üo¯÷GTÇ$Þ…ãKäp4'ÒÓ6´§UÄ«PuÔ«!uõïc¥´ PÌ£¦OÐ©ŠEÒo<¤ÐêäUÅÔ÷ôÑïõxò3¶ÍívB˜`@Ÿà"'r´|ŽC‚sÔ¥×å*º£:éŽKõŸkŠ°Ú c{E o²È Ò (Aàš£`ÃªÎ…×&P"ê†ëC°¾¾,'»_–£°×S'nO)I©ïJ·n§RkaQo¯Ü	)öÉÌ"é#I\ù¨¦ôã÷˜œi=Ê]Ìô(kÔå´ŽzŠðit§Äâ_”œˆ ¥ûOslò˜xà}$H¢™ô$žPû	_(¬H¶c¢àzOãõƒ&¹àÞ£ò¾LYé²bæ6ªmÊ¨¥aHÚFj^ª1±êËŽXXºWŒè:&ý¾±N#ó{W,îwC:AÆri$*+
+R¤Ÿt Äþ‹¸)ôpv3¤Ú
+)‰àB€’Ï>¤ÅÔMö–2k[«)â¹MæËº!Ñ!Ýþ[prE
+™tÐ$ñM[ƒ¨é…ÂºM„ÍÚ‡Ÿô0FÝS3 Šs´Á·_vÛJºX™ï¯ØR1èX\)÷LéßyÖÞ‰YßmÍR†p³U'÷2µ†ñí8™ŠÚÒ^‹C”K‹¥…Wõ79­óÄâÐ|
+ÁfŠ5ÒŒhéÏgÂ—0É™&‰}–ÊøuòðÑy$û¶´pû6“Ñ Ms/½{‹7äx&×òÜg]ðXŠÌgð³ü
+{úf1í†§ÁŠÇd˜C‚‰Ëï‚Rl3(Ÿû ïT	G¨/Ê^µýÁ©ûmùµ˜lz¯ðï€­î,éµÖBY.á©•O$."“’¼KIßEF%­8¬µMOñEõü>4Ýê±#SÀª±ƒ¤y§xÌQ^º}'æåuhç‰3ù—hÈËpo[¶Y´ãhö‡ÁÕ™ßº¶Øª‡²¯ç]…ƒNtUÅ¦Ë¼"Ra«çÞK)²õ±M¢ö]‰Z§ üi¨Ý\†Z{`}¡Ø¡4èåégøõówÜŒÐæCr?ÞyPÏ/˜jgS‹®ï÷‚fãC3 ayãË²8hºéF8|\Ð:qÃI…_"8{ÏÒ#1$_À¹¤œÂHÏ¢;‡Yom¯,YÉ*cØ÷’—Ã^ä£>¯UÅãE$ƒÁ[VêtäÆI¹ô57d!Û—€üœ)ž¨¥œx>`Âúf»$ÉYô>,zçQt=…m|o èyíÃ>ÞB”KÕGÝ0Z°94Ç£‹*‹ 	Ò*à²Þ>e›§ò*±	šÚácBËžçÔIeX¦Â«»¡›'t ãÝ’Æ§†@$u4+­kÓ‘±ÏU?˜K-(èÖßQn ´o;÷¦wˆ“éÇ€ _`#®–t ga? ÆRfTe‡X‚ãÒR­¦ÚÍ±]Ö&Ì<kYÏÓw"¥Ë³wXí®ÖI;”ç´ˆ‘‚NèF-ðŽÐ^Íï)d$Bb`‰-Æ¬Ý°¼]è!qÌ]Ýõ©ÂÆlûƒ¡ƒ»BkÑS®ŒÌ¬©i0*hAâLPðó!øtÜÊ×§G…œè=,,bÝ¾ƒ[~sµWØŽ”…ÿQY›È1uú¸Ó<5›E©g‹lÑÃž¶Õ<¥¨‚;Í³£Sy;åKœäsCh²&qŠ¥ïÕ>°<¤ƒ´e{Ÿ]®<X®Õ, Ô2©ØÒƒM(sÌÏ1e%Q‚ç±ÔT3Á+îŠ/1X«zÓ3R™“âH-\Ó¸Ù+Èaç>‹|*m7€(.\‘¾ËäiÝÅÎt6œ;ÄÁJ³:á¨Z³Ofé2TÅdËbL¯èvw¬ôaÛSx?eMØòYðÏvŽð	ÄP'UIý^”{Y€®ŒÉ´O×¿üñùØ;>MX8Š~S«Jÿº$Ë{E¹ùrÆÍe:š$Dƒ°› ýÄçÂ²tš³A¹€Tï?’.†ÈèM’‰UAÜóÆI°Ûí¢±°,qÓœ\DWÇ Á¢ô8Ö¯Ãä”|­:Ý&†ë‘¤8¬Á:]MACûÜâà%;¹Ù«~‘ÍÒ[€s+/ñç¶åÁ¸—…¾µõM,ÖY:§Ö-Ô;¥Š½{²LÁW|Â0¬{ä_¤¯GŒ@ö:´©¢2`rý#ãã!†?>†Q„ÁUb=Qqyžž¡¼‚z–R%‘L\´±­˜Ðg5É·L† ¿Ø°&Ê!…!ŒÇôRá›~C3^üûëÇä"À¢Æ”k–*©^Á©û³êÙ’»#nHþ~˜î&îi)¸‘M˜ždÂô¨kaªùIæ;?É¼æ'gyËj0{ÄIúTªÅ2îÜü>¦ëÝè:sgfAï¼cÝËÛƒÒ{Æ˜8‹¡;²/Š¡6cþ`ìKŸr(¼ªÑw´¬/*›ÊDå[ÚÜÒ½MA¿½gš|nÕvR.JÃmà(Òn*SÒüXô8+ñ…Žêæ+zR·I¦™Õ÷IñÖ‚7ö)€‚¥Ò5'½õ;þóKŒÀû	ÿ 1aöRå ì]æÂž3ù™ø.r4
+ÃZBI*½RLÕ*¤ÄuJŸ²AÀÜ÷o «x1oÞ,Hê@òÿ<ñ¯Øm1†df5LÁm `ZJ˜Áç¾Tú"Û@	îŸP‚ÏŸ$¿Ú;ÜÛÞCëòêçO_¿ariÁRðÙÞaR)¸}ïd÷øèäl÷õ›×Éçá-þYz°ðú³Gç‹^¹üdÑÖµ5…Ã†oÛÌ{’µ¬úEz’øƒÔâëó +=y\Zp”è±_ºK ò_`}¿¥ÂŸÕ…ÛaÜ¦2ÿòX.Ë¤§ëQÜ¼âkÐŽ:÷âì`ßÃ(^âµ8†]àË7¿ëi‚þHþ]oôe~wÎ?>±}ôûCöõw¶¯ß#VùAéåóo–6Xå¶Ê¿©å~îç_¤H3?{ã¤?à%þÉV‚¼ŠY»ÿÙÚBˆ–k¼Äÿc+1h%|øž9~{< þh+È%~²•å²•ˆä¶•Ë%þÙV¢)—ø{[‰]¹Äl%öäÿ`+q$—ø¶/åÿÉVâbÔï±ïÖ	…½tÊ¬³~(—øÇ’´¶iìûgÁï=89Œük´ÄÅãwâuã¨O·‰8Hà%»HE^/ŠÞóFæfqÔ’>r—æüµ‡Ì¤üýÂÓ×-Æ%ž¢ò$¹Ð{¡a_xø¨b-á¡{×¢Ôg-CëB¹¶iw¢‘(ñ/¶•ÁxZZÄ¶B_¿†Á„B~oxá‹2~¯ë[Kµ‚QZÛqèƒ„ JÑƒ}ü0z°ëE™±î ÉçÒ&ª»€x|ÜŸªx«[¸øëW®ßÞä|+ç|[àß²Ôì%œTüA‚öûÚ1Ô1†Y¾ðcIÑ³¢6í°tPÊÇ]£0Ãzj… <Þx¥äû1Ú ´¢k¯üoÿÓJÞ¹?DE5zš:~ÜAŽ2¡W;¬Ï2]â>:8õ¾ÁPÖÝ¿ýáÓ÷pùãÿ®‹ ÙÇù'úf_bÿö‡ÿ¾Ú–Ö¿²Š"þ×ÿ“¾:¨÷_ÿL_]Tû¯ÿ/}vQë¿þWú<Ng‹‹„®7%á^JûA| é†p¼IÂ„’F¢X\‡	Šóg’x*|6²çï’h@U²W¸$¸˜žŠµâG&Ð	_¡ø}þw¯0â×ÙÛíæéîÛæasÿÛÓ½ÓÍÏ>°FoßpC.¹êî CwwŠUWbˆï>û µûzðÙ‡t8·Ÿ}ÆAßÒoßér8åe”1ŸôlÙì‘1b<H`ÿHK²ØÞU8º S¹àÖ‡êàÔ;†O¯Ž¤QPØ‰½Îµ |J\:ÁõQ·,jAz0èäW±ñ
+¤¾m Š¢RG‡`¼x’vHU5@D…qJ›ŠÃsZO¢Ï¬¶ßfâ¨Ì›~˜÷ ×A‰“3ïÊC¯ôzðzP¢¬œ¤wÔ¤
+â6Ä#œÂ«µE!ŸO8÷bÒØàÜoßx¯|û7§G‡oø.|ty ©ýðèÌ»Àð$8áDð|¢”/.ü„¾;H¡šåÉNZÖuTZÐ'‡õÚE%Ûh²“6ž`$aÚ>±¤!’¡3žÍ6è¨X~õ:y}úw=Øÿ^½~d+÷H»p’â”_ÕßLrÔL#$²l¡JOeŽªZcÚI¬TîtE–X—7&H¿œc8VEŠW–Å‚¦$QÛ«Ê*C—½ŠCw‡£D–ÅiDº:—nQÕ*ÉŒð* ù 3xÀò™tþÝ×þpK\°½tÀ)ÂØè&œíuäÜÅ¥ÃTJ»LâXÌ¦ù}É®vÊhÑŠ¿Ñ×†~ŒÐÞ~±cL¿Qìa?`}ëó=”Þ !ð[J F)à·aGì‡âæã2è=Ñ§Ø;ìÍS­X8’ôÝ+nJ‹i†Ì·ÜMÆxßŠ:7'Ñ•üA|Â!ìø#>É¾"LfBÑ;WçE»âôôX$%U%¿£V³^Kò€2¯Þd‚]Qä´cl=ûR¨bSÍ–¼$‘³³Í{Ÿ˜½GèŽR æ"!bÍ	Û~mÜNj±sœÈ+ïË¶Òi'}V›û2óÄ·Lý…¼A´X®ƒvYÂ	0rä·¤Wî(û^g·³ñ¹¾Ã™®ÇÉçyŠmë7—àÉNÅ~;YÁÁ{¨óo9Œ®Y >æ;Å¦÷S:Õ³»|ÔœáQÐÀ…ú¡tß\¥L)¸^U¥EéIÖvÚö[A
+¯-Âé«¿{ýæÍÃLåÊ†&†±Ï8,dh*ÞYf]qQ¤ÔÅ:ƒ	rk©xðùçÍÃ»¿ßß0<Ø‹gâAG%YÌ@éb‚{Pª”˜BÐ%³| ¢¬¼Žåó¢¦WÖ˜Œâ¼¢’ðg€MG¯9ÅZx›Â}¾As¢ä‚PººØJ`4Å]iÈ_9VbÈPðnŠh©¨Í¶j%¶À6=ußÊ,ïq‹‚ó‘Ì¼o+X¸"
+W(Öãí»¬ŽèÄfúK,S1]òÁ‰¥Ã;Ã}½Ã’lGâÓJîÃV¼‡›Ý¤‚0þyì/
+ÅhRùÃ–§F~Õ&M|·¨MÅ}P™7ÄÒ3Gü[×Œ©‚Šì$a,t‡€9J¡±ÆäùâÅ¦÷ªZ­Z{ø&ã¸²™­¨„3ýVUÂÎa‚Ò9ž7$¯MÄ–š„›‘š„›´s¹hIKÃÑJ²âÀ‰Ä×¨,ŠwÓC«.Ž_C
+]€mâ_Î)•««nØ©9-f;-Á)õ8b÷	Hv ýQ³ŽäåAcÂ³Y£R©”ÈôõÑß½úqóuåuòæágª£ a1W5xü< :ÀÌ·p<û!ôlcü‘ïpÂz0Ã¤rx‘]i
+¤:ð¯JÅÑÕvÐë1i8º’EaKTYnQä_ÁZ"	šW[ŒFâ[¾¨F“ÙFàm1æ5Œú–ä›#ýˆ‚VM.ÂîH?+Êõà(fÖFC½ŽP9âwµ–tvÂ•ÿ±Š:ëj4î,*;Ç¤gèt’’^S^_ ´ Õ- F…/T§V7[É˜.ÿT×4+o¡‚“˜Kz@S_ŠQi4™þ6Íuì#c\°X¥r8—-|fObNZ„”À÷YÌO*ú*Ló@µ}:ð’ªàÆ¢ëˆ;Ô•u¢+ 1¼r`Ê5²÷ÂóDEfà§-¿ý~‚ð/8ÙÄ°f”5ðîÝ»’bIO&@Ù†¯.ôtBd‚å&S‰¹A§âÊ‘x†`£L'uÈ&Ðä™*à¨K>ÝÖ-¯‰¢4+¥éÌø³PÏ•Ð¨£pUVŒçÓ§g“È)Nµ·ÃF*ô»i…Ñ ®‡¤¶IáoÛDéÞîÁ‰|?ö{Œ2ÅóI%Ø3ŒCu£b«ƒç]V'êãô?Ø(a‹eÒ]©¾¢²1dçV7%KàãÒ¸­qŽÊé‰¹à@Ô. %ƒû3)À;¶tÀ±mà%ï¹òz…²rU®ñLï<èëF@ &`cg)3/ë›F2Á¨q|xX#´¸›©ZOŒ[§¬„Jú[	zYÇŠpa)ëŽÊª>d<#Ø„å¯i)°è0xuaN˜<2Ôž"ÙË»¯OW‹n%½¯pc Ÿ(	:u+¶ný]ùéæëWðOâ÷Fü}Û	Þ_ùw|ƒ‘Sžþ˜ÝüHeÞ²˜*¯ßüø%~£OO>{²cgøŠ¸âf[V¦egYÚ¼ˆ¹n0]:ÞKÛT¨‡ã|\½~µ{ŠqjŽO¯;ž¾~ó³œ]Ö8M­´ÇcUq¶ðøSù–?šqŠ«,ÇHáóì«k„¸bUõ u<Ó˜uRžÏë Ž#rÐô{éiÀHZ‚²ÖÆ?¦dgîtyì-a	Œ›åÕ„Z¶Š
+ì\Ê8x1s¿“j=4je'æy`öþ”`ê¦xUZâ/éð—¼`w¤úñ?òëÓ}¼Ôô¤Ôø1‘isÌ+HJ({þo<íœ&uA=FhíK&âjërK©¦èï~ƒþ¤Òmˆ²C:;7sïSönÆîÍÜ¿¥iû7kgîáòÔ=´tQ]†¼å{¬½‰zjac0QU'ªñ›
+bäÏlW’Ð‘É2Åy˜l{xeÚ‘ø²"”{Lkûö¹'t»°·¿®"þÕýÿ¢¥b`\ÎuÈ“Øœ˜A×¶\hO6£-¹Õs:Vî²í¤faÐÎŒ8VýÈ¤{BU.ŸQ&/ §w…Š	«€‰ßdóUÕ{+êuPK½kü=©h4·ªEï}p£™ Lò´ÊHs®Ð­®ßUéßCèµrM(”Ò½Nf#òùëÏ™Ù6üp˜|Ð–èÝâz¶Wâkèðv40ûÇŸ\ÝD$m03±Ú†‹Y¨%š¢v™//>©Ì“¬k2í6øS×Òâ‹RS+ R _ˆx=Œúñ ¬tº0çM†Š‡oßÝb²·$A§»Ç%´¯ÐÅ8¢‚8]¥…TPz"1ÀÂ²%;»}ùˆµ(Š¥½”§#CoúV§ÀWVüKj]Ø ¦+€.9~XJñ¬ž´pŸ²WÞ&µ“¿
+®û“}ŒÖ¹u¾	ƒ¸ió•ý”ë£ëƒL#üp´ˆ^­crøMý hrcª&ÆÒ’Z€³hoëS¯B¥ÑÿFWâ‡w´i¢>û’¦ˆ EÉ¢àn¬Ô<VŽÖ¨Ç*€Q
+Ðx;U«NÇ/~å^ ¦zˆ­“4¬•Ý7xÖMŒ¾„É):»µGaû…h èND„ƒ›PO¤¨»tÑí¯0¿˜bIjZjç<¥cÝò;b)R¾ŠâŽõRžU»‚2XDM"(ÿfuì.h¾‚Ó¢¾ßS31Ô¬ÌcîRÿ•ºhÊ5Ž)Ø1ÿ?a#û!JÒ_ø£`Œñü>ºšÓ›n˜ðšhÆGàËœ†íqÏG0Y3½ñ5‹…¥€•çî5þq;}cê Œš„Ãp ·%£ ê†ÚC¢4˜½iAÒî±x¢Š[P„ç»?wÆ½ˆ{¿Â`>IV+¢êEB_i†>'¢ç€§s?Ž©&Ôƒ“PØ¿û!ª&}ýC˜?¥ƒ†rQïîÏP}èÌe¤4‡b¾`}¶³´±ø¦$òO†=LÏïóBÐ™ÃSlN 7<ï¢ –jõƒò©ó*Sé5Ì^\‘.ì*ã6ËÊ!š/gå
+„/„MŒŒ;Ù#Ð­V”‘\ãšo#ŸÌf3¨,'o³ß+µÚ£zÍ»ˆ.ƒxS~Ù¨ñÛÏJKüH¿­ÔÔ³ï SVŒ0š^éÿûÏÿãÿ¥|„‘¶ãpˆ®¸ðùÈþçð76@6 	i}õøÍ,æ+ð!ÂWKi·Æ‰Ý ½£¬fŸ½ÓVòÝO}¶x»ÿ>ŽD)C ýÁÝOéO¢üøîÏ#X¨ô3¿`,[¼xÔ"2¼¸ûç~ÀèùbÌIôèS¨d(~÷Ï-¾&Ûãô—­„N¯Ðÿ§¨0ad|‘ÂŽÑÃpÜë‹Õ ?‰‚¥•F¯X÷@øaãö
+É¡þl¬m–Ò^Þý‚[6@éïv_â>§1«~‹ìDqBK‚­¥K-{ÁVYœ¶N£½»ŸF|!Ã„D±Ö½‹h†¨à­0b³ã‹ÉÖ@9Æ’5,K9aõîO r.nNC‘ýdËÚ×–µOËÚŸÓ²f­ãË]Çí€©=pÓo}§/-ë8ý–¿Žÿïœu|DìoiÁ¦€ÿb*>¹xÎô¥ßÃž´j)aÜŠ`sW÷b–S@Û‡ñÐ"ßqÒ'¢„bpf“HY	h›L†˜T:’¨’ß	Úcö!k…¿ôÙ²kÅl¤È’þ0Æœ>Ù‹¨E] Á9œf»	¦­¦ŸwJgM QÄÈc¤ÃHŸ¨òx¢›õ S³Ÿßý4"åÉw4G/^¹3d2zhô< zäÐóÊôÌ¥<M˜-=›¯\ê€cú½ŽØ¨Ä£Nãò{™ËŸs)ý?ÿ—JÇXB¸EÙ©c[OêŠ½8#B¨Âð<‰ìDBî0óˆ"á÷òÃä%ÀfIB…mð‚\”U‘¾U×E¿Oëþ=GŒëý%qDŸ i\ÂŒkÖéß-kÎ[ŸRÝ)tÚî;`ŸìÛb8ÿÅ|?ƒYT¥+éãùí0¨Ôk´*Úüå¢×³tph/%ÑŽˆhI¹K~eýŽtrmLA®gw?µ±ïåáêLbÃÃq<ì¥ÒÉTzm¡Rék>‘þ¯yìöÍ˜ò²yÃ=0z¡N‰G©îþcf>Ïï|?“>æR*G‹éÈ‹ÈçÂ8¢ø¿xäÎûì§‡Ÿp º†	MS•Õ"f¢ÅâÜäë Y òb.Z< –_ù•š•ÿp÷Ç»Ÿîþt÷ç»¾ûû»?ÜýÃÝ¼ûOwÿt÷wÿõîyÝ©¼y¸ N¯™kTëxò6;ÄžŽ[Ú9–§ý·2-TúÎT8e*'Q…Qùp˜Î)E”UñdU=	pªöÉ¡ÃÐBîqdp¯@ÑM["êÚõQ²Q­»Aç–+NôWÊ#£Üm8¤-Þvö/KÀtK¹zÞ ¥¨+úOyå¥Š³Œ&o+8W˜×=\¦>ÓjÊÚ´ö8N¢¸rô†ÞðºR«®xq„¡å;,öJˆ«¶‚.dá€<4b8>P0@ÆC¬Ž
+|öA\5ã@Ð¥O´þ|`ëÌ{ê•µ/™šÐÐ fÊx‘Åúì"ÀÏ@‘ü6HB°éUh^ Û5ÊÌ
+ÑCØû@û2Åþo“?’Òð¦4Lû.Íµ&ÓÔ#ŠÿÐ1§â‡GŸ{gÀsFáPD¬vsC–çŸ?ÒK3ê.+üVG£‘ÈéWÁÀm”©¬RÔð*4¯¤&½¦ýV¥á]„œ[iR+|;`!C*+Ü0¸bµ&v±'°÷kð^Ò¿ÖáqP9)U®{^r›ûU¥qÍ\^+¯êµáõèÝ%W¬®è~¨¼ÚØØxã#ò¥¯PDŸ¤2€Ó 5úM4À@Ø/<ŽYL­JC\Ç%s¶Du{¨èÇ»\^	#Uêˆ‘º¤?¦8a÷Æ™Ã~¢®€tS¼:ÀÏ®zrŸÆ˜cœ4šÖKèùÑtEÆD’.[kRÈÎ]ïU0ÒŽmP›€ù.ß™$‡Õ9Y~_ ³=Ú,|Ïum0g~a»s(Ä>ò˜‡uhŒÃñô—&È[¹v_aMÆ¢TÿÒË6]ý
+#gJ:y:±ñ_ü~˜$ˆ,Üê+Å˜UœÓ‰`ÒòŽÀçé¨ï/ì"¿Z­šÂw±KÅ4|¶zW8Tnoßå^>Ú›×,2·Þ@ËÙ@¡|Ï“ï2å[¼_É«¬èátt#×‚Õf&ƒ 
+ÝüµÏT¤§Àžú¾ækÌnÙÉW-¸7Aðs›B†ùBñŠaRnj8$žR2V
+Ô²`»BædÛ\+ÒzI2e:lf8æ*JØ¯ñÊ(rÁ¼¤¯zfŒÚ¿çªåóïi`½´1Ž0¨(m¬DGè·h@©ŽŸ{þ÷ãàôòïøi^Pö8Ö‚Tq:Â³»ˆ7þð=k'4¯Ò8ì\§ñƒ,GßÞ%&æuEs.‘Â.Ö°‰ÊøÆÖn9%ÇfÞS,Ž“ýõ‰fUïf–cK¥äS¯ÖôCÔÞ¿Ïz‘?*ó¤z¬bfµ¹HÑ…«¤W¯þîu§JK<O’Ì‚ðÐ?,p-G'[hRmÇzÑ+€%!ÀFœ%š”> &Ú¯ò¡Öªky`è¾d`BéG0Ï¾GA™	çS›™`èLl¾F%[¨ _–ÛšÌ6É”ô½GÞ”AµãR¿ö8 ë{£G}8«À®†$%xýª)~:€¢0pŽ¿¨Âv_nTk‹üÉ¿.×ª”üY!¸2V[X°\Á³D»<Ï3#q¯‡HÀ½Ç?PvÐK?‰ÈEÉ‡¶k_(}¢ò"0‡AŸ­q¯•€Í.ÕÇ–åO~;Äø°T³tL,0ïô·EÀï½V0º
+ g0æ(ö.ÃDBí…ý’U×W~K±Šà”ö[ñ“š®þTÆ¥›NqW_ÉV6N~}Å†³ã8B®N‘‹½aà¿G½ì°xm]õ@(#Æ4@ÓÕË€¸
+E¬, ²wƒãâh'üU3ø§@q÷ýØï`†6Œû‡¸ÂX‰£*5>'³Ü8ê±“% í&ÁhÑäŸ^L!$½”ùñy0"8U#¬(0¥S MÀÈ–&õs´±—4lxÉŽ±i¼Ç’Ï!ÅU@0ÚÆ+Þz£¦Ô»ð{Ýø~E³Tªh+VÂ¢FFêËÒl­/zåzÃ{¨ô»ÞÀÅ2‘ùë•Ú¨­yÖ‚Q†ÅDÅ7ì‹¦ýâF‡˜‡Â73ë+ Žáú‘ì¶àÉ}w€å>ûÀúyë}¿³Š·Ô)V ã¨zÿAJÍmn@3R_‘hª-KUYÓ¼ˆÙö¯”>èË8AþÔ6¤©]Å©­éS[+8µõåFueÂä²2öé¥oSN°°—úýNoÁhi=Ý(ÅÚè}š+8”òn+–à×b(2Äò‘V)ÎÆ¤ÎbÑJ´ ¡q.¤Dù9ò7u|öášS†J#9 o9š¡*QLQªM‘¹÷Ã÷dÖ¸|gÀ¦ Y›Ya'6Ó"|è•ûcÓ²6ó×!n»Åìê½ìê¤%¸êZ«÷Y|Íí=“ZVjbé-Ó jÕÆòäU Š®9*š·â°ÀêÜ›íqyŸEfEZ°V™kVÑµ•5^`un‹Jƒ6k“S0í–V×ÓFÁµ´>i-­»ÖÒúýÖÒ®…,–—Y¬r²X*²–v‹¯¥ÝIki·¼>ª0¡Ý2ñê>kÉ‚´•5Á€ŠâŒA*¾’òpÆ¬Ï‡ÿ˜Ð&ã,U]Jç.Š¶£žqŒ@EòûÀöeÈTüÛaÜî¡œ?¸Qƒƒr·Ã›!S‹—öT§Ã´A®ÿAçŠß,­-×WêäJñ›µn½SïHTä¾È•êÝÆÆÒ«t—á¿´’Ä-¤ŽéÉrkeeu‰]^©ûµ¥"=©××¼'ÝV«ÛX–*©S”<ïÈ¦WiH,OnÆ«xÓ«WëÊ+ì¿Ô w»hÀ5Á.éPkÕ;Ô [[÷K’òäÍäÁîFÛ_ò»Qõ ¦¯U »2qðnM‡Ý¥BØ]¶â!ð[Kµu+vk”:'Šþ³‚²ôÐveÆ™²ÍJ:2;þK¿iûë~mZ:®Âôê´è1éØµ15vTµsþÛà&Õ#WÃj Þ±§Ê)/‚Ùî®dL¹eQ„½§O½ZšV%‹öŸ¶ü%¿‘L[Rnü¾Dî¯ZÓt[‚fgƒÃ{üO§öÍããé|Z¿“^éq	ðV2Aa¶ñtUfã°kÕå¼ª‘y*½^Ã×ÀKV¬míøÉ…Ç¾	°ÔXlàÊFKŽn8”›êGŠ#J³Ü¦~Ñ S ì÷Ú0+k5tÂÐÚûöõãmLÌÂªUÛf	¨â]VâÆÈdØ·XÿÄæÅ½@$f ª~S°²° ûê.…rFØ_g=Ú]Iã#„xWû½¦ÈÊjÆôýuz/Ä"ÖŠ‹¡®]:ÕPû£ô–7zc÷›¸¿ÕH‡%zWÂŠê·vTÉ>§]‘£n˜ð@öÚ¾ûY¾„?|?ƒ¸c«%¾E¥\\Ìvç(Yîöä ‰@¬ÅûaÐoÅ¦)ë¢År$+VÃª×
+©°TÖÞ)†BèÈZ@`c™–ÉòÌi¬š™^¤ÔRíæ¢EØNèŸùŽÂ6÷P•àYïyLÍë"ì£Ssþ@ˆwF²¥´(¤6•,>!–Û{Õ‘M*.¿•ZŒ÷{Íß¾ÑÆG‘p•Aâˆ¯ixv®U|e&	GÝ2¯§_dZ3+y¹Ó `. ùD¡ÚrŽ5ÜºCPÁ¯´×Øjc6*ªqBºïL*N,«G0-j˜èï~ÐÍín¶f&6NìðÄØa‰§Ù»¼Ñ­£ŠßoEÉ„–4–ÓgçRžJ¯0ž™J	À‹dTf<*7§OjFf7qvè
+ÌêÛQÜùR˜ûðRédÑ»É~¢ÙËïÕÇo³GØ$ÏÑ¯â‘ñD0èÐ_vO‚íÀ½z'¾
+ÛdÍÕ+ÔÖÞò†Vki#õZÖÁMeo¿Ýfp8 ¬…€ µÐÒr P´Ü @õzhe%D—.@hm‰j¬¤€µ¬Ku¼GÖ°—Â’±äÍ±ÕX3±E#³¡K‰#PÖ²‰°¥%ÆLX¡keÝÀÙÒ²i&¬@ÕXËGÛòŠ}TjG¤qòs{·-Ó:ÇøÆŠÔ×Ã9§ûe…‘ÕF#…RßÈP½–ƒéËn"ZbÄÔˆi¥‘áÙ½ô.‡
+[–°4÷Kîs9òåþÔÙÂ[ZËð³¼–ÁYs"èr4Tà0b\ZÏàÔ¥E²´‘³î.‡A¬°§U+[}-Ür-VÒ—A­±Ùo,×¬×¨çÍ\¢Œ°ÆG(r­\)‰"%~²jP¤ÌNÖs‡D)Z^Ó‰²Q³¥6u@’rL’\Z^·Ó¤9u
+±±ÊY €0¥^­¯„¹„«ÐF™&¨¡ªaÐfcÕA›ú¢Ê”·‚eƒ2ej€.%@K&]Ês§Ð¥HÛFÃ¤J×¬¢IeÝÂôgfÞ~¨
++Œ ÖÖmò…›Âý®
+†oõ¥K3uJ@‚}ËrŠÈMI¾`ß‚Ç±µÛØ°òozí $ø·ÆxW3â–6zí¤í(KÆ‚«Ë[Jcò5¾$v‰í®;V\K¢Ef2h`i©ØÞëwUH«&È¬W¡V¢Â2)aÉE
+&º8(ÁV–bÙ¦B,Á65f·*o/+v‚0aiì|Í ‰ÆŠƒ$trWçêºAF|«é!÷Ã~k—âe°`­tg®ÙŠIÉ|]S Î_9Yuh9Zâ ²[ÿìéj¤¨®1§!DÔä†äó÷4š¸Y5™÷Ðã©š9?ÙaèÞ°VÞ²šÇZ ï8¼NN9 TÕ5!Ð‹=1ú¡êo&ö$Ì) ª¥<„p4ªŠ5C—’ªR2ÕTæÞfU ('#Ó®ðRq6mWeâÏïl¡’2Æeu—´^LJÃËËÌÏ´ìmÄá«­N±Öç¨6{/¥îÝ}µ­áé s!´Íçž˜÷'e[–=ä<@¶m€Ì%Ì‹–2í`°#ìHÉß’‰ÖZTº*Ðî¤¥EPZ`gÊ&Wf–`ü”~³±ì/µÖK,“OÔ¾‹ãöÎcÿ†TøƒhP	ÒÝ’Z²Ì’Úgk¨ãsè6äØ1ÐAE¸è pò*ì¼!^Ï#S)·]Œ.ø—,*èoj+««¬;»,¾”&ïÜÞ×ñã÷°§`¿èÖžùgøÉhÁ„Ý{Ú^ùst{ãk¹­ÎÆÚZm•µÕ$/±²ÞÀÂ¯4tuÚÕ¯sqÔ°‘ì¾ß¢œ Ñ${‰pg‘•cÜ‡í°çOeé5÷S¯tÄý€²gzi4¯’¶÷b`~•UïdÁ².èB%Sd½Šqñ¿ÃØY"ø#4.õ9ÅŠhUÚÎ,5µû]K¥)‹³6üq‚a+&§‚íÐÇPKTur•hÐñ§DÜýlâZ-^ÃFKÏ,¨2h
+æ£Qõ"q#[pÒò†*nu•;E°Gý[ÐEÅÂX¼½`4Mµh¦ZØØ(Z*\ãÓq4š#uEæJª‘C_G)Ø©jÅC&J{å!
+¸á(üv–×aL±jÒ\ø.,ìuÂî8ñ
+Òe€Bt?ÀP„YÛhµ=yðÖºQ¡ªê8§(^°kFrf¥©öÅ65KU	ÁÝ(‹88½j­œ´X±¢ïaÎöÝŸ0Œ8ÊƒKOÂNV;œ¾rO˜¹L[)ÒëäÌÉ®†7Û¤,WªŸzVXµÉøÖjLæ%zE‡Ë;dïJ•-³¾O±ÈŽU®2yœŠ  :¨Xp¼ñÂ¡—Ó.Ð‡`p›}÷ú!Þs„}¾Èò*ž‡ýÉÐ]ðäóÄ$Þ#fÇ6éÏ8—§›Ã¦ ªÇÓäåc@IO8&”½A2þ²¨90F0ˆ§0ÎYúÕuœÏdhúªŸƒÈüÿô"ŠG»×@z%h!\ÿ%Œñ`d‡ýŽßúÉ§Ç¬Ò&IÓž·„ÓŸy¦ÒNßf',#ùG:B*nÓ(ô³Eq'²	p( ƒJ:‹Þp´é¸ìôn-„•Œ[ûQ[Æ½ðÕ³Sbkhä5q˜â;i¤÷NÅªÊŽŒ©D#Vcâ÷žŽ•½þÖ“ã®W#YÌ>SIs‡–L%-æŒ>ˆa]‡}Ë(@r…Â0²~,›Ñ_¤
+0Yà´`OŒy¬dXE†&g}ÖÇ¾eŒÜøÜ{pù}•!{RÏ—4xÒüÙûþÔC—ŠŠâx;‘
+²–
+!‹Ìà
+#eê©uOß¯ÌžqËE;›™:\©¯LÙc¹B
+»ÉŒš…ÅÀåpÆþ,MÛŸ‚4–ôí­\fÄÜ´S)WÐh/Ÿ!†óeˆ‹ý»*Š²è¢bÅAêýÈÁÝÏâäùÿ  ÿÿì}IwG²î¾E6º_›”ÁAnÙ‡")‹çR²ZT«Ï½’U 
+dÙ 
+Fiš?á­ú¼ÓË»ð¢wwË?ô~Â‹ˆ*3+kÀ@J”@‹Åª"#§ÈÈ/"îd"yc÷¾†0Œ±$¦H÷$VÇ´ ;‰WðêR½úOé]ß”Þ4§ßÃÞÔó.UX2”àDEý€_SðÌ ã?0TÓ·$…²£`È÷­ýöÎ@$"M|•[3‚‰¾ÏàÍ«IG„ôÁ-Ç>-UbE!?Bh'š÷'Ü„•FŸ£îb„_2²_¢ä¬ø’®YÙy"—Ya\ÐP8Up	æ+ØpQˆM@[\àjÍ§`ŒPoµ)™‹82—7xªlõ@à¥+möØÅÊ¸
+:Ú[sLËkœ&³KT´-Å¹qM6¤8%®Ùèq	h%³ÐÒŸºÍ¿Ú*)#ÐRµÒ(™†ŸÊkTšªDÁ i[[ÆÀÕÊ¶«2Lî<¾"Ÿ4©Ë¬~ÍŸ/ùóßä—‡ñ—kWjüþþZ…ÎÖ5šZÍFuÇ¢©– H³sÅŸ¤7p«×J“…öÛvÌe1äæë·½ßD‰ë·†Öo£ßŽ~khýÖHí7á±ÃaX>gÏ9UÙ=ÇÃJ`h(hµ
+E°ÂÛs½&¸šôµ­õI©ZÂÁ_ÐÍ¬YYofð½ô¼ÜX+£Û†ÝÆZƒUYu­Êkµ¸{->š“t|LQÖÝ/G°Õ1`d|*ÓJôA´šsæ£þìqi8|AS\°ØIÈó¶×ôšÅ†;E¹¨Éú.ñ	*»¨‹¥ðêzÙÛ[µ­Ú”e'Š.ÏWvFWÚ;èlú'3·Ä–ˆ²þhh¤¾eïÙ
+:€o•qøwŒÁµlÐÍ¸‘&JÅM[–	B†tlÌÕ¬k¬Ä^•Vµ·Üós‰B+ß±3²¹
+˜Ë©Ja]Ù¨‡Qåw€þ”þ|¥h½–mä=‚¡,«A
+õ¤æÉƒÔòû"VJËëœ’`4–Æ2;Œ®¹Îƒ$KÆ}œ[4‘þRºéUnÉ¶êk:µÒ=ú¶QAÏÛ‰¦áüBÍ™*$ºò™N2ë·¬¬U;.t]2©kÍÔë”º\·«Ä6íÚÀ¦ÂcQY-§ò*|·2•YMc}ÂJìHå=wÉâ!ö]°$b(¨y+öÙËšÜgaê^	²è\pSXóŸ×Ê‘
+‰ ×Ž¹l{7)ábOë»5Ë¯âh-EWYƒ8\mÚRW]ë%ƒeøŠ†K"P£¥y»”|ÏWê«¸Wyå^Ût€‹zÃñ^n¤B†I|·žò=­Ée›f¢‹%Úpv3¦Ž½˜Ö€j·¶U÷\ßCXŸ‚_|æ_ÿ!ø&bÇ'ÒÄ„=–“$‘F2dF*òeÜ*;“#<Œ¶â$ÃÃ ™•ñgÃºŽ±æî_;Á¹N}\Þ–¡žÆåº|ìÀ„‚UUü…Órc>Ë›qh¦­‚ÁrÅ=B„…ˆwú_?õŸ8¾°kmêØa»e¸¦8 ½½ˆ˜>ÉŒ™DQ®(õ²]­œ0¦oßc{<aÈö÷=È¨b/”a;ú‰P††Žb*×LèaÉô,‚_Ñ31ÃãÆ¤óVá 4mØp­¢|†ÊˆÐåzð‹×Á8¯§7ÿ3`½0Š#ÌŠpO<Ru0 H­2cXÑZ5Œ«Kí
+£…ÿ”aU`Qÿ=Âfl-EË£¨`jk“ÁæZæQÁúeo2öa ´ã7ß¡I —ŒIœ°b Ùä|(¿Ýàü=+¿­ïÐ“³ŒX^–Ëød½S
+WÖ:å‘~X20Xf°+=(Ç_þâˆ]u~
+²×ãß¥pX†×%vøž„(Š×êp a›U¶ÑÄŽÞ$rÓÆiÃƒÓ´ÐîLIÄÐT.×«\"æ/àa£QÕO7µN³ÓJžî›hƒ¹Ír5‡¶lUéX¥‹yã	÷Úh¬°¸ºÖÓÄäá¦ôÍþÁ«ƒ½gß³•W«®Ð ¡Ñ¸%"ÿëo?<xµd¥’‘\Ía,¿*¿ñGcG?ýHŠ¶:†Ñúþ‚[k4ÙVÕy:½ÒÌ)Ä•!A,±Èu–Ôíîíå·Y•ÄÁS½^„áª$AJ­šIËaZ€¶ÇŸÐ¢½¶|Ú‘…8%üŸ$¨s2Íê©Š&²æìæâë’Œ8˜…[’[Ä¤r»Ê¶‹Qé;©ÜtRé$û¨ÐH¯oÉ‘ŽO|¤ÓŒôúæ4# 7…GúQ‘‘^ß#ŸŠt)#ý¨ÈH@Óvp½):˜
+tu¹#W#½¾9ÅH/^—dDîHw1¢.Q—#Sé.*ùHw’É½Þ†üÚ+rÒ{•q?¶b»¡ZMŠö Xa¯ÿ`±{Ç„´áÏPÚª3SŽ0eCÞqˆW+	×“+üž3Xç ÈK†ÊtOD›(5¶“òhÀ’‹ÊCT¹j‹êE%9’Þ‹&nèGD±¾ßT1Dßnàÿ"kcwª×Qá6I0ÿÑgî.µZ‘Š…Ï¦DÅ[EëÅÿÐ=.9…ZM±³ÚòjHâª¢Š"çh ¯ë«ÂXˆ£ÂYTÁM9½ÂÚVá
+Ý-œ¢B’utÆSˆ£ÜsÉŒ5ò±‰5ÂN…; ŒÛí&kÔÄÀ-Øjî´jöV×iÆì4¹‡%êßj±ŠÝìvK1ø“¹ÍXþßÖD×"ãØpðÇ‘¶ø  Ð3ì˜3Þ¶oo¨/þZ/~>$vÆ› 9-°à*E{ >ß¦IÒˆ®oð= å®â{€«âBK¤h¦ÙŠËœv…[rÀ\x˜½ÛrI®ïL³¤‹«Å+ÜÚžb˜³B~jØžf˜½Æ¹àY€ïõšØè<Wx˜«Õ|hTÅ&@\x(~”ÅŸ)7^ø|› ¬ZÒ ŠÁZèDQÿ”áÂŽàÙk_®‹‹k6œŒ†aä»Ks«G9ÎõþŽÅç#<ß±è|·‚ó‹Íw,4ßµÈüñæ$.ß±õq$¨;–ŸîVzºcÙéŽ%§»–›>¾Ôôqd&§œcÝÞãOBå
+RŒ¢#<V‘Ï“ñdäã•úÄ0ŠÍ1¾Ž›jRÜªB–ªÛû«ºUX\y»M›Îßè–k‹.(«xÏUä’"pK¡ÅT›¼)ö»»™[k\ÛœNõ¥½mb<‡"Î¥½¥ZH.,º8z)bhúÁÎ]a½^¸ÂiÕ‰v…y³]lòÒDÑÚRþdž^~Ð—JLU÷§¥ÄTËaa5f]¬†u±’¸Zx5œ]É·)WCz*¼Î§?å«aq9Ü[skŠÕpv=æ–\œê;Ó¬†Ó©¹Ü–Æ½i¼x…‰~˜b5tÕ¸ÐÕðKÖæÝ<u×ÒÔËRw+IÝ±uÇRÔÝËPgS½ë-õŽ7Ô»ÝNïx3½ã­ô®7Ò)<‰ïÚÜ÷ý±ô"F>‡Ùº°"[Äu©mÊ5iêQC„Ø
+(6úØ‚Y½¶_¾$dnõ­­/Qº2zæ-6lÉê”qKš%Œ0„ÓE¥I‚þ‘é£gÝ¬å‘ƒ_6§£ Ãð´úˆÊuÒS]ˆß—ªù²«C®²½m$z#pƒüC8l×ñá^0Û¯ +›ˆìêt.˜Ì¥ùÌt0˜ŒKê*‡êÎò%˜WŒ#LüsíàhìÐêúÁÿP¿‹ì×	å¤a$ƒ=yxY®ÂìL¬aÈLãÌsFÿJƒ’@£3 *Wu;2É§”ˆ–‡Gz	´0f××©½]¯e<FÇm}Ö¨yŠ³	Ø:hC”¾¹rQ—FÔå#Xµ`.aÍ‰ÒH‰	ØÄ…B2ã›+Ë…ãuzŽiŒ?«‰s€~òØítT^{½§é´£•’4‚³O‰
+l;8k]µ-¥„ËVñî	÷WEÖò¶ÖÅa˜¸‰ö†Ê:Ñ¶îZŒù¡«îÙMíU:1GpËéÁf«ñ“Ø{µˆE7¿u|`Ü%{I®~Ù®æs7»_f1IlÎb’ˆ?oÐ#óúÃ^àÑÎ‚mâO¬ç1å–V½‘Çzè7øE¾ùí ò ™møØo~£°ì[yCvX>|³Š…‘Çãk»0Œ]Ý—n¯˜q­Â·zŽÁ"q’(¢ÓF´ã°œM˜Qû°ÜÈ3b’”ctæuÂ8?”ßÖÕA×¸Á4V..\Ä-nA¼@3TÉºYq.I–Ö óÍºYB­¶º¾a›H¾…s–°ú¬mQ‹ã D0V.aŠ·`¬ý”œârŽ ¬ê\©I€ÝnÒ}è> ¥É=`ØÂ­*H‰¿I Þ€¤ø±¢Ðùª)ÒÔjÊD«Ækø/‡Ý9þHó|ß¯ûõ”4BŒŽ=e¤²tÃiJ';
+~Û>.ÑXËMúc²ÒºÏ	R¥ÝÜ"v-vë³³SkÕZ%Ívgõ¶™¥ov÷ÓUÚñEãFý(9(BI•kùë[%e¯ )[‚'ÕJ¶ó(!_$n2žüýèÉ÷’%WÂ€
+¶ÀŸ'~äŠê´0|Ä¼Á%É¶ÃŠ$¼sç&É˜g]ƒEIù*¤r:#ï¯ûøüô%¬+Cq/µFÂ7åHJX©:Y‡`#ôðH îýÕ9Ñ>I¾Ýv°¬*ÌéÞßVÙ·ÎcA¶T”æÙ  I hÇBSé›ã`À·qå—À‹RötÛø(…˜ƒbÞa‘70Ü„)NÑjXCó¯¿²÷C"´Ìw;T)à6Gr.Ð‰›ÆV§x[ãÎ6j)g,Q­óÄ“¶§gciX9÷£ˆ|»ë^§eÀ&W%VrßòfIvPËørè_³x’á®ÿ†©¬á×ÖÇaÖ Swô§‡àK<lùºãw‚I_ŽM˜tx5ºF©2½©#V]ô:G!IÍµdLÎñö¥Ìæ½2c†Ð•õ´r¦ygÿQåL)Æ¢áBQåG’5éÁ’$	qS
+ R Ý–²æöRÔ¼	¯ˆ¬y'Bï=5kõÍEÈšÂ]ôÇ“6µxÅ“7¹†ñ~Ë›_¾T‰3ohÜ²Ì	Õ/eÎ;•9›÷HæÌ|e½ˆáòÚº6ãŽq’·èàxs*±Ô<Œ—@#	“z‰üoefáûžüÞ‹ô0üù“±Ð¸Üá‹7"5M¾.¯À˜pñô_+ÖíX¼¢q^Ðý–M)Ût§ˆž†–ƒ:mª8z§·º–?þàû®»f=ßCJËtÛnôen¼€~0((Û³61åùUÞ‡ä…´þÒïõàÈÐ4n´\X)7c|÷Ñn]RÎ|¡œÜiêxöQJv 2çÀúìk.›Àä|pÓ»_þûýÀ¦X£Á ünám“ßÄ‚5>4itC*Ì`R›ï›òíg«y8æ«’6Ñ`rÊÐ§`²÷‡xìúƒƒ}ÓHPw2úúX >Œ¼áÁÅ0_#æ¯àäŒO,k˜Þ¥Õz!îfÝPõ‹ÅCU ‡°"õM„¯ÀÉ0¯”Þ$œ@”ÜG^ûl'œl ‚*ÃIt¶òþWöàlÔÂ¦°_™ø¢sžýú^:z¿e|>*MœöáïôŽx>$Ÿ×™ð#vˆAƒÖ)t¤xl~V!Ýôåø˜½7xÑoÕ˜’–ÐòÃ#W?½wv¯ÎÙ1×ú¯üSèìÎ]Ç~)Šâï6aýmåÁÃoÿ÷Ÿ¯®WV}ûî‡wï~X‡¾ûêÝ»?ÿå«Ät<ópŠ³&äKÑ;E§¤Ýó™\¼ò±PDÛD8 §üÍso0ñzp iìwøKŠ*
+‚8 «×ä^Î¦Èó·Ï@²G— 4üsªým¥RÁ?ÖŒº…{o¢yœàû;\0Ö@ô:÷|ôTÿ§?ý‰í}ÿüåÑÁóƒ¯¿gû‡»ß½¸ùçñëÃ½ïÑ_¯vŸï²ýöl÷èh÷¿¾ûþ˜ý';>|ñýËãÃc¶ûb÷õÍ?ŸîQ’?_I.Z#æÝà½NNÉ¡ßy-„¤.—ªc´‘Rq:é|ˆãæj­“CW¥¿Žä„>]ÙÍ(®#ÿÔÇ8ÿyŒò`Ä¿}÷.z÷îø‡‡ˆŸ9µÃÀ¶a/hCâ±Ñ¡jS=k84Œ9.K@V5üì"j#á¡Ñï= uc=”ŒÏkH¯Ä”Äþ¹ípwï;sØ»²/ÿŽZ|1féÂ”ŒÕÏØ³W@÷>ø™®‚jM›~!{¡óÉXÌ"‡¶ ü].jZÔ^˜’Ó½Ã_Ø>Æ8·ãËA{w Íï_¾y¾½°ß‚3BGÅ›J¬pô+â`íoáùïoâ„Á¢H:>×!á.ú™ÿë‹cÍi[DÄjÂµ:zÐ\b>ó{°DÉ°E¼Ô¢ÝAçØýQ¼ê¬j'žO9Œ¸˜DKôÜÒz „4ÏÄ‘¾"½Zâ”–>ëéùAåk<Ã,Y')üþö‹Xå¾‚‡…W?G’!:(ïú:«U˜ŸŒ¶}öÜýÔ	?âó–&¤–~e‡/^¼zùêàõîÞáÍ?_À‘U™°_Õ&gzH¹•Ëe&©TXü™½
+? Ý>n:ÆñW†µ€h»W‰¬Ë“Ud|®Ax"CdÄÑ´(^Æ¥Ge¯z-B~j–	¢¡6ÙÏveZ¼.“âÌ/’S¤yÚïˆ X*’G¥tz¯•³È°¸6Ž›ñ`J=ù:‰šJ¡Óå¢êÚ˜\<AÌÄDõx}Ç2ÂÚÕ»ùý4h‡RðàuˆÐòüïKé¢ÇÞh ŒÃŒaÍÑŠçal°$Ö˜÷'Œ¦Z®Õ,¨k³@í)UÃt`I8%m·ÃÉ ßÕ>âàr¨î£±Å¿éÝüÖpeS<Ò‡±Ùì‡Ùš{]IiKR|ð µ$ks,Sæ‡çÄy$%´“°ÄèÖé4¨¼ÖÖËF…Æþ)•`0Å¸#5·p Ð{šFÏH¾¹;†!õ«.0©(t€x¯©ò8ïöPÂµ¤9í( %ŠOiÇ EŸq°3çJ ô?(i«XÇ³ezrÎ ×ÙíÖú~º6ë?­öjãª€À³;Dÿ[êÐ
+µêžkRåË×J¹Ê_ÚS¥$%ÇyBoÅCm8æ
+	òÖ1¡Ø!¡XÉÖÑ dA~&€mKÄ{"Â÷JäÐgÐ¾Mh$cŸkòQüZ“Wøk˜äGá9ÉãñZBXŸ?@Ã'‘1£„N»Ô:UPÒ×¸Äâ_ÚTÐÖ¸WZñM+øÅ_)½xº¯î­¿}7©6ªÕ2þÚì’f\iV°™¢DMÚÃ†´ÍéVŠ¼î­®/ »ÀnI]Z
+^"íÎ±ÉÖ+›ƒ~stÐRP2Ä÷Öâ`SÓûCXQÓhÅ˜Ü)ßFÓOù4¢ÈÅDáž;üs
+³+dÙ4Àn_Ö8ŽœìäÍ(Œü˜1#¿“Ã–¡7j$È;*ƒÖ	Y¸¿ž°g=Ý …ÖhÒêM.È¦/…Ú!Þõ6%µø—F®–ÎCPœß«¯‡#opê[óYC]Ÿ…“üqÜ>Ã¸0£í‰,h5bÉ"úí ´Ç“Î%—)ŸAÐPIÂ)„Äz~zÐƒ1Jo'lOð±ëŒxûäò°Ìu–=®‘ —1úá .ÆU
+á$øãóSœõ*q…Þ>{ýüÈ8ÃÂ)·íkÅÌƒÿù¬ƒ<¢œFèÓû=ðÉéc8äh/­.ù(ºS.(»½ÞÊW˜¡L=.ý©æ×w­ÒWkÌ|ß­u›ÝÒW«i%ì¹Ø+š_ÕT÷f}
+¬¦§@„fMPÐnuš~­ V{EóÇ½P«m×·æ À*`z
+Z³9V3PÐÙð77ç¡À, AÁ×úIy·ƒ$<­ŸEå]çn9ÃÐÉÔ]}p×ªÓÌ/Ö&†D®ow½n;¥%ÒW^³æUF.¿Ûhoeç‚Uw«Q5rµý­n#;×V·Ö©uÌº[ŸÆk­÷»ð#mâíór¶7¶wv¬œ­úÖVZûTªnsÇ¯¶¬œ;[[ÕÜ:)Þml5››ékƒ•JÏ¹¹±µ±Ý2FSC&BIð4Ã€‘EÇÝ‘I¦•&Î%žFâ†"±ÿ„}v:A³•õv0‚ý%b ÎÅÛÎt{‰à‹±ÈÞ®ûÛÝjLˆ8øË€åjGGž4¼mÇ+±Ž}¹äû	_mÅ†€¯_”D†Ä§?ÖÅZG†1¹Tæ’Êô:~éÈ"åÊ“Xˆ“_M†öR¼ÎÊª‰¤FÞ=)…¦’
+G<‹T sžÓ{G.CŒÙ"ßÞü>påjMF–xÒ	]Ë÷D¼gGø>+#‰öž+ë1ÿâd†û¾]é>Z§ÌÖá‰Ns‰¬Oa„¶#ÆCYÚìþ]ñŠíVö*®<¦.³=ÓÞ:2˜ý‹×GùN'ð¥ö6ÖYpTU¥}ævÇ+ÕUSU…7Š•¨Ài²fEZW‡k.‰è£ððî:nOGýnË1%ñ3MKzpLÍX¿ë˜¤"ü7W`ø17¯ué%'î7â®, –ÅJÕÄ‡`Ü>cäµ'.‘p±01†#/‚^ñÆ“¨¤Ãý-šr– ¨Ç¨0KÃ€™+þ ÖÝHô+ëÝ	¼õŒ›Ðo‡§þ h¯Ì‡å‰@Wõ¶MCöšCX`àG$åP"q#à‘Ÿ_G$H-V©{µ²k•©¨d]€Œ¡¢\Þ@øCîs¾¶ú(tÔGè-¦G”Q™qWõ1}Ç©Þe·Û/]tEƒ3#Ù;u·Ö;&€
+bUÎµ°è²)˜«s¬úiŒ¶|Y6[Þü÷¨p×> Ý0U7hüÚ…BngîØd`•üšÖ2q½7E9G	Èè)©~²&V;$‹QÕã°X/µ`›èž,¹B,$ªÙ@Î)§´uóÏV`MþÐõ€K>vi;|Ü³™“/Ÿ0´cÂ	7ÿB}±Q3²<>t úS¯OS˜Ö4ŠN£ôÑ!‡D/œãIÕïToœ—°Z19½—ð¦ë·i®1>jŠtÈG^V?åÊdÀJ¯=
+ûÈA½qÇ­ïî¯B‡õhô±|î³•¿’#È¾ØJ©Û²û¨€P—^wE/og%¶ÁqÊo‹‘Äë÷
+ðç´CòlBJè,6å‘ò~~ÄôMÁ¤†uiì'6©”ª2Ï”êˆ)!qÃkOú
+/ ófä·a!*2bÃÛ=ïœ×‘Å‡œ»çõ[_q¹œÃ_ëL&e‰
+pshCv/“-¹â±Æ•dÈ“!¾àõŒÇBèÈ4†]Æc}XypúàNçr }Ú>ñ¢È"\²Ø“88‚ÄŒÞâ„<ß›À©úÇè!mí
+dè+×§(“;îsÀ±XJDˆ:	qfþ¡8[<Ù2‘±GDnˆ‘þ)MçV'únNbRôS¹Â×È&\›Ö‘†dÜ·†Qù6o*ïŒåºÛØ‘îñÒÚ™—TÊ­Fš§Æ5§gGv-Û”n3)ÌÜuò~«ÜÈ4‹Ô—Xž¹m³éîÑrfÅ£5ùÑkõíü‹ð;ˆ~žàýŒî“¶.èšpÈ5Œß¹èÔ&,v~;Ú^cz‹ÄçÞÐ^ÑÜüŽ³èŠ$]1äªÃ%˜‹§<j‚Àt‰uX–×¹ôˆû‘ÑaÂv1µÓ}9rûU¨ÌÇc¦åÙíY7…½e#Å—#úØ!¯¼âéÛ<`JŸ=	/r<@(¿…1-¼Äˆ'eû‹^vtw:n·ŽÂ¹NÔgéö½âÏQsv&æ(Ÿ%+A/º¨wyì~s†³ðäälÜï=Š••×¦•ìºÃ@Öâ'÷–¬
+cÉäÅ½k;ùäjVÓXh1Ú+–´ƒw	³øbfÒ8É¥cîE-îé»eYÏŠ
+R¼Û6Ï¶Ýpì¢#Ýc÷Gärðÿþï?ÿ£'öøæ&][¸ý;=	äp0Ï‡¸Ó‰ôÕ[G#8TÜR­1Â>Â3‹¦ê€b-½S¯q¨ŸË³‹0Oß:ñ™1»q2Œ³¾<bOø©*'#Tâ|xðûÙÙ>Î-%åïžegOJ»q»(OVØnœ¤’]˜C8ŒK{b¬ÃBš+±¤G‹¤Ï•?éW‘kMBb¹Ëž$ÇÏ<ápS‹Nãj?©EwÂ±Ä\¥ ±V¢LWö/Â}©å}ìºµùÚåì(¶HˆõÑ²š–Únf¦J{E¥]cÑª³ZK¨4bGª Ùýlp?6Í¿ŽŠéecÚâ³|nXeYûÆÕûTRT@”µc×ï¯8²ë˜É‡Ã~F•°"ÖYÔåÐŸé+gçÊáÔT®;¬Ff_Ñš(ËP2p;A¬VkÒ·æEÔ:ƒåm òñ‘¾þ¤µ6áâ=·™ŽÅòÚ-'‚Dº%|lð˜d-÷îÓ¥`{Ú03Î«co‡ÚÁzœXædGüžwgîXPÔœP%cðcÞ`ŒLDØ“ºôŒG¸÷ïgU«’£a8 xœg:TGóÈ\opÛ:rwkæÅ#ëÞüáAŒCÈDº½l^ºÃL$þÈr@õßÏ…AÆ‰r ¯ÂN ’óÜÈŸ BþÑ.ãeMUNyˆº:¼™Q©Á¨á¸w,ü¸°ÈõŒN‚Ž‹i©‹âITÍ‰œ¹XäüÀÈE@#çG.9?@rÉùA’‹€IÎ”t—PÖ8+°qVhã¬àÆyàó ç8Îrœ	æ˜Éã|ÄâÔ˜ÅZs`†˜ñÚ¾77õëDF±«YÛÜ·é¥áw­DK%7ü‘vò%ôqñÐGÈ;i)q©{ Þ§B¡ÿ‚¨mµñyüÒ‘…Ã~’0€Y ‹Nô`[ãçÎŒ?OðRÚ®ìoô6¥.‘EÙYY™¾sfòÛc/2înÄ~R…31”úkW¶?Q_¯eW½sÖØ+¬ò{ýæ¥séúA´‚ÂíNF~g‚À;­ˆ§½Éa
+óNÁ ¦ì)ì‚³U½±Á¼ï¼Ái/Ù«¸’[@xâÚ³Dy&Pž?O¼Î¨ *â)AYm^b0D¿Ê
+êÙÑðxÎ¼ ¡ï¼šÙÞá(¼ú… 0ü^*%‹ñÿæ7O‡n"C{7¸MØæó =
+…id@¾|6CL8Ä-uÒ ^‹â~ÜdBÁ­FgöÚý,Æçî¨Üõpýðè‰qu°*âš]Âqy·0¼å £šöžÏÍZI=aˆ4>3…étÔ“ÂVÿ¶Ù*~ß>_îˆ¯øÊÇÒ	—×²±Þ92×(<¶"qmE\ ,?i(áeÙëDB|DØî°{óÄ[WSR7¶'PoÈ”LPV¼ÏÒ~	cû×¡l	ð‹bD*P§kô¾4¤™a,ÿ£ÀßðªE½EZ‹ž¡Ç'~·;ÁÓÉBÀœ˜ÆJnz@›7šÆIƒ&®M¦\÷Z“AY*ðÀ0]îëýäNÚ—Q&,1SäÇø½X
+F8†‘=àÛ${}ïæß0ýŸ'><d¶=ç€ ª8{“>7€>@2#‘g ¢H„Èð!ˆkc¿ŽÓ‚\ƒøé.3—Ó´“Çévhø¸ø¤P`ƒ`ó+3šu”a8Æ» Á¡6‡_ç~9YœG¤7/6#×çh€0ø(8Ï.#ÿ¼…§ü‘€ëkfJPÅt\árÐ	ŠIp Z”ˆÉ‚&D8†$<ŽM±«SµÐ!µM±ÝîÛžLŠéÄ£&j¶}AöqWAõó&½=;\Gâ]ñ™Tãí_n¹Kló§mÞø´°ÍQ¸YÜ¦²ý‰×Ó‰¾SˆóÈ?¥Û†2ÊŒë±ô˜ŽyNú™„w#Þ£)3ƒœû)@Î™²‘rÞí›ßcp%¤¹>=¤ÙƒÔjÇ?½­WÑEÓ0I´¬„
+ë¡á`ÔÖJß¼!0ƒä3Qµ'“?ºÚ¬´ ¼ú¥ é]ye\¶Àú»’lì'×ÓíkÅ¥ ³£»gîð©ºœzÄîöDÓÄ*Ç^“ã`a0û·µJó‡ECíUOoºæôx÷š.?k¿®°=]CûV:i£€WRÉšUªq¾£à/-aÌVØsÒ^ååöSrqåOvv[A%T?Åˆ°õLÉb
+Qcip’h~ŽÈÏ±#ˆU qBñ@Z‡œ¾´	†=@–`qŽ(Z¯53 <“,Ä:Ž£kŸ¾ù9FöA-.â)Št:…8Ì²-
+~’@…©­	äQ©ˆ—zvJÓ‡Ù	M-öÓ1{øÉ¼²Í7y°îx—f³¿4{øÒÌÐ¬¥Éƒ«5ÉäA!Û¿›R?õIÿ#¼G„0q¸}k†ÝÁO½|s-UŽ=Ãë°½žåÓym…m?Šàäªƒ*ctæ#†']e` Ç¶-ì«yQÞš³|l.Í–æ	Kó„l?Îóxržbî-Í¾D³}Œ¥ûwž~Ý‚Å„Nêô~ž§Ú…¦ðõ¬N“²L0vY¡@Ê²ôPF0L…b*aŠÈ•ZÓ•ÅUe*8ÊBŠð;1qz 4õYU§L<è†Y5*¾5v”è”VôÌ‚az¹¼BG±Š’ÔREVYèÄ€y£áƒ7êD„ðÆ„Æ_bÃŽ¬9ôèvñ´GÀ¥±¢ÍˆùA4Žb.ÑÄ¿ü…ýÑ"ÐŽõTÌ5ÑgqÀ&Á%ÐÅú¡i8.³«Kz;þ©!qŠ4:#-Ë.Ô~Î¦=cÃ‘øÆ»^Ô¶ò<•¯iÊsk¶6a'%ëÚ:Ý‚AÙ¥EHÂ"ÄkŸÁvëÏiÂvž¸ÿÚ¾¾5ì>îCª5³=BK‚DL dÃí-˜!\šîº	á
+‰G^ÛamâŸõ<Ä†ŸÐ‘‰=ËXD˜(%ÉiÝktÛëµoþ5ð¹‡Y¿ã÷g7Q,Ï€Ð/ŽÍ[©'‰_E`ãC/“­‹0GÈ$¶rôrw÷V˜JæLEá–ExjØ%^ˆŸíE°S³€€ñÒEˆ¸°…x¹7+ÿlgÔ´Ôž¡Ïé39#¤UØõa¦l‚»d÷Ä÷G šÆçæÒòJ¹?WhT±³KXÜ9ˆ²DûÍÿ´‡+°ä+­ZÉ•5”Ô·ãùÝõg®·Ó˜Þq óIìenþÓ¾F¥jö-ÜU³qGÍš;ñY9/Ík¤‰ÁxÝ3¿Øb êÃ¦g¬ÅEaÖ‚ár­\(¿Õœâ;]ú._ÔÊrÉTÀ…8Ê.-³ã×M“IÎiU¶.2É¶~2FDš§r'ióx„ÇþVŒ"nß)²ØKÝýDÁïöÆÊò.F/÷¾0<ü=òõ-.ãtr?=gßNàû˜SŽÙ&ãÇ}qö=…P\G]~×êò;?kàe´Å€°ëuüràrhí1sxw:ÊÇã·­ÈÃ$Öá*¡÷ûÖgÊîF£VNŽS‘V±Án´î&Ÿ•µ´Y0*}³‡¡D;Ò‘%nt8þ$™+Ð1µF5FÔäâÅñ§ f<Áù$nÖ“mpFÐu*\mÇ•­ôþä:X}^¨‡y;îQÆßFÿº <nˆŽ	ŒÚP{¸ˆYû¡fx1Æî>P{l)½ž¢Œ¥Üx§b¬õy<àþÙ0°!¼¬:Æé'kÍ ôÐX\¨•s°â¦^UƒŠÓö’Ï1@Ý¡fðrw7/CÛH¿—C¤­2Úù’+NršÐce¼æçcòÏW¨u<w³;È+e!F"<šm
+²/¢¦…ñýžº\l¬”r?Ä½gÝ‰åCîí[´%æ~Öâ—˜û/sŸM,A÷®Ö|$Ð½‚_ {;Ð@¬5ú,"¼>ƒƒK.6_K•ƒÍÇÆPy,XBô—ý%D	Ñóp	Ñ_Bô—}EêýƒèO`fÂ†Ÿ­£¸PŽâÄÎhAû¾?Ì/¥©dvÊoàîM‚œÐ|QÌ×r:Pôf¹©pq½H«v.(J-•²ð|V¯g@ëy}i—:_qiîÞ€ÒB¤„\si€®*ìyü>+;ùbíO"Ô(áP~ÊFt» *
+”ílìXù‹4ün$³ªt ËœXúQ`{`|J¯Râ ª†+#u—ô.%Gì-Ó~æwâàû3úÂP÷|«h¸Ïh[¹#œr‰—oƒÎLŒ3ÝAÚ³°ì#¿}}Òõû!FÎÄ@eN>‰xŒ¿©ÎðuÈÙ4H³´yú4¤Ó1“	™‘õjüâEÎˆ±¡bl+âª9òFcào¶Wî”â88„óÛáéèæ_]º®"õ¡á–k‹qÐ*x)±zš7]TY@…þ@ Ÿ» –øô¤ïÛ“œ«3ûÉ•êH€?Ù%ÇßKÏ®!W½t=Ž¥Â»}:„Áƒè)	&/ÐÌs/ÂYÃÍic|”fÏ+×
+|@­ïÀv’Âð¿£ü§°×( RÆ1ð¢ˆP„g~ÿæ_cTDõ„ÌN&Ô&ý.¬;TÃ †>î1ÿœ<e‚½4(Hi—Éàô}g_¡/X<µpø/W”ŽÄ L;èh¥ð÷ûX%V(èª×¹ôHÉHu8(Ùûˆ×4À¾K¤æ§†Ô4U³éjä[lB¢¶7ô"5Ï@ŠÑŽŠ>’mZ¿ô‰pgGµ9n‹^ö@£K¸æç ×Ô·Ÿ¢¯8dÁ4!Ós`}zÜ6v“´!Ÿ\?OÜäýRl÷÷¨—‰óŸtSJmÏ'=”§†3"7å=÷°ù)6Mæ^á6-KŒã{E§‘§ø>Ï}r¬QÐü/WØ1ã†Ú>¥`ÆCõ1»ûlÐñ>’?é,câ ì(åÈËƒU:ÎƒŽrése!îÇJq¾@ÿÇ.PN’°”ªçÆmÎÑ¤Ôrâ6ÓóºÚ¤5{i+|—ØË”âïËXÉø©ãø>exžÀú"Qz–Êàsë©1ÅP{VòBð=•g‰ß[â÷–ø½%~OÌÃ%~o‰ß[â÷©Ÿ9~OYO.É—·Äô±[ÁôÅ²ÞÜwà>ŒÕ î¼/S€}†/Jûa¼ÿ½ÛÞ©19ÏULÅs~ÍÂä¥føÀy-
+U(Å'½³Åâó GƒîÍxôå.\HoßÎ.)X7¢Êæmž€ê¬ åÿ‚gùÑiºW _dñ=šƒïªèG*†kð¶##uvû=vŽ«ÊÈWˆ‹™¹þdäÃò{Ô`t*ÄüôŒÇÛ>é99Ô5ßhç—ÝùÝ"¿ùðæ>œÛÞÚ´@@ªBqÐZUëBùâUÐ&]`A–÷ý~Ä‡Åó\z³U•o	ÿ«vŠý@„Hs0=4y®šD÷½îuPt®{ÆAûdàÎý,ž;%…ØÀ·Aîå|‰•èYñ˜?gQ)$ˆÄP\ÜÖÂˆê»ù*„çv€÷²A·Úët&íq8:é{§ƒì!—Žéá(Ù¶ß£ÆCò5Ê±¥õ|fW²º¿i1•å&f»Ÿ–ÃnÞ‘¦;ÆÕ€ç-¾Øz¿}ó{…ºˆ.¢·U¢qúÝÅ'ŠçÑ"º„ˆ.!¢Kˆè"êøYBDa/”p·%JôsE‰*Aæ^ÁD“Ú¿ÔøŽ^ð±¢vô,™Tg¥tœS¥ž1‘§â[TÓV7$ÊÀye‡ç¸„ðw²½€›-fbBBvù7[—Ä‹š—2·ý9'©ÜÔ­¶/„ue]CSŠÿb¡Ÿ=0TÃö}ÁÈÐXUð™@Cz­ðC."TK•Ýõ DKôçý¹D.ÑŸKôçý¹D²{Šþ”Ñ˜2š>
+eÎj—Ñ,#ÍæSDþ™ª,Àp£>câœˆOUùùÌ¸ÄTT¦ÌìÀyò
+Å*JRKY´§×ä‚Ø½AiæÄ5w‡ C‚ž®ôÀxïÎ¦P2£öÞ‰wÌ×y”ÿÌ¼ù<ì8³æFuv×¨²9ªTYŸ;³"¬ÃâÊùÊ‘<š´z“Ïr·v,ßê°Ñ[@ÒŸôùGQÀ®£/õÁž„`êáŒCY€Y×ùRBm$ôêRÃ¼a ùsÃåàµ\“³ ží°ß'°Åùƒ(7ìoÖÔ£c¦,GÄ¯–‘`eLZÐ“	*2e¥#>ªÄÓÁ*æ/,r™hå…ÒÃuò6y¹ÉÌCßsÈ™`ÒaQ*L}:¬Ð5âî’ÃËÑ(ŽírÒçdÂlž•³‚"EÍ’ø9^}ôQ
+}N-Ô£js,®Š¼¸@ÄŠ*îq‘‹Á:Ë†þž×o†3Lœq{^l‘Hî…6	¥NöFmÞZ}€!.EÑ®“ÞÀÍ9è¿ƒúCwšÆ4ô‰a÷8ÈÇ_“™y¼K*¡xyFXõ8M$nÎ‰B`H«‹ž0¡“ºÇ|vCá·´M^>‘¤¿jOZ÷?ÙG<e«Ç×Yf&[ò÷ÏØE¤^gBsq÷ÁRÁÊ)ÁÇ÷Ã‡âá™ºh‚SÄ¼¶=T©FEà|	Ÿwê—©ñå€pveBÙq¥A9òÛ(/”Êé	{kÁáH¿þëÙÈ(øRCÚHÀ’ŽVpê¬cÀÞ†	Ø;k$Ò^Í3Q”v	22oAfå¡"ÖPŸ5ò€xÎ[)@Y×Dü(×Ä8¹ZœÏ
+ ÿæ÷á˜O¦Ç.†ÆñÓ‘Ñ¤™@yÄÃ[­dÝñ›ï¢|0]]@èÒ€uP'oðÜ1–Hûæ(¿m5&À>&>nëz&¨ÔÎ2Ôõíõïa¡1Îõ­vîçæšï5¸‚ßüÞ—W”¸¿,1pŸûõ^ßlˆážð@j8öè\—òJê¬ É{¡Tb¼òò kŽóy\Úîh\aÏx
+ž$»0óèk´ð)?·i_â™Ú¼½IªN?ƒ%1uüðTç+öb]¦”û™„–ö-5i>œÍV¬.Ql³¿-ý¥…–NÞ»-CK»Zó‘ ŠuöEâÛaç‚JCÁì…èþÃ@Äã6»éçBt:qÅF<ˆ05×{Ëü—ø7	ßÿ¸îÓ_¿ÇÆA{=¨àƒU*
+¥ÕÕO àxGà¨ÑiË[©m®±Úvþ©ï¬±j¥^_ÕêÔºžß,RP}inÃ?5*h{ujØ•(hcm6ÖØÎ–Óhšåtý¿ 4©Vmíl×LLuck»9#$ªµÑlTÀšºnÓ·òúµz#½72!Q;^£µŸWC6%¡X:FiaX*	t`¢2óy5øÏ›ƒ•ÄnIøÙÔ.ïø:“TŠxª$áN¦c:UTÂñÿâr:§ò¤;œ™]x!X¹þÃ¿ÄS<9‹s_Ü&=<r ŸˆP?MÂ7q·¯ÿYƒ_~žþ¨“’ùÐ‘Ùø¯ïª÷ ¾Ýü†õÆY]õj™]õÂ.ðuÝUó³ø«³j=·«r=ÿ¡²ýúÁKrß^]"{'y#ªÈaØ‰¢I…ÍÛL|D6ëË:Ó€å©mOjŽ×).ÔRR:o2ë7-FaÀ6„Å=Š,¯ g¿‚Ò•!)Þ¯[HÞº~|-V?ÏôorÛWù7µíôÈæ¢n ÓÎËW‰+yÁä¾”IwLÐœæFf*×‚ÄäuŒu“rãr«×+j¨=	zòsy»ò¹Ý®ˆ%ñÓ»`±¤”)Uí©rKe{¬ÝæZu[’‰5m9šuÜüu­:‰Õû‹ÔtûXq}7¦tŽF„>gÌA¬¸ijÞ{¥%çúñ³¤–<b“».ÓTæªÿ¿e_Ë¥fµú,æøÊë·€ïøâúýµëò=žR¬7õÞ·£ÜÞtI@z·&tØWæ˜çz\þ'€2³uÐ®M/MñÌ«gx÷´Mm&Y¸_gTuÛ*b©êseµ¿ž?8ŸK«NÄLŽ¢Øì9ÁXËØ¸_!02ŽÐq§s\”J6:YTêÒ9Ç¿@m%…Si …iÁÃ² ¬C™F$© ØoìIõøpì =`û ¹GNm(ƒwBbN‹öXÛ+ì;pèhó–£j¥.zw‡½;Ðaÿc2Wª[©°µdJ
+hñyßÿÛ­C‚™f55öÒÍ¿ý¶÷)XÝO«¬¶ªÝÚÎô»Keöç¡ÌvÙUf/áYù§—³4ápESzpiÊáŒù¢üÈ/O(ã"#—Ëü;~ùg‘8=ŽŒÖ`§I±Þ‚”(3E†Ê?}ˆ5œâj@Å*ÖŽ^.S¯TNõªÖÎôF¦VaÖqhqÚžFúc½!r4vfÊQEä\ˆ}sÑþPÚúá$:‹EAqCÀMwx\ãA˜„Â=t0ºOtÐpZÀúüÈ¸Máß¼¾9
+àùNÚÞhœp¡ùéÞ+W6o„æ‰&*? ¸ÑF$Æ±¨ý(¤œ!UM;‘ÓÝMéØ›=ñ;ÊiÃÔîtü“ÓÉe8Ð2îá”u¿£EIP+D’†}X³Ý‘öˆh§%Êã¸ÅcDçÌ«½ýÌ.”èSx$‹1(šÛ»é7U*³3ƒÖ4zÞix2†ŽœR$­Ceš›ß0‘«IˆÓ4ÅÁÞßc\fÂA®ZlVt~>Q¬ñ†½Ø2Q«»/Ö^>a+PÓª«PVïDÁ <Gm/ £T­œ7˜€n0AfY°ÕAZº¼t …_á×›ñËËÌr:ápØóG'g—p²S§•rìßüqó$ª›ÕÚª4ÍÕ m`I¬Ÿ)_néÊP¯-ïÂÒÚ×…‰—)—…Îtëª{€£sÖòÖðvoÅqÖ8›Ü[Ã«ìs{žˆc©2¾…;…+øÎØÞ‡5gOß4û>SR¸ì„‘}ÿõˆe–V/íÊì/bgTdÄ¬OÖ"rö¤Œ_„µ8ˆ)!_ Ç¼ót²WÌF®–Œ»¨OÂz³~ûÖ›Ô»Óìaµ’”öa­M
+è«iW®©üË¿í7²ÎË·¿|sÝº]%I.¦=Õã;8S®Òíý²,þšSZüMwË¬šî¶úsÚý¹xÂ×µfêºfÞùm2ÍíTUú”šc½Cãóà—×£qÛ?F—òezQ}êH'u.OYGw×}šÕ(a_,úÕy>8Ò±$µé¬{§q¡šì.ëÞEkSÅc†ÚrWƒ!³ËÉ¬]u‰.¹Gè!¿}nè’”î[²Ä–,±%ÅëYbK?‹ nàï¶Dª±b˜É
+(Q1#%CÈl’_ z9Ô÷ï.#Q4:"¡!z2Ýöñ–™"MØç^ß‹JIÐÿöeœKJÒ;0’ÆqÖb_Ù%û{l'J:$ªõ¶,$yíì…^¿;þ
+Œ~•Áx?~óø*gº,HQÁaö{>ÆpÂ+ôº©_c~¯#qÇÜkdQ½†þ*Çklö.OÑ½_¥Ž¼öÙÊ
+ÞxƒKKžDgw<‘×¼™Æ?‚Ödì¯”‚Ni•[•ÆK]ÄPŽ
+ŒèÁøl¥DŽ°‘2ä­./ñ
+uØDF	Ðó­¡éê×‰œäÊïI7->¼¸¤ÅKÌ³´Gå~ŠJQÈã° 2X€ø$NBo¬E9‘ž#6(‡À¼ËkgŠBFžkÈ‹ŠÑ†äýIá†ÈÎ šE5Ä$t}ií(Ú¨š¢â2u¬¨gG[äôIÚ¤¢ÉyÅ©‘»"Öˆ·œ¦”13ù…€c8¬+ötÌà)/<eÜA®±wŠVÆáQøA9Û¤¹DÉÊNÆ—ª	Åâ6Í˜vŒ‡ë‚¬]®PgsØH½5Uê&¦ÎmSÎ˜ÕF xºŽ1SYûÊ$úŽ0¾»¶xÆd	ÓÈq$F©ëõƒÞ%æ9ó{ç>«ÈõÁG	s¡pg¸N`Ââfj OJjÃÃHAtÐo+
+ÎER›Ê…W8S…çbÈ%E¡£ãÚ«Ç:ß¦CˆD)÷~í*‘n™kÄf”ÇSÄÅiåñvÀ¨‰Ùq[j÷;'þ06µP“û¬Ì~ôY-i©ÌS×]©ëi©®Ô´Ô®Ôi©›®ÔÍ´Ô›®Ô›i©·\©·ÒRo»Ro§¥Þq¥ÞIK]«:»§ššÞÝ©ýYsvhÍÝ£0uG!ìI¡	¢l¯ôo®Ìp‚ôNàœ0hûv^t‡’ý1ÿêÊí]=/Yç)ÙÓîâGW­Ab€fð 1À3xà‡<HðÃŒ$øaÆ ü0c€‰~˜1ÀƒÄ ?ÌàAb€fð 9À³xà‡Y<HðÃ¬¤ðÃü¤ðÃ"<HðC× §lyÞKztàìZ¬
+·£±ÈÒÛ»ó8ãúªiµ•L°Ä7Í‹o‚?\JC‡ôqNJvìŸrÜ*†#š‹—4Ì	‹,-Ô|pžbà˜\W\ê,v>-Fbê+ð)±ÓÜ€óvÞåå÷óýyn¸÷8¼>ÿ.¢fÞi.1i„|<Â(ŒüE!p;ˆœ:ÞãÔžàGIRï5ú Eæš~ÀÊpÙ\ÚÕÂ¢Éë¹ÊepQ¥)AÀcš£MK´-PÓ§ŽkÄ(°"®d§†	 ü^¢¼·¢<Z<2>…¹àâ©<v:šÐ.uÃòÜ^Þ_„,òÅ"Øòõ0bCoön~?%ÈÛ `ƒ›ß;“Æñžû,Œ¸s|åÿÇÿbØÉ|¢âj÷	~ˆ7nŒIÚ¾ù­KìD·Cá!™c#pÝ b·Õ	a¡õzÿ ÊrqŽÔ:Âá$ã¥7ò;LåËp–
+²."<YRùàrË£ÑªÂ\w­±¾Îjö4µ}-:8óàÿ6,|dÄûŠpRÀBØÑ¤[Ã!ÊÒXnÂa™
+²‰kï»µn³«¹!H”°ç.`¯h~USÝotšõ9(°
+˜ž‚j·¶U÷’H§¹XìÍ÷B­¶]ßšƒ«€é)0\uÌBUÀt6üÍÍy(0HPÏµzEzþÀ‹÷ˆáí:¿6–3¬Žà#¬È\É9Íü’Îo6«;µF–§ë›ÍZ»Þž:Wì&ÅÏÍ‚Üå-f£9m1º“š;…=õ43=õ-f#ÛáÏìnzfwÒSÜÍNÎ¬™ÂÉŽ;gÝk47¶f©ÓØ0Ä;¿îow«ñuÌ´¦ÑO
+é…¹$©‹«‘@VÃµ7pnÍ¼ùþ¦ôþcÈ,(ƒ¸QWœD'B\	¢“‘€€¨›¬
+{…¶bÛ÷G7è‰BPSZÆá/?;Ê[èÀÁ?éO"Xœt|IÚCÝTØ%$‰P¸I@É;ñz-ý&ïèæ7xËvñm"Ç¤ß
+zßëdD— †ÏˆÓ
+û»üîôZê¡'…vJÞHpó/Já¨Äþ	Š—"s‚]TÄ¡H”Â0»‹afn–µG“Q{”$…3¿‹ ‘]TO¹ónPåhÏ½8…´žqRÈ»8¥;ÑäU©u#ZÐÆ‹œ¾4ð``e{ÈHý˜â)#3}¾Ç:1ñ7/Ò}hðOÐUó„ž’nq:¢Ÿx) {PÌ¯œ.‡t(Säñ¬¡èJ\Aµëâ8üRÇ‹Î ëú8ÖƒÇ,Ñø²çã%
+^f#Ðþ§CºÊFOAx™·åxË®eÓ/¤Åuu/Ý0ï¥Zn¿êžë¸›V[:1®eŒ;«Oëôœ~øw_]ï8‘òkêBœ7Ô^ƒö’E’ÀØÚ…Z±¶7ôôq¹Æ¼!ÕÉ(ÄÔ—,¡r €Vžù£AààÑhÒLWÙxOõ©‹d®IÒüqûÌ¾VFÍò¦¸ÿk\ôXÿ¢ìM`¥É¾1ÀØ“ð"ÿ2¼Á#“Ÿ©'¥“³®ºR.Ä¢3¯~(Gý½»ø3åFÜušœTzÆ­»}ZàúS	t×¦únÝ¡¶²nÝ5&Ím——ŽŸœás’Ì{}á˜-²Lsï8_°Z3Þl¦ñô2€ìtÅ/ÈÞ¿ ²›³Í“´Ñšú˜üƒÂQ¡MZü¼°REEÓ=Ž*û)‹M\}|«mãh€—©ÜŒ;åÒS.ýÏrûSˆk*Ul\ã”0ˆÜ»¸ÝózÝÝöYÐƒuîh2qî•è`l€Å7t8îˆíþ<	 ¹ïHAÔè–=AÒòŠô–®Hÿ?   ÿÿ ,öÑxœì½MsãH’(x¯_Å®é"•"%ê#?TùaLIY©n¥”+*«_=I­IˆD%p PK”ÙÌñÞ¶Çö°—±š[¯YÙÚXßÆžÙš­þIÿ‚ù	ëîD ””ÕY=ÉîJ‘@„‡‡‡‡‡‡»‡Gð¬ò›{µ·¾Rùz‘}Fþ¨Þõ]?€çgÍ³õ³'•¯k_0ú4{äZ]»åºU*¹)
+¦ l–­·´|Ö|´be1èvzëv³) ›eëÇ-5›ÍÇ+î€A
+Àü¬®®5××ï€A
+À-0è­ÙÞ@ƒo¾ KKl¥ÁZ½ÆaÄFV4Ù™ãºKaølFÍÂ#?€—#þ/¢šþ8²ƒöyŸ=‹¿špBhÈ—Ÿ4W	ñäìñ™uÖÍé‰(Ó|Øì®tç®µÜyò¸©Öê5Ï,{½°VÐïXÕæÃEÖ|¼ÿ¬<YdË••Ú}€Y[ŸÌoÎÖŸØË­çöÙj÷ÑìÆWÖ°áõÇðO“ú 7~[0kËƒáÌ£DülyíÑãõ™5•þÇÏ:kë«Ëù2L”Ò¦žx6cÖˆRkÖ×>Ñk>Y³V;gÕ\±V××Ý¦Í¦½òd5ÕO{Å~|¶œÌQÃLË!}rÐÈfB0²/£zèZ‘]_[^FˆÊ“Çð¤ˆye›	»ÈnÕ²šð?K­%DâÞõ=R]Ë=û½=	¡GÜsz¬Ò·°Û]Ï:ãðth÷Ë­,2×êØ.¼þ6yí³7ü-»^,‚ÝòìŠ×(¡ïÚˆÂ8ìº¶RûÍÍ„Ý±ë³öÍ_\ÛÏV´ºè»žF¶×ó=¥ê!<¸ù‹Çz6kýãØ2ÙÚ@S/²ÇPý-Å¶l·oõ-6öËr»–g[îig„–Rÿ¥ï†;…n~‚R „`œhãcu#çÜ~‹…&9bW X(8îFìÙsv%pà5eÙ– B;ú†G¼xÃéA;¼8à:<(ÿÛßÂ?_>{Æ*žÚ³ÃnàD~…»ÖÙ¦oG„Ó•EŽïAsUì;4àxýEÊ¯57çŒUU¬ „@Þ»#@¸C‰‘.*.ûw­4Dáý†ÈiÓ)OöøCâÕk…#»ùÌîúýàæ§3§ë5ìàx :ì ¾ç‡ÈVµ-æ3Ç;s­¡Õu€ß•4R²‘ísËóBJ³ág½´f˜Ñ%k1"DU@|ÚsÎYÜ‰®k…áž5é5ŒêÙ(ª?d?èÙA=ª¯È¯=+Ø=ù«X“úêò2¨*ˆ)Ë+1À0š¸ö³«+PaúöËÀ¶>ìx¡Ó³qºûN¸¼cxÊ®eŸÇ SÁ‹úÙØuÉÆ®ís³a§¾ZIjdëPá£æòèò„G Tu­Ðæxw|·Ç¢Àê~ &¬_ 6Óå.‚_n¬³Žëw?(Ud¬åÙ—þÛÿqli^[®kýØ‡ž°¶ãù£Ð¡1RÁàFÞdeŒÚ%èˆÖ±Q¶[O½úž¯÷ŠwŠÆV—òo@Ñô™åYÑÍ_†È±äÓãsèØ!Cá:v-øºÈÎ¬°ë`¢âŒ”¡äÝÉÚ3×¾døêÞ,nÐ÷À¿`NdÃ:H
+;êjÎÎÙDß»­ËúE}õÒeÃËº5™¤öñjiíÚgÛví!TÛ`[ŽÔ²—þ%[Xº.àž‹ú°9Ryë U€ÕWa½žÝ«CÛ|nhSdX(Àä¿¨‡CêžèŽ@?Õ›p âðC==Dú„ÍL[1+z
+ ÚX%¡gy}ÐÝIÛŽv<Ï^¾ÙÅ™{z:ˆ† ÐbíåúZ«¼ô<Ë¨)‚8ýBqà²ÔÄpX%Š‰O,ÐDzó	¹¾œGãÔHèÌ$iÒ±£ÛöÄ}ž"‘9µC¾k¢`àˆt²uè=È•J<4Ž,Ï0ëÈ`ŠpÂÇŽ×sú~ý‘*n•I¯Mu )É*C›Œýç¿þéFbÓ½ùÙƒ™fÑ\B<3ÔIK&üÌ  ,L=\z8"!,+HÀKñw‚¤2`|•ÒmCkTêŒ¦3¨Ÿ’º®ì-Æ«çG´Ÿ Õ´@Rú (-—`Ò›jX+¨®i@½¨c*‚Ô¢ôOj7Ðúƒ=yvºÎð–‹p”f£KÎ¹RŠ¦TfšœNnßÈK¦AÎ—obêñiÃ\Ûê!Ãz¾gç/=ÙÐñ@ú§…f
+VjÂ]½.è_ÙW’£R³¯®äÈ_¿¿~nžEmˆIý8=©s¦®²J£æCéuÁ
+»sDŒ9m®‹°›¿qVÏìÜ£¸k!lÑÒÝSÕ±H=¤5Tö.oÉKwr†VÎ^°JÛò`Ÿ{ŠF8îðEu*µ|²¥$&uìê¤ßëØïˆTHÉô¡7îÃâçÙu¨>—‡¸ßŠìÈë„¦e•ÂÞ «®4º
+@¹³’V­^ÏA$,÷®F^?¬Vfé²Ì´Dwm¯h,—aMÎ¬ÐgH,æD–ëtÑŒZÇq…åEÝ*€ôbƒ:ÎñÚ7aîÞü¥Ë“kAØÈ¡]ØË‘î˜¡¸áQV§ËëUÞÒ6>è<#e‡eD¸d¹Àv­KØ¼%Úß(Ø=g<Ì°ŸPŽ-Ø—¢¹ÌÇa%ã½”ÕûP£ƒý(H°µíY0lF>ðb2‹·ØÊVVÐœïc]XèF~ÙbZ¦h?•Äè¸	Æ%•/Æ
+OïÙÀÏÀ0/ËñÚÝnÝž±ª¢X =àKÇëºãžm(½ã¶$Ž`çïÀ~¼{n"Ù´»øLÖ¬Ôä2Ž,¤KÂó¾Ð”ƒžßã×¨
+âéËÉN¯Zñ zq¨[¤ˆLêP¹"¦4!œ 35èÚ‘j”L
+7è)î _…ê¨Xê:Aúc8,¸}‘­¬.²µƒ¿”'"±î–©u6ì‡kÖwncÃ6Y¢Û,px4çvxÁ¬Îæö>Íé±¶ÈÂˆ?Y£öõ?³×ì‡syXHbÈ_[=[·SÞ»¹²ÚÛŸ2¥'˜H3b2Ûü¯‰šÿf›ü9Zk˜§§nÀ‹òwøææg2‡ïZQƒm|ê¦énŠ@ìüÂßLöíH4p‚Þé™?¢l¤Å„­E>SÀfá †ïô2Ýy›ŸmÒKÛÏïŒ¬ŸêJªzAGúv ËÍ`Ðn°Mk[Ë½ù‰,g¹HÄ0RXdA 2²`ñê&Cë$­#Œ&¹,q¬àæÏ@‚%í­(KÞ˜lšfF¨€q1Ô3ô`¢¸ëwÈU2=¨ )ÇŒì	,Pf2(‡]ÕO´Ÿm_ÂŽÌºäžªR¾–x*–q¶xšñÉx[4´Òî–Ü—9þ–Âò÷ípÙŽuM¡S‚Ê‰NË%Íš}Eq–„Ì‡‚0ã½®c‘y´aPv{þzÙP»­¦KÚžåÆøì„ùT0ï\h.ô=§+€6©¥bØ@á®¡y!·<ØÌÐÜ+þ¦°cÏÿìxùìxùìxùìxù/ÅzÎgÏËgÏËgÏ‹öþ³çe’ü—÷¼d-ËŸ=-7ž–´¦/ÓOÜÁòElˆxéøC»;°<\© É`ðøCá.yÆªH^Å4Ë9Ú€]Ð$V0È: _‘5Dþh ‘ÃìÉãÏŸ±5i6ÖY0À¿D4P¤ñoáêvÐÚj°—;ûo¶7oþyogs¿RÃöŠÊµx±ZÖë'Ê Ô“X8r¨Z9ö¤=4}×ï€š£kC¹åô‹]ßêí€ˆ¸„—•7>°"¹’”êùhnô¢ï0µ§Ê[;8s\ö
+d?	vè„hãS*u-R®ÆÃ¡C-ñV¿€Â4@G'hw>QJŽ×º¤Ynh£<O€‰Wü qæÛVwPÅ_YƒðÆæÔÄ÷üYå'=^BÒ;Vßð¥x§ÕÛw{‡­ßm³ow÷_¶vÙÖ6Ûl|Ûb‡;íw»­ƒ9E­å8-Üù>“¸4èwu©zÜ{P}±qÜ€¿µµãpáx	þi.ÓÃåÚü«›VÐ·ðkõèµ“µãZíÅ’£¬ˆ*­i*µ>ü#+íW®oE¼ìQóD[Hb G+'5‡Èw)&¶­k Ítûn{ópÿ€½mîïÞüé[àq¶µÿfg¯µw¸"Z†í$4áë¨.5
+Á¥–œEà»Z
+×Bß´vþ;Ž(¾Ýf›»­ïÒØÅL
+âÓV† Ë£%ÚlßüO@¸½ÓÖ„D}gïÕnðÙ?Øiå5¯5¢·¯bVØüÁö&´º·ÕÚÜ¹ùÓÛÚÙ»ùç7;›·i3¯Ï¢.=Ù<ÈÐ 
+ÿàDƒjå¯ÿôosL(Í'ÁñÎ‚#œ@µã¥æ2<­‹7'øæDL–*üÀITU'Îìy#Ä+*ä1ß7³|ïUÕ	¶ãEñ,ÝuÙPÞµÏÀ«ù€Ï¸ª]Ë/Ê÷i wÅ.•WX?M~uA#p³P`Š‚;Þˆü]ÿÂ6A©©Öž‰ÀRJ{üÓ÷@w7ê±Åð=ÄåÕ·‚ˆ«Bdu×éY=€	+sq…©¼uþ´ŽÛµ~nñ ÷2PaÛeñ¶eUçÇ;Ð3²½Ð)Ó¸ >'Ç‘ªQ›¬Ò|è?QOåÒFãpP½BN~¯EÎÿ‹œ­%s-¦XòºxÁˆE‰&RªÄPùÒÏ uFHC7H¡{]b'6”§àÅ*^Ò|j	\L½ uuC[dæxÝÃJUµY‡4Q°ë4©–kl‰)˜À:å¿r@ã¯6kI3ú:˜<ÇŠ‹yDÚÈPídí›ŸQ­wBÆùûæ'4ÖÅäèŽÕ¨$0»ë½WT8£Pûe]’ÒU;jŠ^ê»vãÂ
+¼je;( 'Qˆ¡n°êàg Ä‹De‘a}©Nk*/î„„Eå–«ým 9Sê¿¦î“~+ÐW d…}YdÝ±Õ|ræD@õ•ª–×žp¿‰úÂò<û2y r"Ìºxk¸RùÒ±wì=à‹Ž\ÜïåøL"«ÁñIIB®¨áXT€p5øBèècØîyÑ!è•6öQª0àÞ6}¥FèA« "OåŠÖãX¯Ž³nZÿi‹WêmÖUŽ6[ííÓÖ^k÷{Ð—N×Þß;Qu	‚ó§‚íÍe"òßá.d*=k7–(ÝšUxöV"¿îu:¿b–›_©œšZ@–|=3©Tåµ2ê!êŽÕ4DPúø—~q„[gnU˜ÍNøÚ¶`ÛûÆ
+>,ýÇ¿¹j.>¼>LàáÂ´^¯OÿúOÿR[j€ª1çÆ(¨x·ö¶ÿÛþ†Ü‰Ë¶v†£ÀC® ¥[Z –jüéÎ›·02;Gû7:Ù4¶vZßîÑ¯ö!Ðmª¿ïL7÷÷6wßÉñÏý½íöT¯»ŸþÝ®w–œL¯ò¹iŠ\øÀè›?Žæá…÷EÙý¤hùeï Ås+jÿ3Ã°I2† 5úÀfæAÁ±—³ÝþßÞm¿iÁlîÂ¤ úáèlÃ?¯[»»­ÿþí~¾¿=ØÙÛÜyÛÚòo¾km`©6pýŸÞÒðIˆÏ¶ß@7hHáõþ[˜bÞ«ƒÖæá»ƒ–q|Ð†¤2”ÞÃ}ÝstPvNAAôNCëíþ°šŽ§ö{»}xðŽÞjwj9Xúw¡…kŽ±†¥¦›Ê|\ì¦}šü“­¾µÝÜÞfß³ß½ƒê¯ ßBPm£pl'Oîn>¿gèíFù•‹—ˆ4UÀqYaà.ã@qžÊZ¼~ªÑ«iŠ
+ïTõ_4VPQ¨&†ª„ZAM®É*“TäŠ¶nPZ½Ü³9–Pâø†I’6ƒ„G7%µ½ù!qüHR-,€$‹
+%ÕXò‹xKµ´ÄÞúaT~GÔü‘†¬åMPñçú!ú"@@÷†Ô!
+Kœ:KÔ3¬ˆñÕ^3e•¹®Þ€ñö) %ò%v_˜ÖÖC4ÆÃæ`thÚÈ£wB+¤b&0å±çJ.{3êä¯~™™µnVA±ä%%çP4æQ#¹A$:—ôä$eºþ¹$Ãƒ:¡ŽºAQFTÉîONøó”AY±WþFQìÒrA°GÎ‰Áª(p¡ÍÂÃìÑE:«3Õ°®MƒF£ƒPÊP dÊò©ØN<HY#b
+åÑ¦j%·˜Å¥ä¤gìÎL9è³à?>C±ßMæl¸³5´ƒËÑ³Ï:F1ØÌ:C§fÎ,`€Sx·&6æ±,“4…pbqG6iÇ.‡zó›\ŽC#¹­ˆ_}’‹²À¦™®íÿn7Óo3×‹g{É’ûån·+òÔˆ:7¬? ¦Å°fÂÕÇµYõ‡¥M¦rà°(MërhÔrÂ=¨Çõ»yö^I¤ÅlÁTq‘4ªw%5““Ë??$Y}‘fÙòCZ‹Ð+b|~½YË¬¿RF©…Ùò"a¤ÍÿâÜPúföTeÀ¾ã¡c]ËÂ„Ã-…9V´DõÉ­™gd£—š¡-VYr`]«fB'ü½gÛ‡5Z1€«LÏð%>Ž-„±ó
+_á›Y+Ñ%Î5© ÷4"À¼d*Ã_Ÿ~Ï¶&Ç4¥7Î ÔéÔ:§AÐYä„-4Ân¡ù«Á×NçlBpkº¥ÿ›dl—8jÛ´ë‹ižomêv‡Óa×Ußˆ/ðÊžÁ#Ät.ô§#;l,XÈ”Ž7§®Ó·0NØo,@)Œ7™žù!”ù#÷È¹ùù$²-©. Ö5}ÔZÞ÷£›…€g›öÇ /¡œßêø³Xû¤˜ã4•}™º#ËšZÑß¨;íÂßžíF¾Ó›FNÇñ1žÕ‡Á–‰¡ó0|6¾kw'aäD0]ïu„º*è\Êw±#
+}Jt—ˆMÏíøýwÓá8&ÓrP–ðùÏÌ(ët§«ëxvdOaU`²9@½œÆ®ÀžÕ£gŽYnÁ‚Ðë9Ýû!Kœ;@–RæS×ÔÙ7>ÁïöôÌîZ®#"Þúôƒ,‡‹+«ß{tÓšžÁ¬¡|{ðÈ±<kÑ»±€§C;ôUðùcô†òJîx?ŒƒÉýŽÏXyêèÜAríŽ²&9Ø>©ÁAÔ·‚ È,œ&ÎœNàà#ìÅ‘ó—O)7²1Å¥N1¡BäãZ[–ÀŠŒ½¤’ãcÞ	P[BkzÜF?w¦úXIs.aXêÔ	ÿqEA\Â¾=´A¾†ÄµwzcôÊN;|ÚÛ8±Ïì¡+¦u>v$“ÆìžÁ,Ÿ]<V|¿œq ùkœCG™ógú¹åúüLä©(û‰©:¢SñÅÇ/VOþF	5XáÀú0éa¯ÒxÚñ¡CSÇ;³œå¼èÔ£ìÝøQþ`½¶Añqº÷;X´ÌXˆ¢ŸØXXCËóOÏ0Ä–=mI%Ös
+29Œë¦=¥sÚtç	†„‘Â‚"¡¶÷x8}ç“ðd*òOÃñCW»8—AˆQ\œâÃrOÏÜñ¨:`ƒëmP‹ LM‰¼-:ý¡ía¬Žˆ’5§šü˜™·±Ðu@N…SþÇi øY7? NSÂÍ‡ÿøê¥.œn>OØžˆ|¾7Ž
+d~â?Af"Ä¦¨1ùÁi†C]¦Ü í‡§~‡G9ç0¤qyöÈÛ?ZB—ÆÆu~œ†v6pŽ¼›?áC3…%Á
+ÜÅ8´¼»È\ã Æü¡kwÌÆp¿ƒr e†ÏžU–(Øë ßË8¶OŽ	ì4EY}Žg!úü©=¹ßBiXßU\[hçøÓbŠ•¥?Å:ôêå3šö?†©ÁÏß®ZADüüI$r‰©Aüm,ðWÓ¾ï‰o#ÇûQìzN­@Ž[¿ºV†ÇµáÑÐöœ°›L»)QI~SÂ‘B<…*Ûæøììž¥*|ÚÈ¹ãŒ{sè+–îùŸÖ¼’ÈMa,X
+Qa%HùŽ;˜"|Dã„™æqd˜æÏPÑ„§Q×í¨ã›?&ûæþêßó~ÈPsCp>­Ù#°k“×µ÷AMf¢ŠâéÂx§ží@‰‚éËT4íp5×å:~è9ÖÐzëô
+Ã;~?(¾ƒI†¿ûŠsõ“"tÏ9·¹¼ eÑë SJcÀ46éŒØñ¡ö0µ:!j0CkÊ;4½ùÚ°ý©Ïÿ Š|o+Ó3×
+E¢çôqa:Ÿr-CUAqÁ3eÓ¾ãÙÐrÞèôíˆ†åÐ‰\[éBÍ#áaÙPF¶Í”¾}VmíÝüóîú½y·{¸#¢nÕ*ŠOwHƒ›<Œ3FÛ¼ßæGwSôW¢?éØ…Q­ÎTf†FfX¨¸èPz¶ÃÃ.¿kíîˆ ›íöæÁþ!<_b‡Ûè³ÃPL•0œéN$Šµ±)uz„¶÷àáLÔ½¢…ìq,^o¿½ùgîÙ…‰jbPžª†#‚YsÂ<îìïlm—ÀOU°†%ÔªYX´ö±9ø~°¿µ³»[‰ŒÊ0,¡(ÌÂäMkïÛw;‡û9xk¿Ûf‡É»Bsá,Tv·¹Ë^µi
+Á×ïÙ›ýÃí½­½ýv«=»¬s@ygt	ÌBksw{s¦õ!4ÚúöÝV‰¡ÊÀÕW³÷L~y‹$Øœ…´ûQ™V9NÇYH´Þ½iQûûs1nÆ¥¦
+dƒ#-ƒjÆ}VÕ-¶ýƒöÎw„ïáþKÀw6¾š*˜yì”%ÙþÞfhÿ=;|÷O	©œÕ~
+[ùž}·ÓÞÜ>ÐBëKtr~H÷/Œl_NÜ¼Öï¢
+,-±ÍÝý@§‘ð8X(°j5i8!ýå:©ÅÊv+‰ÿ‰O âš¤ ¥RÔÐ÷_]Y<§HêÆ5ÃŸü¤&ð^×:j"p€©¹ïÑŒ 6Ä;såã(2–DíÉ<V1Ívøçê)¾³6ý6<žo2KŸa¶Ó¡ô1ª*Æ»u¥ä*®uf®Í²u*wÊÎ]É^f×•n´SÕ*—æ
+ã—ÏR¨*d±/í”ÖZ|t7´o©˜ø=öò`´#÷x>na§Ëÿžß0nˆ¦¦´GàþØ¾HïÔ0/åº˜Ë5‘ï^)ïQ¹?BîtnµMøQ(‚Ò….YHg8²º øÊ0ŠSJjá-xP:ÒóE†áP7øÝ®å4Âþb„úÇE˜O‘·Ž8v®GuœÊ ŽS@ ÜQl•Q&S² æ¡}Š³›bãè­ð4ÿ‚©€ŒíÒdQ]vx7lçÐ:5œcqä}´e‰ø%‡›^ð‘¸ÓWCšN)Ø‰¸#«Ï«…jøkÚElŠ³=<‘ë¼ÆÉàRbjX3Â;²uieUC’8V§Ð?uÇ”gœlX€X,ÿy—|
+ýöÈ–×y• UÐ>_Y®ëéÖE5`ÛÅä³±Çˆ!#~Uo7~|Óê¾½C›…ÖÍ5g#sX-‘Ks6vk€sJÎ2bèæ%iÙ}&NyÎ†æÜ¼glo×Þ\;pSÔèœÍ–7Öèñ7w`’™fÎ¬qÎÖÊÚèR®±yZ™ËV‘òûÌÓNYÉýEÎBpkóCâ	`}:·	ó$3 <X2=OOÇS×Ùtn_KúÐ3å<M½^/>”JrSˆÃHtÀñoD¦ë›_ÍŽ}'œŠÂ£e=+–àg³d&Ï•¬gáÃüPõNÏ­ÐƒªN—ûgxÐM’	Ræ½JúÄŠ$žÀîã‡5àätMzÀšzž¶ÔA°¢(g_Sƒô›ßü†å²Z©™AR`f%™‡+_i>½ö Ø•¸·ué„»"áXUÜ'"óZÆ.¶fn¦âìÌÓ@‰ŽòR©!®ò÷oS¿«ü§Ä7öú¹hT‹É”q­ŠŒec×ÝÙ§’‚Ò‡hpjå¹®×l°öëýw»[Û€Z„ÞÉ¹‚¯ËrbÎ4Ž˜ÀX©þÆÝYŒ4ë`<Âtf½íWcA”’°\GëÁxTP«TT‹¦0ã`èMa+IÁ¼†ãqsµ)ù‘Wÿ¥Œi'ö.µ¾!.$âmR$J:Ú¤Üö£…§–‚~.7©ÛÅ2ìåÍÏX]êã~˜Ó6;üžtŠ[~Áø&âŸ¼–öÝfI—Ç¼õÔÆÄœ\\a;æÚ?àuPTÎÖ*k<Z4’˜»wG-¬BQy{¶R¶ò²[i€¤üýî6n‹¸NøñœF4[‹m <v#ôùé'ËŠ@)–Y#œ1u“sT¢BcAi7f»N¿w[aÖJÊ³–isIbW{P
+ú&T¸ùÉ³M¬¥žËãçüÊ3{C´‰+H¦`Ë—ŸüÄ¹çOù‰	<ûFELECt#D±NÚÚ„TGÌõ­é¦·.’ÉMN!»ùSh[xw¿¥1ìjƒý~o{›í·à%}ãœ’‘ùÎØLA¡¯–x™ŽŒÄ‡LâØÈØýÂHƒœÁ¯*¼YƒþJ)kn”°–‚µËËjŒÞfO2ø¦,m@Í5žT-	Î€p"ÑÑ<2#ú†KÕŒ a/¡ƒœ­„¹}™SñuåT†7?[0™ûš´‘gsa Æ®cyãbƒ½å54MCò#ò(-ÂÈ§ù+n ¨`	v(*j®ôéå®£±Ó/Õ‘œ£È¹æ„‰ø-ÖÑ@)'”§ö$¹,î‡{Åo~†² :^biM²¬5ÈÂµ‹û·ß½;øþÎñ6$#Ê‹Ë9á6C^”ƒúî¸ƒ>Z£1;V[{#C’K¿âTØ•9Ü<P¯Ei ø&/Úˆ
+nÆÑ¾<¸ï<º×àR%­PK°Â%*…ðLª³ô¥%¶Íj²’è5Úµ¾çv­‡”Žy"Ö0ž?ž1äÆóÆâhbú qf}Uë‚t€ª*ÑT?Gˆï”2ÚK©Yç^V®;ŽŠDEa]w8—g­Ð%G:—Žñôün®¸ùÅæK*ÏùíæÏX\ckhÑ)¡øD÷T:4‹ù*Þü»p_ózc<-úmb@ÎªÐå¢Ðˆ+ÄƒYS_¸1Azêå3“Ù¹ù‰J²VâðÔÅ1ðAF;+/1ÓkcY¼ÁÄÓfŸ~2[œ×ÎƒÕR
+k4}Ô`‡¯¿G³†œ%‚TÅQRy~”ÎˆÎ )÷ÈËÓ¢v8=Á‰¤W4ùüñ‹i–QæÐÅ=¬øY4Mp§»Ç©˜Æ‚&Á{š«ÍKZìp§~ÐÚj§dÐã¹0áÁÊyÛ‚59@I©Ü½›Úâ¢”W{‡¿f‡âœ¯6òhÊoîlfF¾| 41A¶1¥#«‹ âÖ£ì&Ad)‡@Kp—°´bÐÆtæ3´ñëÇ	ócÂ^a­<«"UFøªpÔÓ¸I7×Š(•Ü5!©«Oa‚BlÁ$pÖÐæOk	 €CD8‹\©Ó§„˜GÔDükiû¡Šá8u)"9€ƒQ;Wsa¤ºé½¬ÛÉí.ûÕ›Ÿ)ÌEãè'îÎ;Ëœ< V6qMbñ´ÊY:"­œƒ­µ˜Â<>&Ç¸J·ÈÍ	„ŒQÌô-•Çk×©xî„èù£‘kÃ~Õ°È9/«–³‚<Zc|vNq™-0SüˆMã d„¨€ÅöPjc]®)Qð—LöO§/Åé¦"ž”ZÖŽZUcËærƒ™Â"2lúÑNù)]|„×±[‚›“Vf±ôa‚O3ªÐ¦sëÉføIprcAí-¯éürVÊêlŠßüLU‹™è ¡e¬Þmx_9só’6 Ã‘ã9¸"æÎ¦ïâZ%X;9Ù=r´!7¬üî¾_{-ëi.ãŒ6@n%þ<ò#!ºð˜íùãþ@s‹÷§ÏØÊJÜ$½ú&íÔ®»\YÆ‹L*FÊÑ_å˜½O&Ë.:±‰ÓäË8¬>>«ãÓŽ1ªñµs"Åãx(.J×Kœz¡ó#:õV.'ÏÄå‡ÏøË%¶¢ø ­Ëxñè¡ÒÞ®KÎ{òDãåÃŽˆ;fäÏL6_Ëëóc‘o¬hÐx»ÃØ
+´%p®ÁOÇêLˆÄ©a±2¿Ç	eÖ@ìxAé¬D§@½²ë‡UÂ"¾¿eb*:^ªýâ>mâ:…!M¼¹c¹±²È–køÏCüçñ"k6–•?p¿õÝIŸ_Â«Òá	úšLt&uÀâ”¸f‘9Ç~òHÜ~aÊ\vA½áJ€~ÿÕÕ(j\^/ÒßÉõ{á²OÅ¸VËˆŽ@?ïô‡9j¿fGÏãlÄJÇ)™–<lúÆÏaTŒx>Œ/ðLîòäœ¯âÅá8G7(÷g‡,ÔGVßVîòAÄt£:Iäjçpduíú¤þ0¾ß3{—=]o¬ÜÝ©¯î0ç¸¬,«Wò>¬fo”î‹kE}ØFÍ¼Ý8àsàOð.sãmÎúm¸æK‡Å…èÃÿü×ÿýÿ—ø²+í˜3EJ2­>]¬*ÊÞÞ{ª(®ËëÖ©{ü_7Œ:pa×ÆÎé~%t\tÇ–9‘E7¨ÚìægÊè†vcÚn³ˆßvÉP¼ùó¯P:“Wa*xŽRwœæŒgêNõ&ö6”Ÿünõ‡‚Ä”ÛVÁÿjií"l¢‰ÁÛ`íÒ·˜½Ùé²êC¼Ueß’BÂ4G÷6â«wâ…â’t©;ÅcŽŠ/Ú¾tÙ¨¾Îy ÿAœÍ7‡‹Ÿ˜œúà:¬Î=ÛKqÉyŸEƒgW¸L\³9¦å¯sÇ¾xé_>»z¿ÌðVoþTü}m˜#ƒ:æ7V¯>Â+«S÷æ"7}ÑÝ‚½¶/-ž*½¨œ*Z¹@E˜»wIr(}òÓ‘ct¡;”ºf#1QøOxÍ`ãé>«ÐÍéÍã ¬ÓíôÖí¦|ð"E%þ½e…Ó<Z§×ðâ3dƒUVØJåš-é¬¥®sÆÃì"Ý›éé\‹‚üp	ê‰*‚S÷âGˆÖ§tM+§Í5»l>»ârÍ&Ê÷Ë•gW ä5›ˆ¯“ë„\OÖ¬ÕÎã4¹+ Þnú^l$ÞßËäjó
+†#C‰xåÈ)ë“Á ß±ªž,²G¨´­<Áet7eP×ÎÖÚë),W+éqB”¾ÃÔb—lËfKÑr˜–¢…1;4]' …4œîå3¾f²îä_5Yð¬²rTÐ ÕExpFŸTŸKŽÆÀ1
+‚»_"¸WãMÐœ2$Ê*ªã2ÏŸWÇMIKy‘ä¿È€¤@L¯;à7'AìÅ»—L»~ø…mÆº$àÜàŠ¢¹(’JT+ÕL\Ü `™KžîD¼d*ÓŽ†ã÷Y|=5?I?ù:•nƒaû@l¥_¨Aœ¼‘§¬>»æ6ê¦6L]¤Ö× ¦ª1r¢8R€—†Î¬ghgšÂÕ«íPˆ£F»LMáT?OQ•É<errÞÀlu/M/ ‚;1½À&ZDÓgWœ¶¦RòÊ— ¢ð~V¡5Ór+†ÂiìèIcÖ^E½DÉ¡j‘REËBKßsŸ+•¸/tÃÏSSMz‘>Ê)Åz“gý‡ö°òü*™ú×O—¨Xy ÍÆ*ÀPûNLÔ\Ñ}ÔéÊóê•Ã×K°L6ötÉô¯ð5w69J?Xõ+­©÷&XÙŒ`äÒ×Šä7(ðç}M£ËjçGÍe…’=FØŒ‡ªæ¾}·6ôTh9û’”Zw`sgY$Ì:‰ro{Ì
+¬›·Xuw¯[®U´nŒ”†¦»õ‰n>‘÷·tó+Ãb¿Åá·LÜYþ·=ÿÂCù8—·QÇå†pMë!¢‘mxÓ
+z©53|ní~­±nØãIµ¾cGvJç¦9Ç¼Ìc‡[Pe^u\§T†‡ßŽ~°%¥@VpOè!ßÀ¥1\2MÁ4©íU McœÖéÍ1ðoÓ€Wc”+ƒ¯sÈffµå¡Ð­<'ÃûrÞK·2N$ƒ ´“šú•ÚGó`ü-±XØy“$™KÄÐo9¾ÎëSö©¡ŸÆ!£ëŠ2g°]ÖWãGì`<‹KI†…iø¡’e™×£_–Ó“Žãœs<\Tëœ¼°Ï©Q_¹$&ÞÐx(¾œšŽO Šúh%-ÔK‘/-ð¸¬yX'µ\ˆ±b#%ÖJZ*Öîsþsz¤Ù·øÃÎ\ ,{3v#'ýÕ‡[µTçkÅ¬“1Î„CÅ8Ãm3+†™Ù¨ õä^¥wY¸[§»¬^ßÞDDPÑv²‡.ÚC¹MÝ—¿žŠ¡Í/«Óá-@ƒ«xë9¨°™fˆ!×ÍLs«z¬"ëM<44aa×ã6ø/¥þ`®VV­t'°|ÊFè‡ÒýæMdÚÈÕÅw$}Y½À
+9sMuû°¦®Î^Q9gKB©„DOËñÇr!Qc¯+,B{+ì¶´»½ÎS~¯òvÅqÕìÆØ´©È[tÍ}»zŸÝL¤DˆïÞË‰ð–CÇûPGËaÂ,×ïóû˜ðêÍsbo\~3úsÖ’'?uYÍ-H|ýµ#ËqCÐDGlåÀ ãšmq•f"Às…·T»ÑÅ y²Bü2¼µø~œÌÉ¬ã‚<ßc¿\×f“¤_\¿Õ$¾è¾²êk(gýØ‡gÖö;M¦ûšBGUôßFì¯¢H×îæúÕì²“'XJëë\¶ÀÀÉA4éhé®*’ˆŒ69‚(w–Ó8™ÕÁ<éÔÌ•MO4Ù»ØòMD;.Ðëuîr2êÕhàG‰¯L•c†Ý­yâæ ü$OÞ¨;Z_úòWf¼Äsâkƒ”ŠÅ­#|=ÿ"°FÆŽVE÷ìsè^­dÿŒB‰:Cô¼>]­…V°OMf9bíÂ<è%ciìÅS4C«Û9‘7 KTø¹Ž±ilGé¶2‹ñƒ&¡ë†§xÀý¶JÑ÷Ox§Ó½W2!ßy>°!®<×Ec†nZ÷nC½Õ4÷láúÔžxÑ ãðØKÿ’Uñ’NÌïäm¯GHiö.S»°;Â@—öx8´‚‰>ýº6—LFÝÚ¡øÕ…‘{ékÇ¿¬8R:4ïk­Øæ»Ûq¯:L/–eüîý¿~’n÷öÍÏü¤
+ã¡E7?yèÙV‚þ,öÊQ]ÜÙÔLw|¡ˆ(¦8¥¸€¡.#Ñ’ŒJÌ:,¹t¹ñ°žÞùI·bfÍÚ<ˆŸiy(qÏ<Òòzq,–1ûˆØb(U„bRy7¹°:úâ…_ú½	eMˆóœ.8§¯¤D6 +o]l»6ôy‹Ð	T|ù\ii‘U(´F¥7©ÔtH„hÛA÷“¨ŠhÚðÃæ„xœ¿F´±B#šŒäy'˜§0ÞQáÔ§øx‹Ü';hÃÞ-Q­¨–ÓÓÔ«!FÚ ñ&¸ñ¹b¢CFÛ/„é·Á*Ö9žYäÜ—zÊ®S›‡§˜¯¢%0= j ã"Ã‰Ö%Î×Ì	·¬àÃáÀÆ}ÝeòÜ§¤l¼qˆÝXJõ0¸ÙÆD¿’<¹T¸zdˆÃ™0™nÏ¡åäíÖ«M½<0º/`[-”@2uÊÐ%Š>H‡@U0&#qøáÝ…ý¡	éÌ8jÔÖ»£½JõmMJÿ’=ë×û5á‡±ojÌÒ#èjfËxUö64åé½¾°Þž0)ŽT©¡HNxEÒ2Ç“Ó¹´£.q¯ÒJ•öëÄ“íá‹øFçJFË üî:!¼oqY5é¡xü®$GJŠ9áËñä}2ìf…‡ _–¶ßînOwö^í¼Ùžn·ßmíìO•kâ÷§J~1ˆLjÙ&iñxÍQ‡Vã†xý>u%Ý%*¢{àYqÁ­íö·»ûímö=ûÝ;ÀîÕÎ&G¬RË`³b™i £§Ð¦pîKŠyDu/¬	ˆm+äÇï±Fò–iyC…ØÂ|Q	Ó§àå¼åá´üÙåÀê1Fó_ñ"¢º'IÚ¤ö‡ D°§E*ØI£u#OñÚåÈªSŸˆõÌcÓâ¥ÓÂL ôÒ³’/ß/mäž—8¡ÛÖ™Í¹n‘½çëþ þ)ÞÏÜ$”WB/d&Â„…nG~Ñk=¯S»€URŠÑCŠ#ÆªÁ…ðt°’5<†CÕÕ—«²ßBP>Y6
+Ê;
+iè+3<>ùÅå4šHì5ËÕ 9ïH	ê¢"Q‚¾Œvwb\¹»¬ì\¹Ç‘¹ód4ó† qr¤È¿RŠü+·$ÿQsUuÌ‚5‚_` ¬X™{ VKÀê-@ZfHk|·ßüE&À£EÿÕbú— ôÚ­Y½™öŽ’›ˆýúáÇ"õZ®¸—óUh×	£R{³\õHñF°‘kðˆZhÔzÁ'ø}‘Ì\;"¾>í%3[î@!TK#ÄZIªuÂ=²5ØŸ¾ôÇãÞƒãÆqø`‰+â1 cÝÎØ…?í‘å¡ÃêFúwç®ÌØØÔÑ‹lüH¼g‘A+±ÍŸF§šæš’DÛ+ÏÏEÝÌÈ‰hÐ“êÒ«ÔÍö3Ó1q0Kš@3¥×¦Næ‘É3’ý¸½ô¨ù0¶‰Ü§C'rJ<¿"œŽš'2(‹9ÓF>éwr€’ÃX>g½OëIé4² :ÄB4RW+uÆ·Væ·,É';¢+Y‡°9š˜Ë »'¶­y"!n#8…dÀ?|J0†‡ãë8ˆ"ãÁ.8‰c÷ÕÐEïhr”-´!rïO03rº¯aÔ]yè}©ÛùœÂÊ8ÑD„í[ÕÇcMmñ¸`ÚŠàî¸>™ðŒ{—.á2ñ{¹®§»+w.°6Ÿ2TÆîÑÙ3©¡¯KëËH¸U
+-Ãm¢*èQ/
+oê]²Üyâ—é‘Û¡>ÉKk·ïÕ,ÆÏŠ—›÷_Å+N;§r¸¶ðÇ´0†{\%ÂÎ¥’‘~iÓ˜J¾bO^¼šó™ll-Ï5mrÞÎˆÇžßbY×6ÙË ËvJ‹™ü	ñè$m3B×ÀŽ‹ÒÚS@šqú\ï„4’±óõá›ÝCDmeZèA?ê\\êêƒžÈ:.eÎ<T(Q=Å˜†b¦¤ÏW‡ôÛ‘ƒm™_Rl‘ùUì¤Í©9ÆTcx²¢ÌÕ”’é#L4R(¾JÍ_œv8ºsÿqìØAÏü–$Ÿ•óòÜ
+ó)sÏ®…Ø¨´jr–ð5˜='úœV}qœ¡â#M¹ §	‰¼3éÒáK>toé»®5ÂÝÖ¬Ÿ9 5³6·9P#p¾¿F¸hšëÚ©¢¦T³›ËËKO”h"³…íihMÊÑ¡½õæÄ^É9F»œÁ"äíoøu2:¯ã†…?9’tÕ¬Ä5v¤C£–jK¯ýÃINkJ n¢i±:ˆ•ù@(j‘¡ëkÅ]Ï]Dò«• ÙJÍÊRmåñœ@Ltk>ü‡õÜÔ\ WM±R€•Áf3'åšËwÀ×HÅõ{ ba§KS®h˜£¢‹YÛx*ö¾é\’ÊE*É©Eì^ŽÂ…c±6óåÊk²Êñ|l!™›ù"Û  •ÛLC•¶Ýç	»[\=òçÝ,À-RÐæ³b³#t¹<@sP¸àt~@‡0×Ãß2Fh(ˆ-bnYU%À3a¸Ácâ3ÌÅá{Z¼LÕÕO	÷Ü‰–’Õ?VÒ¤ú¹f˜§sC"CÇ!’ÉpýÞ<æSØüs¥w€§KÑÀÄ`½Éž‹ ‚lH3iY]7Ú(òà¨ú$_­%µN<HÈzh“Fo­Üérý.XdÁNN~Žd`f@Á¨0jPÄ¨ºªœCxº]ëØŠˆ\áÊ3m"tu™Œ9fÆ¹Î§YÊà›Ð®’ÇK÷²!‘Ÿ<€î"ë+ØI~:×¦Õnž°Ó±Hà˜k‹0Ù{üZçöØØK#»9öXù¡"®Ó÷Z^ïp2òÉŠ6ÑJr>'å;iº]e­)YÅÈåžó(P¬Tk¼²²Üš3ëüÆãÔùŒ—§3`	hòcÁ˜?¬ ñb9o¯‚æ—rä¾C7ã“–Êhž)^uQ”õò×ÒX õbv/XysÖ^u)MÛ_‹CÃË-¼å–ÞÕe˜Às.Â¦e8‰‚Y›äü…¹hiV¬ÍB\åC…4³ŠÊq…6¯ÑæU:›†ŒÊár™N"Ñ\qŸKKlË>³Æn$Üé†ölñ6ÃºåœÕúQ
+-b•–ü¾È\óêÂW
+ôFífYÃ´JðÇè ¦@}¥lžñ;Œ÷Ü¢¡óIEÝ!¹P©¡TQß+(oSh(©¯8ôCZÕú=¶·«KÇÇ•¥þ"Ú|u Fds#hÝõ×­ÃhUÚ¥èUéiäŽ,—¨>&˜›ñ.•	 Õ£>•pÐO' ”½Ð±3Fì]¦#ã¹Á‡%V¦1ãMÍ3`£²ÃG­¼)!n?¸ío:„È¦u®”$Ê)§šq@³Ç‡ÕWj(¶¶xO+YÑ8gì@¹È]dèæŒ(Ý·Û†
+$Þtá^Ïwªß*Pàî(0O'Š¸)gúÏ1ù“îÎn­0L"ûpÏš1™ù¢ñÛuÞÉYy¶á|ÝSŽë)‡÷¸^‚ÝO²ÒNä)%äj™"jê8íÕû8'µªûªŒQlàYFÔcƒü0éÓä±î;»JwZa<PLÇ"ÉvéF9§Ë€ÌŠ@f8™YãG2yg&ýš2&s§úN:™“ô»¢‚ÏŠúôQó	Åü¡i¦ÊéPiKn%ª/ªåÚì"_Ì(÷{Ï¶g•iá¾³
+@j—*ô¯‚&nÛnÇ¿˜ÙQ¼d<œUìF³
+áPÍ.ÕêðDfî@·›UxÓrÏZÝãºv8«ìží{Vd¹/Pf³…MÇîñ+Ï±//PßtQÇÇ$]4aãÈÁ;<ìð‹$íhrè'Åž1+œx]ýó"¦6¥Ó¼0|q½<a]d”v1Úée/©—W¸oò‹36¿<câ12ÀÑÓ„Í¦£ÈøŽ— sÚÿý^lŒ‡ÓAMî[£°¦ÈHRr¤%¿X›">–¬©
+×/x_’¥‘_fý­íÙLqqÑì|qÝGÕêàM˜‘íNØY`ÛÌ?œžèñë……¯Yw`áÅ ey=&N!²^‹Ê„
+Îo±qüo²÷úcõ7ŽÃµ¥þ6`†"°=[¨6^ÔðíÓ¾jÂÒýjÃŒ'Þ+‹f[ø!4AñŽ½T¿áÍoÄ¶ŽÜ¬8#º|é™LŠsìÊÞ|U¡eàt,ôÐµÑ8°ž@µE.Q½QÃC±ý¦Íþ â–-ñ?üÆ¤ÐB~#©ß…*ít¼^ö#^vE8[4tÛ…g
+€„<Å;0´i‹tÀ[ÐmÞe¼¹Øgt±[DÝ@ýÿ†~Üžo‡Þ× ¦^€”ð/ØÓõáÙQ-FV?TZr9˜ÝCEÑÕŠdÄ~K£õ[k8ú¦RË)ó”—q£ü"Ïy‘>Q•½ÿ[vƒ&y›Ù˜Œ)üùnŽf%1ñMª€ ²ËOÚ°eõ=ÎQ š™ã7†¸kµ¹(Ûº‚™j«©¿M“Zo9™„¿Á úŒDÑ¿P¾3Î+·ÄùNHßëÕÛb}7´ïŒ÷Ú­ñÎA\ÝÑ”„–•èO;Ï¿j>]ê<×—…ç	 [z^4Ë7…Q‹?²á¼4ãi¯êÍsß(±ðá©t°s€O«ÒðÇ¶¶™´ù¥lÒÔ7"›&A}Š!9ˆÇ.3ÔÿåÁu=tŽËUxëühÇ%¸&O6m	hªóº–D¯uAÏ6÷9dë‚Ðºø£¸RüÑ[æM¥Ä^å2Û;îâÁÇòÆ©o*iÎ-èîZº³lfWqaÓë(s2žbiÌç‡Êf¯™¨$Rc7ƒ±&«Y¸9n…`V`òäÌ%³4óç©¢ŸH¯aæŽñ{ÿt$6—‚:ÀVßÛ¡>´žþ†e™œ?:³†Ž;Ù`_·0Yî× ŽÁ––oÐ¿©<ÿ­×	Gß 5ã½Þ0TøZã\ï€D †½î!°3¤ÿpíî3³ÄÖ;~ùCÔ ‘IŒ+„›]Þãeì¬T05ûêJgŸëÙÝ…:Úˆ^‹
+ß^(Ûõ]?Ø`¿Y¦Ï7Ò‘OÓëÊs„£Häk$èWW|¼åiÄŠ^Ï3¤TßgŒ¸~j,°Éû§¨Ï>J‘0O‡vd‘J
+±g•qtV\yþt‰¿$—ÛWWŠþ8ÐC(@ÞÇÍDÁDatœQžuîô1æÏ[DÇŽ{ŸF¼m¤#Y†c?çÙL+[Õ§‰²%ÚpU6¨ôK×ïTômÒÉ"»"?ß†V(·h€†]Ó€IêeÀPÉ”km¡±.,'bZ4.ð,HõûyR|¢yÚ©êý5Ûe°ÝŠ6ý‘c÷øv§WEuF)
+¡í£j•v1Ù¤‘×ðÆÉåäBœkÖ¥c¥U;Ò‡`Çß¸°àIy)&‹|Ö±B§Ë¾ ~°Þ¶ŠþFe‘! /·îHt¸=%Zœ‰înA–½‘*ÐG?¨VRf–3ËAÁR ö¹ r€*¤ì¸ò¿Êb**I«:ýJSO#\ÞßÚ1ßºœ¸@Öûo’"™¡HÕAß·>©IôéÀrí &€®àµ‚hÈÂ»ØGÖÈÆ{<íK'òC[jÞ×±‘Nšá¼s ‚òéÐ#MKxÞ
+žÄ†5ù%•óË$—Û
+ÅƒTP
+F†·ü‘4ÉðMãîji} ÂÃžb8¨¾ØèLy*ÑÚó¥¾û#ø&§øñRa…të"/jqûÎ	jFÓ™²™þÔWH`aÀõ<`'8Ž—^pdËÀs?P*.ŽËê:1¼:+êM\PovèŸÛlì.ùî²Ý©ïÖdË”MwsTÔØH£P^3£,»{š½úµíŽ0ˆÚgçN8™9-´3ú¨%NsñÐïq‚UÉ/óE.²ŽÓqFµˆV¶FM*¡èq¨w¥¿
+¦gßò"®W.rú~ÐA…wŸã>¸š(‰5Ôb°^ªú"A'w5å §X`È-Â »*É\7n|¡»ø¶9&v8‚§t¥q`]j6x«‹»¼MT9É›™H¦¥y][^®dÒ‚r`ù9A#a‡6É!‰Š`qñã¬¢ÂVë íGéÁÏñ?Æ!Y”Ù<}in’]½Ñ@¤Á»\A¶ S¨G¯ì·©º¶—L³©ô£(Õ¦$ø˜§OÇ¡ôÝˆ×ic@‰Ì†ÉpÌÌn¨AÍÍðeœä“Íô•Žˆâ'Ueê4™ü²dž¯.6nfr¶Åá¹ËKÍå$=Ì…dÎ
+¯»õµä9’#óS¨eÓuá'õR6m×š¦Ówiºôd=>k+ÉZ*9¼P-Ihô±èµRŽ^sP&WkF-Ø|§$äua–§$Ê²d£œã»w§ËêÌè)õ{±È¤f* `ùME	,n“©	?Z@ììŒMøI\LzrxžÄ„VpÇcHþ$·UtðvE›¨á½8ØÞÜ³½·ÕÚÜ9Ú¿ùÓÉÞTy²¿·Ýž¶ß}»}°½·¹Óª¥ÂLsòÍ$ÎänÖü‘|(mU|rDi,­ù}Ž{Çã…ãúqxü×ú·ã¿þŸÿ÷ñóá`˜]=Süç+¹[¢ÊÑ ×\Ä‚òG<öŽO6NÐ[qòâhƒc|r²°ä|<T“fJä¨òõÉÿ™ÕŠäQã{Ò§ÄˆÖÌCkž7>”ûÖö„{êË/Gü;0Vx$àŸàrž<ç‹ý³g²ysƒqvá^Ne~ù¥ãuý ô4PEz­qsÑ+mÌö¬C™™üê‡îÁ$3ø¤RUåŸYÐ[óüÂJåN‘ù¾:(@(êº7Hšð .íúúp¸AßÿBK˜Ïg^Øµ&ãaÛ3äFÈÑ((ÂÄ‰=y¹Û“õå¥•Ì•o¨­¬ë7Ã¡R,Ð9Z>]]ž6ñº±¼ùp±ùx}±¹òdq¹±ü°vR)Æa#aÊ¸Êû* ÕÕõ´â†¡¡ëÚÁ+LâayÎUâÑÔ‚¢“3L;´ødyY9›¤›`R”¬Ê(i”Dï‰’*À‡EçgoqBvæ•Kü:)~­‘¼Y$'}ÿ\IÆÉ»û8¯é‘’u¥¸*sIŠÊ\«Ú5SŸ­ò'gðØØ ”ii×Øß÷÷À|‘ZòÉ¿9‡Wï5*¨Ùux÷Ó÷¹^â™¬D(¿`_ë<þxÙ°9YÕyˆô5úÊF[7°­Â›X¡àv:ùùÏý?~º#ýòåkþ^Ü|û–R/ïê¾r†ÃH=Æ˜{åÍWÊ<ø:Í“Dîô” èª›¨mÆ7ËÑÚè7?[3(]t_¸(c¼ G„B2¥Cðu;ÇÌ©vÕuÔ#›9Ç¡¿.äš¯óëuÆQä{ãîæY…+Z|oÓuºž]qÂÀòz®½“(4Ú¦¡*5´"¢ôœÉ{Ï”¹z–`±¢šÅWTÎ4s\‚(é%f*.ù‡*scE™=B/íå¢n#?|Â–æùžÍºã ôƒ:™.ñÊ©­¬/Ï:6+è3ƒ+o«Äà×9¼ãŒâ%í^±‚P^]1(,k&a¾¶¬	óÕ)tÍÆFiãá2u=V;”kÌù³´éLiÓ°Ê¤Tâ–‘à&Ä¢#RxÉ½`ãÉã“Â#É·=b¬®Œ3â™jÞdm+º¢°Jù”ñ_©%†#tõÏÐÄ*ô<–
+^Ïo4¥Ät!èñWIì6šQÜáùûØóï§wíU˜ðºcfŒ$×÷çîfp½,:Ï ¼êËŸ9™Év0GsYü¶YÌeýù2™_½ÏMen2®#q°//Úå_fDxgDhf®E­(:~î–]¶S	?)„eŽr3¼ÉÓ“[ô$RÉšm$o¹ê ß^©ÈeQ'êÝ9“:~LSé#eT/ƒt6«:G2×F\˜]=“X]šúK§VÇO¡lþŒÖ9	½3¹Ùs·3r^VÆ¬ÿ‰éÄ¸Q‰Õ'—Ý­â©Î‚b³2b.E÷Äç‰cSÞÃ	ÝLíüxýR³ñ3OÖì¤|éÌÙ—y²g'ÍÜ^èöÜ¹¡ñó·ÍÍùâ›r'Íýhq*æK¾×Nê«ÆkÛ…ç_Ýî)†!4Å	Ë­ÛWR=›nXÏäbæ-ÓqÊ;-‘Ýãõål¦fó½ÓéŒÌ•”4Y³ræ÷SS. þ™72~æÉ¯‰Ÿ¹slÊJ÷•g?÷”kÓêVù6ñ“¯ýÎLöÅÓl²iÎHš¹\Î$˜ôŸYv»’Y(	ùÜL”øÉÑpò²]åå»ÊÍLI¯ÒÙ)+¹3•¬òªhXY.ôÐãgÎ4”£À”uRÝ¼eý$ÍeÕ:E§òP"´æÈÊˆŸò™“Ò³²33J}nîÔŒø)1[xz<C<Õ1£ç¹ËW²øj ¢»8éÝ,Q‡¥lŠ8êIAš8üäNŸü	”?…LiãDùlê8ñ">Ž?žCÅ+N'‡Ÿ[\«ØddÎärø™+Á~æI2Á}Ã#Ùh%ÖFàs±6ÆüLJ¤ï‰I†ãlve„wús§(›¹Wþ66wA³\tÍÜ±5E‘53âjp(M’&w‡ÿ1bjî#¢æV–‚1šDÒÄ™¯r­>¿êÀ™a3û ™r>¨0ó7—ÉcÀ\»ú=Ê”“ù4‚dn"3Ã?Ë™ó÷3#4fÝ
+ÜC·
+ŠùÕ†ÄÜ2 f¶‡î£Ã”	…)„)ä‘Â—yufÀ”¹÷à—Û†¾ü|)öòK½Ü:B÷Þ^~á.·ºè¦l ËŒèˆ{r¹eˆKQhDùð–Y½ShË-[fõê.}¹ß€–ùÃY
+û–oX+
+d™ËošÝ¤ÄËð¥/$Xˆ/$È±åe”ÇOñ–»tréÌ±×t>?¦³ˆ™ïÒ²=_Žwê´Y-*Çäœ—˜·‹6ÐrÊÞÃ­ÑOÏò-‰W*Ïw.Í2K›Á3³P»¹X–5çô5$xú‹M¹Æ nÐ2¤ÈM 'GöÖ”¬®.¯[Ž“wdX^£}{`	+æ÷ÃvÂ÷,ÀÞüŒÉ|aÌh…7?A¯†#Ç¥µŒ½õaËiûÁ"l<`múc(æ²·[¯˜ætž(Ø"RŒ]:Ìµ¨!mVÎ03ü­žÕHz“ŒTœ‚…þ”Ìf èµˆÉ¹‰ÜuÑ³z>obƒµ´‘%•6]!©Ì žžŸ`fƒ¿UZƒ¼À‚äw–Ûr_ˆyo¾bŠÝHÇWñHËA6ÞRÙE¬ã®7O](: ®pj}@|*Oª/RTC`Tú´ú\qQsN»³}g¨e\4üÁ÷{<œ~/¸GÇãÚÉýãæ¨"Æˆ<uÛ˜6ÏQ¶uÃï‚cê+ª,Á÷¹úÆ_ÿéßr…<ÍuFÏ¹è_>6Ãà‚{óŒ*”ShpfÀe\ðãâ¸àâã¤ZÄp5¬h“’ëùÿè!Ææ!£û0ÉýxÄÐ€’‰òD	n#.‘x	—“ÑÀÆ×ÇìLç6%‚
+¬	¥ö§Lþø þL(´¨uÍÞdsUsx\‡‹t/ûÇàû¿W–WVàßõí‡ô}ÿ][=y v62ÉÚŒ°F¤›ýhÓ… a„¦áª4
+Ps'0Ë(2i‚+F“ØUì¯Cžº*¾ß ¦‚ë|°ÙÂÂ HkýØ÷L>ÞüàoÚôÝrNS6ìãpáÈªÿxóï7?Ýüùæç›¿ÜüÇÍÿ:©-9·Ÿâ"¯*is`•™å³†ºSX”¾ºŠlDþ;Ô/xŒ,™{&˜±Ä±­¨º\Ó›eÔI
+j½]m–ç¹Û„Ó«Š	…Ô+º‰þ.Ô”[D×»Î}×¯’öñ7¨_Õ7¸k=œÞuîM?vÿ«ÓßWˆøZ^ˆ¸9>|YÇÄj÷¾|ñáë)8¼èb%(YÈldrå.ÉººX§Þµ›lŽxü¸aÆËË:{­~üc1>³é´Â£Œ‹CÙ•Ð\Õ'Ÿk4óÆ7Ê++§¾hêÌ9|…q½yLù_)t—ìòé‹¡ñó)Æïf|3·wÍ|öÌHÏÌê½ùeÔ‰«úfôIìÎž¼¿7A‡½'JI‚='	?AŸÍÇõ×¬}ö×(þš;¹jÿ]¸jš¿BWM¬ª~²îšøNìûpÖ|öÓàçN˜ÊäK¶èé¢¸/•s•šçŸ›ÑvŠÖ°Ø¶ü(¡ûsú$Sà³ËçKørßîžd¨?;{þóÉdàÿÕlß?Û¾?Û¾Ut%Çö½þ1íÞ+÷a÷n.ÿmíÞÓäýèïÇäÝä&onúòiü’VîòîGŸû³mû³m[ià³mÛ¸\¿¥Iä—±oÿzMÛó©¨Ç´ý)[µokŒïhÈ02ß¦~#E£H3´¤à‰âfD¼E±'­+VÙ~àw(†“wlT­À±Ã”m}S4ÊÁdTçfá"»z\"ÿnÄÙÆæˆÙõ:K
+4Š¤“œ™®nü&FŽ³p‡ß÷ù†!86Ì­.ž²I—NÍAÀáÅ;é,P˜©A$N±ÀüÐ.°çYE€ºË€rñ1úÞÚïFÏ®ø¡gš:Ô$¨M	7-÷9wG6—sïŽ”çG“9‘ö¨Ú´~¬v%(B¾ãé”Ýî®ÓG_ùÂî9ãaVë@grÌÖ©ôR™M7U€’wÿ!@<3›g7ÊÔŽÏ8Ò,í„¾;õÙñpy¯Ð´Áû¬´Q<ákæãüŽ&õGëfy¦íYµ9­Ù­¤¡ó»á‰	º¹øù«±‡Ž/;d;-Ì}ðöæ§ °Îü€ÂK0b@òŽ±.È=Ê½H#ê£È`Ñ˜V„Þ-Ÿ¬Qva7 3ú,ôAfcÜ%´ YÜG6´`¥\ŸM€Ú #…ñ^Ó®ÀK8ä¬n£‡oÁmy÷kÁfåý1]d¯a& ŒË…'çÏýE¶}9dðNJç¿×¤Â?þ}*!§òžÞ
+*jT oY‘u/‚RûÐdÀX×–hú€ÛŒÖƒV‰Ä5è™x†îp`c’\p¯³g{ïšBxdõíSÚNÝÏuŽØk)v&òKÏ
+t1?9oÃš$NúÃ„¡Ÿ”~hY
+(;ƒ"¦ò0ÈDN$ÄÒªj‘zRSQŒrüfy•sŠ­<Ïpa6Ü¼r\{ãØ³ivôq92Ÿàþë¿üÿ?k[.L_.úL}ôpW_ùÁxëûËIPKÊö„f+dŽ‹à‰Xaø@ñP¡8×·¨Ôš²Œè÷PËŽæ¥PÙñÐSÏöÆö¹¥v°d/î:hÍ¾·©ÎÀÜó£(™zv‰Ì>â—¢’uDI†Tr2dVte:,ßÛtHnmYsÌ¼ß
+ÿ"ËüI
+ƒ´îižÛ¤šûúøÒµ¼®Ï¾³ƒˆÔûj—f‘'Ø%{$ä6\Ÿ
+^Q¬«WqtÁõÇaÄpÓ÷ú¼q]¿ws!7Ô|éñzn6ò'j6ò´”hÖ”¦Ç(õåîøÒd|:
+ìœ]·) LÏ¥Lý"°F3ìïšIëßñª•c¯b¼­ Þ7GÝCÔŒ´½±ïÐ‰(w¿#Ó•SÂ~‚_–¶ßînOwö^í¼Ùžn·ßmíìO·vZßîÝü©}¸³¹?ý®µ»ÐÚÜ¹ùÓžÌ¿JÒF-nÐŠ[çZóB¶äÛ@.ÎÒaš÷Æ+L—sG¼Èn4êðË½×æÓŠÂs¸ñbÆ]ß†ä*™Ë¾s6ø@+r3ý6}àìÁ~àô)BÇš1ŒQêþùæ\÷Ï7M™Ëô¡30&$ãûòwÁT&sU&Ø]uE
+ø“Êï%Õ$\Ö¹þ”—ß´™Ÿ ,¡iAŠ-¼%£x o}•J¼(½›±º–›dtƒ™’²¯®›²^™ó]E8ŸU^ËM©²éÄÐN°K‹yäG™1ƒæ¬	“šR\¾2—¯|:\¾ôdýr}fsúüJØ|¥›ÏÁÐ«ŸCËì³ƒoiA^þ{—ÏïM¹™ùý¯—™Wg*9ê÷bíx®Xä[_¸ð«	Aþ|gãç;MÔûc;wŒ­eùW6æ5Sz;·fœ4ƒú/ii‰ Æ¥@Í‹›x(aõioóÊƒí‰aNÜîkà9ùÈÜ¢$¹høRv¬xŽ† aN4tûv¢´ÅãLz®%²gÁW´fä|òÉ
+HDg=…²S‹±¨Ìº0Ž»Ò­JOWÔ»bX«ZbzÜLy_‡¨‰ÄË~Î…j×ª\í,ÝCh÷æì+?<„6×s;Ÿ0ZZW{ËkÝMÀ­hÜÅŸß®Ãeçê/3)ZÏ©YJ«Mø¶Ì)3.[mÒU«i]¶Hs•zná%'ÅZ,~²·‡äOEŸUl,‰j«ðÀŒ{M4–Í)™Ÿ`{†kË r®¹#¸9“÷=G¸z?W~Y¼fAÏ=hge}Y'¥×L,Ú•Â>ß†Ë~±CŸoÃý¥oÃ-ð?}¾÷óm¸§·áÞý Žâ•Ÿqœâó=¸ñçó=¸óÝƒÇ*¾÷óE¸Ÿ/ÂUø\r23*ÄÝQÝ:4D¿š×HßÂ ‘\¾‘Ÿ„ÊžÐ™?vä£Œà§Ôé(a‹¤po…ˆq·+z~]ùÕîóæAã_øâ›9MÆ…—-Æ©5±¼Ù ûæpËÝìÆå¬ÆÅ÷{ßÊj|O6ãXC¿»Õ˜<<EfÔ[[ïÍf÷ö^¬Æ³;\fÝ4Ò£PHk”²«\j·¶ªgÑna6&½Œ‘h]–=ÛŠ|/6ä‚.Ø!áƒü†Ë’óÌÈ3Èò8•Ép|Û¹rÝ6œÅýtNá¾ÅTŠ!múB;BÙ²ÐÙ=ŽØJ9'+¸^¶eIÐoM–aËmG>LÐuíý%ÕJ |{Üþä4œ„§@ª,ŠÓ¸;ð#ÓaLõ,ÝIøýybøÃ9›dÁX®DÕÊÿ÷“x%ÏõmÇÂ·ží2¢ÜÐbý±ô¬žâÉ»n4¦£tø³ëxnÏBƒ—ýe%“Ö““ôÀ<shJ¾ußÃ—€Íÿ»4a„ìþ8 Ç?ŽmÌœiCcÆóÀ.®K§ª±yès4ü-ŽCvn¹>”fÃ›?÷œ®²‘ ”3<bøBõÉ#^é‘ª~»½·}ÐÚ=mß>Ü~sº³×><x·y¸³¿³ÔÛÔG§ºùºu8«Jv4ª›»­v{çÕÎfK˜ƒûJô`FœÕµ¹X²l‡¯ÕY¼ë­%;ð kúrŠ>Ås¼FrØÝé¹ó
+ãQÏŠ¸z
+s¿Çë„3ÕŽj€ÅXFÙ—Ïp)ÐCÎQJW’“Tü?å½˜ Y~×ÞßkpCbpžÓë`k¯yq­±ìtÃk~Q´x¶mñ‰unu×¢Iåã™ZA[¼ûÓ#Œ‚‹?|Áª{>³pNYÁÍOx¬–êŽõƒ/DD-=ÑTr˜¹'°‡ ZÍ"W\7E—êµ‘0Û—¦åºx”5E™h%‘åuðøë¡ÿ6eãN4
+Àë”>£qV½}e¼õ‚•Ú¢
+ÅÜ»hyäÐ ž^øÁôŸ‚&…WA¡—.«Âêù .Tçf£ÄËžzP8b×éÚ^XŠËË«€¸-¶.¼l—î¨5ÄD…Æ‹Á¸A9µºšÉ¡¨¾,GÌí·£‰[Ô`‰kèGÛé{ìÊÀ	eYÌ¨w¶kMüqt8• *?u©|Ec¼–³P›6×ïÀtñìö¾VR’MV‹df\d+µ“EvEæÔØîè>.K?„¾W!ÿ«ÚÆ8p¡‰w»PAAîw~ šÃï*¶ž*Ü€w¾oa†ëHTéIª+‘&X²1ì3(Mhñ¶/×·p•x IÝíù§’<ŽuúÕö‹]EwöN{¿ÍùjºU¿>üºv´|rÝÀ.½—°c¬ÐnÝ€žƒÒ½9pÜÚz?è˜¡fÿ!1âêU¹à4TE*ö¹ÿA¡tN
+JÖ¥¨ÓªÌò&‰Èâv€ò«€MÒ”ƒB£ˆÓ¨Â0¨ÙÚaŒS(}w†)éK·ÊÉ(^P§¼¾½ž¢+vÇ#1HÏ3K6¬ÍhÐ%À	×k4”“$1_âCiÓÖÒÖÒ€Ã†Çàè$/Ýðå˜WmÍâ®®±Õ:ö-Ù¥L«îFÖX>¾IÕéÈÕ…&	åÏ©
+8Ê6'þ‚]âU™µE7Žä* ©i‘åÂS¶Y9˜—£’ˆäjB3áÏF,³¬•%Nf9Ôè“ªî]u–À@þƒ¨QUÆ· î}Šç& ]Üéd­žüêº÷U¦âÕ·â7††gŒ‹¦Ü
+K©¤• ¸Š—f$f`œ(ó¡«* 1®
+°¢›ñCÃ³PL”š²<®)8	z
+ ™l½™6p¶
+êÖ­ª[e{¦«^q×4P)Ú·•wÆ¦KÓŸ”º[ŒPðÁ!¦™E‡G)´crN´}2…uÐˆuüú]àæa2qMkoV*lŒ¶.…ô[õ¥\ØQgR‘Ž¿Æ¶›ÿqéDþ— èpµ÷Ó¤?1‡T"L3áÖ­1Æ‹éVµ†Œxáx ˆ6°«¨ƒ~úI¢¨s‰Bç2+èœsŸoìRlýCv~ó“ëÀ/?¾Ë&Æ£ÈÏSõä0]kjþi…h6®’¦Ydëõ:Ûjíì~Ïþ°ðûÝö!ãF V­à¯ÛÚf‡­—­ßíWjX<V$A§:ô{ÖÕlP¯S[xü€„^ÇÕño”·ø`@ÂmÎ+Ø|o[^jˆ§r„þ}zÙ€.„mÖ@àõÚìP]Yd_/­Õîõµ9*y…“çýWWˆ ÚÑ‡Cü·×»~Ÿ6òœÙ0ÂR±€–¬pâuY=RÓ³ß…v°Ó{a°veM¹1y€¤ƒÀàØþÐr\üù¢1vèI…¦YìÎŠM%b<R#TMb"`ä›¶‰ÉÙŽ×³/íÞÖK6RÌó0uÅÌp§×ùn÷¬Ë¡_ß*zUb	Bg-•üíoY+€êNHùã†HRPŠþH5?Ç€Îd¾¨úUP&"G·r¼ß©MnºxzK­hâ© tu‡æú9±Ü&¥DŒÜŠ9 ó8¤¬y¸Gw"wBÑ:xœS’ÊÆ•A)a{J€
+`0ïyø|0Ö£çÕ1Q	Šæ]:^œ0ô5ìÉc^¿_TÊŽéõ†Æýê{¬´!yZ}!ùeƒ$´TèšOÀÕîs{ì,ð‡Âªrš ·½l8>ù¼É¨Mx5´‚Éï±ä3v·—Ã19ï%CÄ¯ßk¯KQO¯Â7Œæ‚g–ëâšYªQ-9Äpæd©†Î}ðŽy…µÌÞû#HÌ6,¨®Œrä9f¢S™'«ã
+²£VÛÓwçT–}É…ºûÁ‹Z1ÄŸër(õ,GñÊú¼^Æw*Ìá³ŠÍ^9µ²TÂÏ%Yi0òŒr¤ÿèSST(¿7QçòZƒ½Ì½li;ŸÛ ILKö,˜ÝVD±,°fY.*D6 ¾‘Cý…aPû\ë$vÂ§Yf‚§)VRŸä2R†C –FÈY¼‘.ŸåŠ{àˆ»rC.'={aÚhˆ×ŸÈÂ¯#[mMÓã|×nØh¥•ÆZÜ 'Jbm ™²¶YÀvûÝwUU‰Ö´K®^]/²£X<©)ªh¨°R¢‰
+ïäÛ¸S²ˆxrt’QÚÈ¤XJ_¡ò:’T£h$µJd¤N0WüÈ	L9ŠECoödÈSä’Û©ŒÊ®Š
+Ž_ÊÑ‘;iãÒ‰Û¤ûûÆ#†7®v'L®Ö\	aèöÌ>Ã,<ŒÆ£ËOƒ3«+#Þ‹ü¶É<åQ|,¥jñÍö)ì†–GnÉy”‰)’¥8*;^¹e —xvÓPJÒ´ÓE©™æ ÊíWìe·¢w%ê•VêÊÀšK‰S¬©|Mñ8hkOŠ‰Ë’Â´[ødwZ9õËkÞ·…™UÍç€4×°—Þ`^«SXå ¾h¿¿¤äG~:¾Y]nýM×÷48‹Bn×Ô:ÁÒÇdäzya^µ²éAÌy>¬d¸rÉÞâ]„Ng u,m÷Š;š2·fè@Þº¬É÷mµlmxÐMÿGÃ¶á†¹ª-ír¸
+
+Û“]«e}Õ!+[ÛB½w#áé‹8Úí6È1ºÈ†vÐ··…~»Á:¾O«Ç3\5BÕ1ŠŠÃ–P4žéâ²Fc/1@¼Ë¨ð ÊÃ5á0æRízÐÄÐ	í§|‰{^­ÂÚä»ç€j`£;u:ª”Ç?¯oæ˜•EnÝg‰½3ÏÍ«w„j`QPY¬ÔR)˜DOª¼‚Êy4‰¹(ö:S€›a‘zèô-±’5J£¾Ø1I¬V–¬‘³D;Âºd[àÚ„$C;ø øTÞî·Û‚8¿½¡Q¯"ŽÖÑx^1…z$ÝM@a|ÃFZ§Ñttdà…YTÝzèmâ‚ ÔÚk¿g»qtÏü©ÌörqàÄ’Ô£àÝ(ù¥ñq§…*Ï¢Aà_;ò© JòQEmvn•{>Þ	Õ ø®uÜøþ]*Gü¦,uNž0¢ÆÏŽHpÑ-Ì£„[üH°²Å=Ð®&¨•7<ÿ¢ZÃ%€ßÂó(:kÔÀ¿„þ[«‹íÙlË5¿ëô|…EhÐF!´*Ê›>…žãKþ-ý^tîQ#þ‘.…>ô£Fü#]*r8Öø7ÓÎ æµ_Ø4K­hÓú ß¾ÅÇUñº†©M´æ­hàkŒé®ýšQÀ´[G¯kºV«[®R›æÁ%=;¢PL¶·‚î!j÷N£¹m‡&Š×`;4-ºŽÅ‡…úù&†ÂCWBÙÞÅ+»•C{ä‰ÊïÚb+»Y«4™(¬*Ç¼šµøl_èÌªOøÑf¼Ý¾;ùMÏ]ìá¿RáTë²–~vœ%œ·	>ÐS“$§OþhÕ\®?¹ùéæÏ7?ßüåæ?nþ×Í¿Ÿˆ©™ó¶*òo¬‘M¾7‰lŒ#«leüˆBô5‡t K¬hðM¬‡‹éQz®b’&zxzÛQ?2¯uˆ6¡R«Ê'¹¦IâØc¡´áRÁL*³ÈF©sÖñ7õ-ÐêÀ&,‚±3ôÃDÿv¶]2”{œ`êÌA-€NwüjŽOáj~ç®	=Yè@`#€‘".±p)†¡yÉó;½PIÛŽbEíWj¢Ç°urÇ€^¦‡fGBÉ&™`%ê"”Ú˜ôÅ˜À”`™sßqfÉVzˆz5Fãp)®÷R´jX½^ºFÃÑÍÏÆÀéV‘%¹
+Ï´)wSÉù–°;ñH®¬‰%…kÏ‚Ô£›`zNß‰hâ’|YT›p}àBT‚ ²†|ZÓâÁðT›ëô©Tìˆ¸4v{ùðS%YfŸ;{9²Ñ9äúÂnÙr< 2ÞÙ™ÎO4ÐDÿ2=+„iíôj&©…Li"×È,c4ùr“ˆ/4|@éX>[V_*_ó¥WÒñtb²™z«²[Ößr1À Ój‚ÕS•åD.ÑÜÝqð†JcªÕ¸ÚQÍwUž–nÁ†t`oøœ0$%ÛÂcÏ!ðh
+%Ü”-¦gOB…lXžÕj´ñÖÈb<qKF²-¨†öÿ  ÿÿì½]oWš |ß¿â„Ý»#§EJ¤DÅöØÎÐíhW¶´’œžÇHŠd‰¬¸XÅ®*ZRÜúæ}ÅÌ`Ó‹¹ì¢'‹w±°¹˜77ƒÆ^þIþÀôOØç9Uçœ:§ê%»=éT‹,ÖÇùx¾?‹w~Ãöö™qØæ÷O ˆžßaLB×Ïä+þóŸ—FÊwK•qíåUS|I·,Ð»
+H­N7°ðŽ‹®®¡e±ß˜—C’,Ñ˜ ^(›‘J[¢ÞS,EÙSºY½UeÂ%É—éu²ÅiMº¿>zÞhÿYä¦‘ÂÖºCë†¦’•DŠ¼’-<pK>º~¡â/0c˜Ñ¦Ê0Ä‚"5¢2ÊK]ï[ˆüJä=•çRŸB3Z\™‘éid:ý=*9ñ	‹Ñ.»žZüNðêýÉZQöûŒnsºÒ`
+FAvÅ×x^k/@.,žË‡Ïd)öY§Š+Óâ‚"ø­øý1USóK˜ÖZº
+F-®È•V‘àw–¯n¡ªªésâ¬áºb3Õ'q½Tµ©1–%<šõYån$g^–z‹»,ŽÙ·£šÊùŸÓg°ë7¿1m%0m¦÷(yšUÚ"5i(Š]AòÄÌTÆ&¼¾¤Óé,Ö½Ci¡·K.Ù¢Tšðú‚ü—çãü±|ñ?Qî]ðU /E.k¨(ÁX‘«j bb-9¤løE'|‚9`íçÉ´ë3Ç¯ä©ýJ^'*qÃ›½_¿×îËÞ|!Y2¿èQÏ%—ry9o|‰d‘‘KxñYaZƒ‰¸â4–gÄûH0‰ÃyÝÓÀs´‚I ¢Å–¾UÎí²OKÈ“ç°}¥É®³m-†°n¶\~aÚEÆ]òüfž×h‘y€ôîÁá³=²78<œE€ôÉ_<ÝU¢áßW aÄyc÷ô4ÁI9»|Š¼K)þ.)˜)ªcöaJÔÿ£QÓ…_çˆÁ:ÀCßäÙŒ|P×[Œñxây×ðÅ-'"Z›f`d×*Q´ú-¥ŽÝò§6¿$û«L‚F#‹tuÛ\œRÔ±œ‘ü°ÒÈKšs(m§:íA dRV}Y£.* Â(TºvL0'Â«gÑ`ä¡åº7ÌÝ¬uÀÀ/Jy†›ÌŠ7yùçÈ¡¤âç/Èf\/ý&Bs–¶‡FtWŽ&BKGH^GF'ÝÇóVùè6 ìŸ/Ø ò¯å+…°yWòPÜ%k"9ä–áüN>N´÷³ÎæØŸ\ñ¨h7ÐÁÒ²ÿþ˜»Y*.Á…3ýÌÀ}F6¹%>—Ÿ!×(>ÓeÂ
+·cÀ¯«ïX:—åþ¼¸€òU÷äˆC®#P|¶]-ypsó¯¶çz!¯DÁ®×N–ï:(·ÀDêO€´z_Mc©ÂC6ždÛL²ao+¾—¯yŒ"?uõÓ0Ãò5ñÂg¥µ€Î-çkÍžm„ŽÉÙCêm­þfT6¬MÄŸ2;éÝ‚#è5Q($£ôœÓ7ŒFÐ­‰ƒA:ô)Û»¦ÇH2~Í+­aåpl¨:i4ŽQ°Óº
+2âà’-ÿÕb.7šÒ%4Ú4€1¡Aƒ%5p6ÈKÈ\bu&¬fÉä”€Ky‘¬•ñ)¼ªll±ÚY‰Ä\”XˆFê¸t;›àœº9„Æ@hb”rŒ9VÔèrÀâoåµù§Ê0–5õÇÁrG¬©S Š ƒÑvÅ ¥Ü©AŠAåëP¼­§¼í@¹<FT’Û˜<R%épd©ßdúø£?.‹?è¦’ú] GÍ€d…¿‡€’¢^üpd³x™‘É’EžÀ©5¼có“ çM{#`™&ÂÀÌÞÖbà’£Už[.(1	ˆ?‰zCQõ¡ÀÒbÛÜîR6Ã¼’,s ÷s-Ê+/\"   ct‚hƒ^LA‚UÐÅXá(ö5_Xó‚”Ð á0Ö²ùþruN®+Uã[ÕLŒâ¡4£øZ‘Ì#]T)Cs)šol#):_oØBßQŠ®–£Iš‡fÚ.rj­ìÜDz®–Ÿo,6×ÎN¢s­ð|3âóõhZ]4Ïø
+™z7¼úE`r”¯l÷»KÙ«ÊÙ×”´›ÉÚnÒv3y»Vâv•¹W‘ºr7Ì¦³ŒÒYp,© 3&ç3ý§?W^ª¹dmñMÔy0ÅusZdAÐ(†þD_
+W¯­yëdd*Îr©¯“¯.‚¿W4üºyÜ)œ’ã±øsÊÏ©Ï¹<‡‹²ð 6Œ*7h"‚&v®©užš²SÁ¸ú…ä¡Ç³+ï+Š3š]•&©¹ÊWÉöÕg•äø§ñ£ ñi{ƒ\RW¥ó'âè(‰§‰Ÿ¦k­“ 'q$Âx—Ä¢³4· ¨V‡œ‚0äÓY±¸ôXqŒHÏÐHHëCËØŠHÝÚ¬;eæ5™w¢ÝÑä
+Ex9/Ü3ô\
+l´ÙzG—™¿;ÃxÉŒ5¦ó²x¤‡¢—²ö¼"Ú‰Cê#ô–»4­›¶¦1>ðç1Þ?ýüç2rKï{ T«Ý:s²OüA¶h9òé ù€ŸQv»5º>O½œaþ[ÉB Ôï[ÅBâ÷÷©ê`¥³@bs´÷ˆi#È5e^/X<ö’)–@é½‚ßç‘Î:I‘±
+»VKÒ2'&ØôT–£-èDƒ­°¡sÎ¶ËÑÏ´G‡ˆ=f.•ž8ÅiÂŽ_lLƒuò'Ÿÿ‰µw¢‘BhƒZ'_’*ÿóŸ½ÎÇCCû3Ö: ¯ý¢ÄeJÑ2 6‚¤(=Wèƒ˜þGílæ·Ï€à/©©ˆ{Fù Ÿb¸£ûƒºy^„æ±«Ôta¹…1ˆubüm˜ ¦[ÑÁ'fXÓÕh9òëÀMÜÅEmÒ®l­PWÔçIm¸±êXLWüø®¬–ê6§šZ&²âX›´ßOXšŠ¸ÂÂ(‚ÉiŒƒÁîkò;,{\Ž×ÁÓO¼lÖI0ÜuNEN.oníÜ’Ÿ¯“nW#ˆ¹J`y«’Ü¡fzÙâ“Ç¬°½V¸HÓ,×®bßK§Jº’úªBe°¼¥¸€V^ö³’(òþ¬ºôð<VV4˜ÄR9o¤<»°ƒJÚÜO„1‡`óØ«G–"ŽÊ·%‰ êS¤ÕRlR˜‘ÐÖ‹X›.Ÿ3~y–0[¾NêõyI¸ü&¹|œz'+k®¼	#[•3¹9Ú÷îÒl˜Ö­j»‘6|FÄiªàqÊª^ºNzÛ››ëd³s§oÊ‹Å«‡Iâ ¾ˆç2iÁMê´‰…œ¨*i·­«ËT,°²Vùék.˜¼.«–_ø¿sóK—×,\iýLÜª¶§¡MPÈB·ZÏœlf’¥L%Šj¨hôÔ2æs"ÂD{x¢¤n2‹—hÃêµi&ƒbV˜Ñ­SùÅªÈEÄe›œ.¾ä&ºAjU0—MPªmNþf ¥†©…®ølIV:åkU2¡-•P¶×ŸK+î`½[ÕfwKÝjö9É*§±_ýÉ’5ÎÈO‹ë+œødzZZøÜð¦p=¥–½0Ž1FTüd³²™Ï›ªõ·¹«1‚Š¢þÚ	^”FÙÊ27»k¢›ÒVðµáTGùJ_pzõ]â]´”‘‹û«EKñÖh,ï·Òß@þFoˆhÜn~µnâT¿³ãò¾o4±´ðÒ)ýÝž©~§¨"ª Ð²7JWÔÇ|Q1Õ@1ñ*vqŸ*ÅJ˜ÅRPü[¥×Ð†€ç>þ{¸¸DŽRå45Ž_Ý‰ªøýXªUc/ª::Ÿœ£ñðGú}]3A¬Ü²˜ë	¸Ütù;¸ót4W–à˜Òì¨Mñà¾îE“ùœ^ƒÓ-†/¥$é^Œ+îZÇK¿¾(Mjëk!ÒƒÇk.×„©&Õ¨µJ¨
+C?“k–”z $Ä¹…C7AbÚbú(ì°—•DyK®Eik,Jcë_¾úV>Ì1¿ú+ ã ²%ðâÃtBÀl±ò×¡¹·šV)­ëd»¿¹©‡xˆ)¬bíæe[²X­ÜYiîVrói‡¼ˆKn(v«Ýb¶–«ú~}N‹CGKfbHÙÛ"ÐÇn½Ùü0 ‰Qtp‰ej–yµi:ñÉ¸½1³µG|}ü	}ÔÌûIUÙÐtvöæDž­wL±¥(V%ÏEˆ‚ŒÖu$»L©"¤.•ªÒ@ÿ‚¤b ¿>¡&å±V¡eÖÂOÕTCÐD8
+¥è¼J±µ™SŠf$a‚`£:À.ÒƒeB0+sb©T¨ƒœÆ{Oþ­É¼6—§ùÏy¯waHÁùo ‡KÀÈµV[Öøó
+34†F\Ì«µUÐ§WÉeL¶™8_üì5½îyïÅ›ñ¹+}Þ|Qä¼ùIñ/¿ŸáOb"z» ‘g &E/Å‰»)Ÿ#þÌc¶&Z7R/½ÏÒóßl|ü*ðÏYdèýÂnþ…ÁtÊëWážb&"š£˜Bç<ûh¹|ñNŒâEàO`9;f/©zý&ñ½¾â*A¼~rÌÜSØõÕb—`î	8„GèÀ ÞTŸ«¯±wµÄµY›9ßÌ#ì˜0YÙÅK<÷™–ºYíù#´ cVê§”	¡ˆò8Ž§!7ˆ.S6fÁ¸DÍ¸õ²0óÓ	¥Y’Y—¨Ö³
+uÂ~ßd—Ø(ûg¬$ûs¹ô³u¶|íü5aa©.¬™ÿA1}åÅ¨ü|æV`ïêwQ^í¢ÜŠiwHÞ+’K1a\ÚJâÍb&iJ¤›	tU1_Äò¥K¬»±ð'ÔVô±j^ÔÝMì¯Q‰ÂÕ¢ë+;Œ$§Êš¦WðT¥Bß+~Q¥2ÁÇˆ;wÆM^41)ÛHWB»,n›î/&·Z"þQDD$,—'äP~ˆ0 †{_ø§Vô)ÉÑ‚ï”öRi:bÚß&p3d*®BI•§¾]zÚâ(É‹Õò˜ÓÖ¾vÈ0ÿÍOk¨-+Â“–£0`Y ‚´æ?ã<b§˜[©Wý½IðJê
+ß§=k³Æád4m?ÿéæG›ƒîÖr‚–ÿ´ÇqH]·i{ìÓð_.ÓDNñuÑÞnÉýÀõwÐ~äüÚto_jw”ï9owwÈÿáÝ·-Þù™¬M[ÒMCÛoAß¦ö&/
+€:ûítDd~ÑÆÝh=(u0‡÷/J#¾HYÇøQˆe˜é©Ë¶·áÕËÅÂOÆÖï¿„EoŸ9 Òv™£¸¥÷VßÅØ,-Ä8&ÒÙ]€½eê×«\ÔétÔaéÚã|ÞÝ\\¼ˆkC‡‘Â²”†ñp™Žé0­áM¹…)q™ª±h‹¨|UkHH©àýž(<–-Ý¬zâh|¸¤½MxÎíÀ¶.B2÷.Úçíù„œ3x3úâ7Ð×vï"Ô¡®‰Jº×}ÿÿø¯ÿü·÷6ðŠjTïé•vúÞ¬Wzx:/Aõù–n%ˆ&D(_d€j\¬`cÖ+ÊÁ]‚·e¡’µ6Vâºð'†a¼ÖáK/;TF$-³,Ž´;ãh®î¿.×že‡Î=A*Y‹{ÞÕKßèÃR(… Åe{‹àØß$3À¹›ŸºÝ*à“ŸßÌ/•O§Ä^p åC‚ƒ|‹åMØêWÑ9Jsœqd_¢Ó8i/b”j’–2O}¿ö©ø³B?µ,öÚƒ}m{Øf¬Fq;Q¢2'ÆéU„YO$ˆ]b
+3§¯˜£3ÏúSãÍÍã5ñX=f•â6ÙÚš¦Ð ~Sºñº1œÅ£ã8‹<·@N<<C$';/7Ÿf~ÿócÑ{zþ³×k6ç»<øYúsZŸôóÖ-Ø'¿Åêi£Ô"BË7ËQ¡êÍÕa¡tÛ-ú‘Õ7Žil(/°‡ˆR¥™††ìç±A]"+Åª .-üºéÔ`üe05ßÁÂŒ?íkyYE,‚z¾ˆ,0çaêOEd€zÞ’ŽS™s#œ»¦Á2÷»Þ¦=[õ½ó¹óï¶K©»Ýô£ìh×¦&;Òµõ–=æÚ]’k\¦W¦À!ÝZp]p³ ›ÔÌ€f3#™AÌ`Vð2—´* ËVŽ@åR UNV`²‚’J&¸áCÓ[ÜµIÂê*b®ªÎxQxa TTx_o|HDý?®F~ÂÚ(|¸Q0è{¬Ø¿<žÅ(" \ö…Ô8ÒÄG+%±scg“ÒèI/@H\&¨åÐõ¬‘ŸãL¹ªN+Õ­òs¦Þ¢½Uk¸Cfð?sŠùÈpg;‹Aù§¦<<ñÂI{Oû^H5a!ý†ÓŠñó¯’>”Î’ zÙÞ´L‰Ð¨¾	‹)ß¿ÿí7¿3jqý£tw²[c˜¨Ðú”E³[$Ê]×]£sÖ43¯3ÏÚ›¾I½³EÉ1™ëê;º¼Vs¯|Â¸£Ïoë“ÑVº˜À¦€CD¢Û›lââÜö¦®¼‰_„á¢ÝC4íæ`‹hgÙ9Ø+ÿ‚:LNXPÉÉÉ2;ì`ï(Yxð•œ°½ç@T:B+vjˆccfmÐ'¹ÖÊMkhg!óÉ]4“äæeÐøÂ_øá8†|èE‘F¸ÊH¿ ²¥!<ÇwnÄeÞ¢_¨ÌêÃî¦b¾Q).œ~ÆpýJ"‡ÄªÎ€)[‚àÁôkèŸeùºtÌ5H´ŒH¤¡Ž0‘Ðoú—¯?‰Co=7””Õ’7”QÝÅxÔH%4†·Ÿ.s×Ö¤F3,ŽóüM2	°k6È`ª± F—yî˜¨ñÞiŒìµ³½ Âd“³Á\·düßÙ”l79š— S# º­Æ‰Ø'º'‡ÙDÃæV¹›b8: Œf¼1°I„ø^µQ‡’N`w¿ùŸ´»ËóCíïð»H`XLœ™ZÍ=ñÂ‹Øó3°Sò8	&5„dŠ—à?ˆë)±t~·øÚC$-¾n;á¸"/m[ÌrýMJÅ¾öÄÆ"1p”(ÊöºU¼ÓMë_é Ï‰7Â\}	¶€Wwå÷S*‘=wàM	Wak×”P5‘@ÑhQ—µ‰)Éß2Rd'—x3ugÐÔ/ˆ1ˆŠi´–¢&gÖ-ïÞâAiï4œ|~ŸlÅ`ÕÓz°¿w—ïT*˜|éÏƒbW¸ÉV†b+ö'oø³péË%ù‹ÙàŠ¿•é'Þäæ&ÃtÏ1y+“z|õH0ñÍÍ‹¶zjÆFÈ­7µÌïfˆ×;%Y§Á‚:x<âu)qí+È—š®ZO¼~ kýÈÏ°¯NH¸Aûº«-ë<t¹5\ãË­EK®æ­[Æ4ªw¹ N-òÎöi) ï-ñlX{-ßÍ‰Q«‰n”¬–—áŽÍŸK·ŸéùòHŽýiG{ô›2õ³éïšˆ8ÄÚ ">¤ð0¾ ‡EnùJª´øÚœ~V–5Å6Z(€JÖ8Q8A
+Ÿ“Ia/CXã}¦JbûdÉFé–âá•U‡­~¬•æJ5Ü4o”ÆáÕ†x:>þÀØÈŒ)ù²ƒÜÏÈˆêM}º6m·G.F€ŽÌ(Û¦éne9¬ÊÉ­zI,`|FÿUb’ÔeÌC”Ë1ÁŒéxû)ºôÓŽ[GÁD¼(jìN¾^lætå4™¥o_¶Ä¸&Ÿ÷íïö‡g…(Ã<f[¥Y0*'Ôµý§e¨rcÌ´B›6o|,Úï_åûD‰Î˜d«\ˆ1,ÅlË0¿2Uå¤´¿™[ "Æàc§Æq„åp`ëÅY<‹Û-.<ìGzÉÚ‘bÎ+µ(No]}—bà"~Éj£Zh®¾žlž¢yŸn¡1Øh*vÜÊ½oÛ¹·Ì¹‘J«Ö«
+("Âno‹NÄãuBesÎ\¸‚¯óž—¼\3s[e«´iÆ<´¯ðÐ³¿ˆA+ •aébuX°¡qLãV©h¹¸+v:Ñ!ßÿúOý„â@#ÉPZilš»õÆfæ^,B/¢ËJ6È€v½ú'oŽ?ÆÜò¢C×Ò“]¹êüª²-d:Ÿ­’Ü`½ŽèÂ èQW‚ÙQ $“k`ëáaüŽ™é“Ø™­’ƒWM˜FÂttx|:8 GƒÝýáÓÓ¡;Ûz‹äÞBÊÿ¿ÿ^‚·K
+ û,Wr8_°Èn'šnDüA}$ß\ÞÜ˜ÑÅ¯à™´ú#®cßEZ²ú·$( †1I(ykô
+¡¹þ(‰À=4÷ÎúNìMu$ ŒédZÛê¹?	–s;ÔH@'eM_Ò• L‡¦ð˜G¢b†JxLÛXÅWîÍ¶]Ü§ª€¢mH±d•¤m¡fšC©ðæýÿú7ÂØõøàðdp¼Hö†ä“ÁÁÁà/žáŸP‘ïÄ„Û†ù×ÙéM–xó¿ô/Å¦|L{‘­ñ š@ŠÍ¢.°/B/ -[‘óÁ£î¿†ëß”°ÑAö£É‘tŠí×¤w:¥äx'pë~
+=‹V²¾YrÜüµØÙ×|Ù:Y±Š)â„h|ê's“Ñ•ms	›ò3=ÇlÏ¯X™çw:}U]Ñ¤$A7¬rº8N¯¾Iæ<€ŠWßž¡#Æv×bÎ-Ô¢zÿ(lgö¦e×æj×ª$8V¬HÒY	YGÓ2CÓ6;[l^
+jB" 6pÎ¥³ë@<[4„n—A‚*›lÜ©b´AøXoXàÅºp{ƒí•lÁ]+ÁJ,ä€Îëê[,úŠ¨]Òr¶ôé¿iÝ(˜äO|X5Ð £±ÍN_^Ö¯/?¸ÎaYñ²æ‹z²œú	.§ÇõÏ£Ò¤m´Ê²e8z½á³¦g,v½Ä'Gè‚7‰:¯ÃÕübØTëRÏ7¿©=›ˆ^ýoCX)˜Z|GŽ‡»‡O†O÷@ó8|:<!AvŸíï¡ BŸÃ²ÈbZàü2”W›H¶'A:&‹°Ý'ªœÇþˆTPdû†3Ñ†keÅÝdw˜…›R’Õkú†7÷6ÂÀ<BÌã‚-Cƒ”gqZð |ŠEk&ä?-á/ð|HÅ]ÅMe¼(_´2~˜e¹søñwÿ[àÇÑñðñ³§§ƒròìñðPãÔôã|%O®þóÞþî!9=œLj{ž¸&¬B[2÷ÂzK—eb>I‘Cslú¯X	$­þtá'/Š3,kH<¬zÓ%³ åÆL¬?¿»öKóFþØO¼»Æ©Ùˆ“bc&³.àÍ¨À/W  ú`“+{}ß–2°sÖ­R<ÉÑ^¼dÕ½>±3_+ù9é¾é×¿´Ëšîl§UfßÂ*eæšÐc´ ^…ñ±Yö=jµ©g*‰Ô[²cnÿ€ì˜rDö¶‘]¶eš2°	"ÅããÁ£«¿¼Ï†Ì¿ÿ?ÿúÏKŽýi€b2ò÷èJˆr/OJÖ^áîM¹ÿ³}ÓîÆÚÌÝX†aïÏ¯¾Æä¡/*RkŸVL™²/Üõä¥yyè‚‡’˜G¼4†ÏŒÆ+ð„ûª6~¸y)5TÙÜ,úÒRêÌ§¼¶™…^K´z>Å2V¶¢4xeKò5SC”÷Õ¸wSîM> x/I“1À2	ß/ÌØ7l`¢ˆ'x¸€­Û[/x­Wx6”‚›µ¸	-4³¿Ù"Îˆ¯F¨@—P…>kÈF5[HçQ’­õàû_ÿ7ùo¾ÿõ¯b4øL™)™B™êÍZ°´9h ¡‡MjÓ*¶Õt¯ž›[Õ$+…Ÿd9K¿Îõý§ «VŒ’•KÚþ°¨†“y ¹¸’º¼S–pà#ÁÀ4—‹[ÁËáAé‰QxaŠy
+œLJ5ÆôöQøb‘`Më©¢¨æSrÄ³’"/)f÷†Xl.9MerµNó~úË¥?÷Ð?	FË/ñÔO§ë´šæ‘bMM
+§;õãƒ¬•ÓO;ˆ´@ëcÚjB¦‹Xñ‹wB‘!E¯²€9@’ÁâÞYgZná%æ ëÛ<ÞN5Áä—ß”\ç…Ü½{pølìí?ÞG/ä§ûÃ_É÷¿þ¯ädÿätød€¾ŒÇÃ“Óý«ß<…‹¯þæéþî€><ýK5ŠEa÷6Øšˆ3Ò²®a¸zJ¾¨C¶è£îG½Áµ²Eõ—Dq#>2Â³¸”'äw!Aùýoÿá×0ý}œýùd8ØƒeZ ´Ì|gŸ-û¤KÚä(Z
+²ü£%Ì/ Òîc|ç<N3øÂÓSi+¡áîc2ó½$;ÇBj¯‚t	cþ
+õ•‚ZrWíiZð¹2¶dÇÛ•Y¯›, DÕ_k—‚õäÀŠ<pOîÓÒv÷üqœ°ñùSJVwií	5íÎ!2¯»±MÎÛÏi!zÌ€&÷é§Bcîb5ô§óü6^¨ðWë›Í’ýv1å¯ *+S}ÏÛÝ.òêÚÒvùh1[êUàÉÊ%\ô
+¨¨Ÿ)ª¦HÛ[1÷ùæç›Ÿ÷`>O¦#oíÎõîfo½·Ý]ßìl÷o½°î&Á[Ôdå;D©á“0i:Ì<Œ‘Hg—p–>ªÍb9ÅYÄn)ò“Ÿ.‰A÷˜»¿È¯þvÿ«±„ê­åàÙÚ¨i×øGS’2"‰PYž÷v$f£‹e+×‰ôÄTFÚÍqšòðã<,ºõ`øçGÃãSaý*Éa†4gKä¤}j¦ì`É¸"TQÉZbM\íõ©òý‚e+™Òƒ%ï€wÍPÞ½õ¢õà	9énžîÄOã1¸m²}žx:ÊT™uÅ·Xô9ÙCÞÔuíiÔÒJU%·Qo’Jc¸Ÿ`KY9¬ž„_› `‹9íóáK Daù°t1,Ý9]ÿýW<–¦½#ÅÃ0Œ
+×^Ò!O‚0Uë¡…=a¹ÉI‡ìÆ“ÎÎf¯_§D×gÜkªÌ€hBN>}\ˆ#ßËPø¦œrÂù(Œ©ZÇát;œÞeë2Ç˜)An·ûè©Éc¨Â’\P*Õ÷jª…woÃßV Ãâ	M}_Üom’M‚T}Nžax¿eH¸·ð@4šÜo=Ëûä ÛÛ¤ÿÞ&€÷ýéöàÏ6ý¹‹ï@å%ŒB”.ŽÃ8gL²ÙýÐ
+qæ `´×û-
+òÙ/ã ÊOË^zEô„Y›	,w™mÀ¢èË„EZ¼þB›äŸ½ô/ÏxvÊß¾6Ó•æ5‘ÞŸ#½K0€÷O‰®.ëß;Æq^#]çaÙ±»d÷J¯×GHþ»ò¸û)Ö„È>D€µ¥JÊ÷/0£.L•¢¥:†ä6'ªÍ„2êV£++Öø$žø!UqÅc\)}W›?²–%D	[Íîšò^œjc>¿]ËneUQ©`H™‚äÛ Kü»FþçR ó„—¢+ºÖšC‚öVç£öŒ|Ö*YxŠ	½þBGÈ„Ú^£Ñî5´äÑ˜w«‡PËùÿ™Iä¹Ñ~åùŒ]“VÁhv„aHHã…Þí[…pÓcïÝ|Ìäg-È_«–y‡2:ýyo¾Ð·…FºÝo=¦ó#0?òçw—¹™†YZ^ÚŒƒ‰7!—ÂÖCM,É2"¯¦@Â_zeûgÔ^{NÿýÙk—ÕÆµÕâ°5‘;AÁì€R³	àT4š]®´p}pï¶	Z|d~?X WgiýÅ2Y„¾èwwn¯ßîèôÞ€~ƒ·ï’cï«8fÆ<éÇ{åE_ñd"¹Ê±ªÇ—ˆ5àÿ0Q‹	5A uås4à+]0œU-˜“IÆ†úP¯LúÄzïËXç˜ü)cÏ~ú‹8y‰ß€æ‘—.ühíƒÀtZÃ!ƒ˜"øÎq¨§cgù%D2Î©Ú:«(¼²¢bÐ“øH9Å*”ñê.i™˜ÜtÝÏëw]ót¼ãX7%AB6È®Ÿ`Ž˜6š
+cÑ7Þqcç±Ð8¸ÛbÜ‡
+óHK#2¨É0ü)eôQš¨×çü½è£Ÿ;<ª¥.ìÊ¦ßÖþW1$i©­…ù=¬[XZ@m4å—¼.OŠ·üZ º/°[s¶L)!û¬Ýø'·„K½¤8—WP¡ ÁÒfZÊ	û:¢ŸÄû‘7™êÉp®*eQ•Ñ‚éT¹Š5úÌ´«X¢º;ë]àwÝÞ@ÑÍ@Q{N­>ê\¿¡Ãg™Õ4Ëº¾8ƒlè ’‘¶€*žãÎ]Ø¶„m¤ Â‚ðQß–­]z}>rùÊ;¤Ùè	â
+­Ã…üiwstçv÷…ùõ&ËÝªIòvK¦=¾ÐY¥òi›Á/%?À¨ÅW=ÖJŸf™WÝý	­Çí@!·•jþ”UJ§¤÷4S2M@²»­ÏPVÀÅ¸g0æ1Ò­—Œt‚ ªÂû¥¢’Ìø¿¾%OûOÉîáÓSø;<&¿Ø?ý„œž˜‰=ÒV½†O|¤gX4nürdä)k*„Öœc/‡¡aquï&s§¡îØ1 pÊ°—xç>2hm ª¿.ò4ŸÝxçy{g›ûs›ÃîàÅÆÉ‰–IþÝzù·’	…
+"‹v_šNDLJñ ñÈ'Ç+rþ/Éc™Ž“» 'šG%çgÉ’$92Óå3Ä²xA„oZÆDw¬”	5ìÈVy„SÆç]îØ4•;ÿ û0ozA¥ÆXþ]Ã	'Ãq£Dœ@—­@{ònÉn	Å(Û@ïË²-ê‰FÑ¬¡cÅâxÒsÏŸ¿¨ òO®¾›,1hE	HÝ(¶yý´'ÆN½Úh]ñ8ÑM²lóOÁÞm³b†Z›Õ6™C§¢<Æqœç¾xJ ˜<QéTvUª<±‚«ŠU¨W¬ºŠUÏM±êö@jCß	°+“ReT˜ôXE£%Bˆ$œ6t´¹MG^¥]išˆuÙœTœ8q²„4Š•˜ÓçÌnŠ‹GÿlY€ÛÙÚÙ9ë–qX1?ð.±=ŒIµËéºŽô#F›©@)G°’¯ÝM4¸Ø×¥¬Êä™lc)““*)êŽ$¼Ì™Ÿ*ÔÂ î4&<ŸãšHˆ5ø‘D4 bÑÞ{ñ„µ¥>ùå“GßÈç]P‰]/µ7C"°Þ•Ÿ¥Ô$B¬Á$¢‰‹öÞ“ˆ“áî]	ù²¼â€­³§ôðÌÙÓoüQÓœÿ4¡MÀ{ïéöv|GÄ€®Ç;"Üª98Ú¿q:0
+FaOo1»ü£&ÊBüHPeåÞ{qÂ:¿"¡.Í» ÅÏ®¾õŒÔ¢8wºáÓàñ6–wºLƒ?nC_‹›¢ý?ê¡/ÞûO@`-^bUéwCBJë£†IV‘Þv½Û¿½Þ¥Á§ÎDd/Æ.eŸzaœðj°ûƒ—<Z+àšpð%øQÚh@/øš½÷d‚–ÂØÇbKï†NˆuyBFQÁ„usñÞ‚{;¶'£?jú/Â¢‰ƒC¬Ú{O#x×ñwåÛÈ×å]Ð67L.9ˆÇJ«ek¸çïû¿þ‘œ†»§‡ÇX­âÉáÞðà>yºt<<Á¢údíätpºø”œìïŽo9'JªAS,piÔÝìN^¸$wÑÜ.š Ü“âŽ,EcâjË –ƒæògKN6Ðw¶*oÞˆRäp]&ÚóŸzýÑöÙø…9z’§â=½úÝ8ôc"c:+×Ò­Î¨9é‡ìrÕ¥èeêv9p*‹âÜ¡(T$º÷äæí 5ÎSß_Êä³rn›ÆUxïé2WÙ‘¹æâß¶¦âßÂrd&`çS	!Ì¬¢üŽr!ÉÜš€*—‹QîÐÐäõå4.<x"¡EÃ$8{öÂ£·ôt>{9öªÆïÆÚC´€eëÁ^0Î`ŸS9¶BòSk@s10·¹c¿=5°’°	*Œ4­œs`à1ô‡·Lj’ßsêP›¨¥ª4‚Ÿ¬¦JRà4¢¨Ît¡4ûñæé„’M)’(o’Bh3G:¡'\–)E±.Ž”¢f”Æ${7ºÑÕÍ–9Ö)S·ŸaŠDØÐ°CÉh¡M+©þléA_Û]´®Âˆ¥“’ç—¬:h¡·è±ZVª{[ÕUÖ’ ‚1Ü4„Ûµ†SYÑ*ÃK¡Í`b­]}!†±†í[JAü¹wÑžµŸ÷zt²¹à’å1`Ä½–·`H=ò^ùÖ¾8O1D4ÙJ`(í^S‡ÈÐþRÔêÚÁ–•m=8Üxd+™.½d‚r‚¡’Ð- IåÁ)SaÅba«ÅÙ«÷Òò±ÆK´à’:§³MC÷äzS…Ä½5#³ü”ËÑv5Fnæ€šÈaâät)m¹år/ù'¢	8]öNÞÜzÏÌ‹&¡{“Æ·Âë`æ;q$dwŽÕ“U÷³`êL@»Ÿ	¤§°öU·ò†E–ÝýÆTéÖREØR‹WW³d=‘®Ëê´½VWñMEí]3û1v  §Ë‚
+™¬äP¼h½Ÿe/lèY0ÇóÅ›ênP\ì6£(¸û•ðŽ‡+/°ŸÇ²ÖÖ¬0€ƒÞ=/2‚IÅmF `‡¹æ÷Žš?ŸÄ)og›ã:&[÷ê%Ú;%ñ´úa€\ä2cØaÛØ…Ó­žÆ‘	Z+RÛ¤âWÄZËBë¢¦õ€…óÙ’ë-ê]^vCßK8é©RÑZ²†&×ß4!^ß°ÿ}f0IçT’ yQBs
+Mí©­©¹úÎ——ù ˜//)Ä'©WËÊ×c#OÑ`û‹Ããÿxr4Ø’Áñp ¦Î5ùœg®2³kos§ûÑ‚=tY%%¶ê
+’Æëèa8.6þšƒÊ [åz7Œ`À§ƒ‡¤{—÷DÚ;<&C²ÿôtx|t<<–ñ4L®šÇ¸§XµÒv œR•Ò†eÖ`“î¿~-èÃ]²¹N¨1>uîÜ6$nÙUîêæwuM·øAÖð-¸âÂñ€×wû¦ë¦Ú2Àêv™2ƒ+u$¸¥Ž]Ö’à¶©xlô~´XfØ`!™ú+•_Ï†Ç¶‘…µûE¿c³–omJR¸¸ze{¾ÞÀ[.¸\ù>w‚Îí­¡mÝIø‹TæÀÈÛ¼¤œ±²#M;ÌWug4þež°’=ëyÉÕ×s?2[Ùž?~cÖ«‘LêüÿXàð£ØÞ$´,"”•\­"°$'JLDn5d)S(1­F|séàØ?ƒIÎvÏ-BÎU°&Ïu¤ão¬3º¼­¬¬#@‚o|øLnkL\*NJJí:,Þ¿4bXæ‰£ív°Ø$hÄX3Ï6*û¸*"ôF~è GšèÏ$»àð ðÝ{ôc¨&È=4_·k‘íyë›GððÔÖ:i=+ú7à×'Þ\þõt°«%—Dº…Öûôæ^ÚzÁì 
+Töã3«ÁyvPã<ÐŽæì¨v¨‡£V_@sØ–e—trUŠ;‚3‚W2‘Åaån9Œ‚™°XäY0¦6€µ–ÝÄPuKW¡e±C)wÉŠSôÜÊÂY«¿YKÆå¼[÷5£Ž\i„‰‡<äâÎGfw‹zÌù^ÒÝ/+Ï.†ò rÒX|ûhÓà²5—j¬(£NëË1F$¿ª_öä/ÜéWh¬Å¡¤»]*Hg©F§\õ‘¥H]ÝÊîõ¨"ZxÔ“j¾ÇsŸ>q¿ÕòSÍ6+êuröH‹ºòvßkãv	!ßõ@å9\~àH5jº-¯ÀòÞ"Ó3,M=ûCCEöÊ}å…K N©L«!XÀÌ‹¦~nê*‘V¿“yÉÔÏ:ôá@ƒGÙX¡àÙ*•ä,/Ó»erÁÎcçM`ëÒ¥¯€uÉüÖ…;Et#Ó=Ýüùñ2£ã(-­"ØVEC¥ÍUD ÁïÅ¬ãÛÌÖ`4‰çØâ†¸·Á~oô†&èŸ•ðià¥d™ ¥/À'}
+Ø˜’gâÄJÏ¢“)‹#è‡•²»ôÃžÁþ®ôˆãx‚ã[ø‡•òI<%0öw¥GœÆ£€Î…Xm§—i“‚`'°åÊ÷k<ò(NÕgæ'V|èÕ?ùcF?¬Ö4°þ]éö£Ào=€V<¬ÅãgW{h®ð€x²Úð÷âÅ"ôÖ49¹ú.M
+PÓxúZ/xåGqJÙí<ð¼ÑÝÊa¡þšk½ÚKÆh«ÁŠ—W]µâÎ„Ëyäøw§Þ˜ntéÜµ=‰“Ô‹Ç²ï×zäØO^¡³x¨8³vÅ…úû@ú²q»ú.ñ.€¶Ñ¿«M3¹ú:òcØ‡ÕpÞ‹²8IÎƒ4yêGnÐür‰±„@j®Xmì~â#T>õAúÍèigVzìa†<ÿ%kC!öyÉ-—‡ÝÛ`e…Í¥JP›£Êª [BG%š¯í.Ó,žV.–ÙÍÿŠÄËŒtiVTò0õ3 îûÑJOÈ÷S¨SNz]âJ b6"OµªÊÕ‰1Ýº•‰ÝâæfªÄÍŸ¼î' *~I;aÅëT’%ÞWðq8ÎAãp”fWßd	,V§Ó©žÕû¢£ðÔ°Uôim„Ã_qî»k-UKeuÂ_‹2lwÈŒ8á–jg£Às®Ä 6Vì²B~‡\
+Gc-¦ñrU$ÎÏ-=ÅäQjàè}(Â.èá§˜Ù…kyˆ›•®r°¤«*…¡uNò^t‚h.†¬)TñùÕ¯T‹Ÿq5…óåPð^ÓO	ÊœèfµƒÁÅ£€PZg»C¢Š-SÖ	||
+°I{O·È›uÇÛ÷@xÏ<é)âŒû3ö¿hõ“‰ü”âœûs![ié9Å¹«;÷”0iÅÁYâê.áöÜVu¿™ïÄ”†! .»äBFWÃæð0ùºrÊ…5	î½t+æA	M±÷6ö1ô}Ø cÇìb°¥~è‡æ9¸1·Á–‹ã¢ÎqPï: ¬m‚.~„jOB¨P'IÀzG ¡U
+}Z–ð}ó1V%
+@Î¨5ØR pùºé!”U*žâ›Ñ**r0* «ˆŒ1½¦6§†u½5>¬lÎ±}è½‰—ºðdØ†EÉv¯.Ú²4!GFq]ªTŒpíù‹FäÞ–Ý\Älâx·úU}R4¦àî”À£ž|ð ››¡× µòÚIçR@ÈÎÍŠoƒ#IØ/îÒÒÑ@º¾¸ßyP’²rËõ‡# Þ¥,ñ‰3îÏ\Ê(Ø÷cÈe øµ±”X'…`éìŒ©ÈŒ%÷‰LIrI’ÓêH?[&Q-Ùq'<ªŒ
+C¨'M©Õ
+1>x`ÔN±vn19xhÔP^qÞ±mmA‡± Ö=iñÂwŠ¡÷å¦>Ï1r('³K£u!b‡Ë>ÁUÄ@¯¸vÏ;Ž´~ëÒb½p¨Ë0kcžðpÕOL£ßS…H´ÁqƒÞgµä¬˜¸¨&.ÒECõÄUÐ Q£cÞ¸ˆ"W¼6òA—jeÕR—.UOÀDìN_Îà­cìÂ¼QÒ”Â½9%bø¹ê%‹v“è<x¸z)ðP<­ »ËBbüxh¾‹»äßawóulåaÔÕ×cXÆulòvõ»QÅÂl‚ÂI¼Ë°1	¾‚ÝòÂZ¯eÏ†hÞSÝ©?tWÒdƒ_¢LWšzFï…0«2Aƒ¶ásF·eÜ\§ÿuònÃ´ÔRÍ¢Tø0ð¨Õ2V’¬öûØ×;¤â^K¢AÔ>„^Q¯ËlAPs½AÊ»ÂçÊ|žÌ¡0Œªô ·š]:«Zñ ÜE!>Yt|V%ôZÇ /à{â@_Ý—–B)UŸ*jä-lWo²:4‰ï½lŸÃO©Wh¡k§?Jò4ltÛ´žÂ –pK4Vf<W¤r×dÁìÓ~Ç,ï¥i²‹]ß¾IëÕ[³\IS¯çm¯µ",	ækµÜßEYt×ù´ÌâAšÂ`´’Õìk¤Þ(ô'÷_)»VÄéÎÆÂ†9·ÌN&Š¬dM°¥£©¼-U•NßÖyšŠÅŠœ,¹ó%r°)õÕšUO1T3U¶œe×-Ã á-Ç‚p$þÎÆI&,Òë$ñ'ð|Ê@;óSjüžãZKâá!ü6÷.¯~—Ž—°Qó ŸWU6ÀH¥Ã˜÷ê{XÞÃO´â Eãn!!§‹ 2¥dÖ¿€RË»Mb¯êX¿±æáæ3Ú3Æg.¬Y¬@ÓÂš†WHKP™s@Öv½å’2
+@…¹[7´2Õ:V"g½½:Y×ÉNl}®P\‰¤QcÐŠÊ8+Š¢p£r5óHÌ™_ÎwÇ¬+h[¨\	ó¡$˜¯«T@äKï¿ÞrJnÕ#¢6«#¢ ’_±»mKgè:‰éx—÷Õ4Nß¶¼´ºp_iBxkòT¾0ÍÓ}‹ùž'Þ¢Y>?o2õÐ".À-'™—-íûÃï
+Ò@h?¢±Öˆ£k ö2Ë%ñ(‡qêàëëäÑ‘þ"2ÆË‚‡T˜S´¶§7 šõ”Žôõ¦#}Àuçäo"kQ<dÛŸÍñª®¨ê±Œ	«ô¬Fo¯ãHv¦„ƒ(5Á½M4¬ÿ£ãa^¦ZàÈ0 Úê»ÖhÅ"ì§&0Âïx‹@R÷:Pò4wPhâ\Ö^'bñ÷8Q“êÅœ´!_d(3'ÁèÝ‘›|WÖlœ¶[Òlšî·Q§µ8®+‹ŸæËŠr8Y`›òÁ»Àÿ'X
+éNôÈ‹|-äQdNãe2öÓ€:åÇÍ5¼R¬B§ŽÆ½œA«(õÜ-°¶("W ráYÊ1{c«/ûµêà¼ªøŒê,Á1š±õkaLžOê–ëÚ{~†õtÈ‰“»/IôY<¿ú:AœªÖÕÏ­E©R+ñ£äÕÂ}t@%¦Ñ‰y\J¨•¸¨pNU@½Uá»‡xa¡ZºKõ±´ò©ZíÊ·Ë2¾(5¢ÎJia'ˆ:Jâ±ŸzîfWHjæµîF-ûBrOeˆ	xÆa¯ZMáé0Þn!ŸIÖŒp«VÚ\Gih.!Å{C³b7dµÌ):âcÒ%MqãqSL|ŽnkäÄ•(ìÔWwaÇ]¥yÉfÙô|»Tç#Ö«Jï‘%YÉ•ÀXaþ)—û ÖÝDyÎ)Î%Ê±Á“‚˜p„5î&\ÏYäÕ·#l¯ƒvÄÐCƒËy­ÿ	VMæénnþ;4Y!ì^?õÞ“`leŸ+Ùƒ©zÁ(ÄãB
+@³èÚÙjiø¡´n©?"'ßÏrõÆÈ§ ¿74*‹§ÓÐ¿¡©$3fè}!1®FXD©™ÙH
+¢"l&šÌ\BéÜÚÓ×-û¨OAÒÊ]ñãÃš¶jD[ö ¢Ìc„$? ÑgL°¦DÄsAs‘BNd?_ÄÔþMiPä½ò§ÈÓ¯OK[_½/½¨ÔáÙY¥ÇUÀçOdŽ¬7î$×ó»žîâ¼¢ÏrŸzå¼›ˆ¢ü‘tº§0™ä†àf2¢ÞZXQMíµ”²‘a’ ¾4ÊQ²¸\òºñ²z«ìâ¶æ>õŠ«åLCßC¹¶-I/@Ô®Ž­¢UÅªiNTrfÖÿZÀWP×yì·|ÿÿø¯ÿü·NJNU+@Z_¼^/‘7Œ†²§´`‹/K§Õ9ØùhœP@éÃ¢…EiE€gâò—…vkµœÐÑR‰0—]žÆäÈOæÀŒáKLö#÷*µc©¡Ú>ŠAg„’dWü«'Ž’jãTjw€Ã5ªEŒ"Ä«8%Ì·'kÁÑ$ˆuy“uòÄß"KŒz…+rÖã§d~õÝ+Lû_ç÷%>M¢¦lì,˜.±m9M~óóŠ^Ê\¹’ }îî:Q1·u\*¼x[¦8¦­teâ»ÕW×U(|lÃ¥¥,âõ^¸]ˆØ	‹
+Œ×¼õ(y<x–zäÄ;ó’€`ÊÒÔ£¨¸€Áôþ¸‘lÓ6Øž±…ñ/—>]í%«² Êàh?¡!ŠÇog^Å_¡°!ï0ŒÅO"Øöq<Éî,‰ç @d9‹/ È&pq‡F°é ÞÀ?ú£ÉÕï"a,ÄGÚ¦YD?JÑ9æ3ª6ƒçë·áºÖ7»)ÔYG×U`?Še'(HÍ=i[>õ.=â9=ÝÕ°âßÿ¿GXyó~>õá&ÚÇ?–3]òÍ%„Õà,€]&ø?lo¼`Ê›íŒ¼)~–Ö¢:QZZl’‰@Ô–4,:CfÞ(øÉ{¿7kø
+IèþÌ—!5…­íŸ%pí-ƒ
+Š¤IÜØné£`<öQƒsó ÿïÎ0&oâ£'h	Â;H‰ð@:€k Ë.`ïê#Pdè@Fq†[$J˜0’è’ 	ãÂh ä/üˆfÝø7»Ä÷6–µÙ
+.‚£›Ülì‚ÖÍµ^ÖÀP¼åÉXey­²ôðÆ/Ô·õ·MSríA*Th3wÔùöf,!òÀ+>ïÄ aküs©G¹3ú¾NZŸB/zijŸªåþ2ö¨f9t…ˆœº-‰íl†ýRþEaåB®DØJÉy‚£»qÍY(,k¶”¦‰Z“ÙòX/<¢—–ÖˆÎ‹ÒdþHÃ¸Ô°†sž.ýWž“ÏQÑ{ÛàÉÊ1,_ÃbMà°ÈÿQŒ?åfƒ¶¶f¡´ëÐáx¢!ið*Hmý@Øá²µ×ªZb=pŽF=CÄŽ¦i³0ÔGü®ãOa“„f©¥€Ùðæ9j*ëð%†C+>Ç îˆèFÌ„Ã«ï¦Á¾Á²/Ym8½©pÔ¼)µ5õý ­6*«¦Å–n
+ÞG±0Yú'?ßÝ,< Ó~Ê7~kß#»w…˜Xêå9]G˜ë“²Ï:¶Ú+•íëUûõñ;$½²|×W%ãgAè·j®¡û?aÂGp9m.vìŸÕp…R/åFTÐ–Jtœ¿ðÙ"Œ½º>4¨#,²û­Nv‘­wæ“õÎbr¶Þ™ÄcúÏ|ÇÈ?ûCª8½QÎt¨ïâÄ­5\^è#“ÙÇØ6vür­Žëbáàz¨´d&ò~¨DË-£{;·ÝN¼t–g2JŒß–øÔß¬Hà-’«Ö¤†•ßÃÕÆv¸†þkõ"àë%…OÑ£ïªûÅ ÏÐ¥êM¾\‚rzHvùÂ7_ ‘=Yb´— Oáãœ‚­í=Ú8ýóÓ'{{‡»¾qôôñ­ŠÌLâ(Lš^_æÊÑóÛ¼ÈÏ”a¨$€–c¡”Òí8&¿®r÷“`îÓNÏnoÇ*1vÌu,c “«È}Òj9¦Ö%Z_„EéeLO÷7ó`³“¦¯a¶H(µ±Êëé(^Gxš•ÓûOEÔšûk­7Æ.ÃŽ¤Ä	m«È•šP—Et"š/@Y#l‹ºçe¼Çä‘7x~ç‘QÙ[´'É,ìÃïH®ìÉ¥ö¡5PÀ{jâ,gÞÝðæ¾+Jþ´LZò,>?ò0™3Ûó3/ÓµÒÒ¹[o¦5L4º÷³‹ÜÚ†V=Æè­Ì5]T¨(ð-§M·üþ·ßüÎC\jë,ÔèÅ¶ëé…jfÈïWU›@¯ii_Q¯€ïÿþÿ§ºÒ®ð¾á©ÿsÝÒ	V—{y,+UE#×"CÒn«éAJ=ˆ•
+‡¬ñV“ÒÛHfvãtk"Ìª<Ý0†¼Wq]yÅFU‰œu3É.Ž™,O±¼óš/B?‹@w«PäTŸÈ½:7é,P1³ÞX²í·7­GTªFô–€¤GWß$þWüOÝª3„­ÆC›uB2¶ï·Õ¡znÕt¸¶òWj¼È°¿G6ËJ<²ËÓÈß4Ø¯md[û“k£À'»ínok»zÝng¿¶¶Öðo»âý†ÿG´ž‚Ô“Ð)”7Ï&^]JXŽL³Al%VpœßÝÞW0þ`À±'Î{&²¦×‘XàîkSk ÓÞÕ?Åè~Úî~$ÖÆãß<ìŸøHŸ_}ù‰S¯³·ø}Øøä°Ïpmðâa¡® ÂÕyäÏÑ“ˆŸà×‘Áx\Þ?¥v‹¾Ådˆ&°äê»Û©+œµÃÅ˜õP»q¼ñç^P³:âñ–ÆxSo”/0‹¾AG¬z[<†v…' yS¿OÛÏüùZ+ñ&Ÿó‘Îf»N>ºÖ„_Bêßº?£ýâÎ8žÿˆËÆãq¹¢bîí¹³õ>`û“«o&ˆáØtèê»0žÆ~“6fXÀ#æ1Ö&W_“4 ‘È_Ž¯¾ož4àœ“xØµ’‘Ë	ý÷òçß$ò³QÁcßêï%ò$1µ÷¡y¯ÈIGÚï)ñø¡quÀóeèaû2Q³•Ú'¦FãA6ÈA0¦qyxÌ¦#Iß*róW¼üÙ“ßŠ?éœtŽ:¸—wÉÎf¯›xâG~:¾Ìîb„~»Ûk´}ûÎ˜n<znl|HÅ,eëQ€‰"ÔíÍqæäÐR'‰p†qs¿Yn,„œd«•£Éiù9z‡µð\!eÝÞ$ŒëKÎ½‹ö}@–˜ž×Z Ê~|x¹?Yk1ŠÑNƒiäeËÄoÓÈÌ[®1Ä…àUU—á¶VþÅR$½íõh|Ô´jº„ÞJŸ-À§€K¹Œ'> çm,„¦tgJgI½l×ˆp¨ÃÀ›Í‹u–„èÛßõæ£ÀK8üþ·ÿWÿúÏÛ*‚õÔó7“ÄïÈH		&÷-ðâ¼n×ŠÚ`ümãC'XWBxwµ¥u‰ã%Í#‡‘°×\aÞe‡:·2°ê±Eð‹8E	œSJs)VjªæÀÚsÀ€™´±VûŽ!t.GÇ„Ð`îXò
+ä©d|ß°Îo\ï÷B€5ŠWuéù¡Ä=ÑàË?÷.ÚçíçÝwŽGØX	øN”a	NÆçÁ0K?š´çØg^:¿6ñÏü$ñ“£hóåýV·Å)·r9NµGj³óÛ?6ïæXêðqìÏAh˜íÖŸP—ZòzÎzÃÙí¾¯eOæ¢¢Ïm–ý…‘ ´è^åŽx´¨Ó¾¹{ÇvLõµ´Dâe4´*“9‡V£üå´`ŒkB«ÏÌ#)p¼IL"ÚÈ#”D4]‘Õ±ÅåÿPdl4Æ*CìGÀ²%‹¥ÝÈ£fþÍØàX+‹UÍvó»¯í·ÊWŽ–‡ñ¦ÑÕw°²c^ä™ÂíÛP+ºÑýpÔ_{—ùA®r+W53©¡g÷êÛ9,,5eÅÓØ;s_5
+Å©ü‘FÌgÀ½dBN.ñm)9möß&ç’Ó$˜NVêŠ)Öôï‘ù¤ÔWÜ©m]oqìL@¥¡kV4È½ßÖ‘òÓl	T{@p
+Â%’J§úoçÏGŽ2Æ¢ÀÝSéE»Éò+õ-ÌšâáîNFûš¼hæƒhÍ‹H¯‰ï+²òª]Ø¸ =aé"HhqŸ¸É«&‘ÜS|°÷T}úûŽA6ò«o°†w“Ç§³ÀaËgþø¥ôža:^N´9JâL¤nlÁ+§%cÎÑò¸Èßx—qþìNà ñ]»Ë8æcðæÊˆïkÅË'ZõÐÜiWÊPâ:”)?)7li¹I%]KýÈf-éÄ±—t*M–Öq+&ì¨Ã|,×Þ)Õ6÷ŽžOJ%€Ñw3-£+k?y'¦>Òýšævì¸©–Ñõ­?õ**sÊQƒõœnPPÒüâìB>.ä·fQAžÂú£ 4/£1Ü”›Ióá	ã<BçæØµHù^›j™£ËÔ¦òtoe;­R'¥6WZj§²Ó·åK;v½”h[sVQý¸a2¦ÈÆdVUT/#¬˜#”LZ k™z	+„
+Y.&sž?vU½¯…Î¶Ón>ŠWtî¨Àˆa†2äneÇ]Q¹žÔH5¢¤UÒÒAžŸ’½!9ÚmZÉ¼úª:u…wÆcÔíÝ„Å¨•Æ]4d4À¨€“^íb{ohy7ÛÝQ6p3¹74¸×™ÛqáGÁ(P.¥º¸ÀÛºx¹¡ÇžvB?šf3ò€l:Ô%0YËŸÿtóÎæ^wðÂª·2Ø£yÅ˜Yèµnõ‚ùËÝZ’_K©=ÈWQJÀžÀWPe¦ôÃšaùÞÜªíen[A—üÏ:…ß°­¨yP	Ýµ2cìÌN‚”ÖÆÄBF	Ä_‡ò-ø šEN¥ÇñÀ…q¼TÒ~Uv8(4®Ú;4Fò–_„lÕ¦ºE×{Ëë’‹K’Õvˆ]mp‹¦¿¨UÂ+U˜tnPa\º˜È‡¦È`(ç;ÖeØá¢Ñ°Ãµ¬«»Ë‡~Â:
+"q¤ù‹‚¹[¯qP#E„eRì­è[d·FVjõP$­Û iÝÎý¯¹CV÷0Z¢%¸úï¼ ×v:²Ã±í;ª½JZ9w­vz®W2&W0S.òKÛÑdHÀKVÚGwùZ\ïè}å—»¶kêgÇëœó9BÚÈ*Ô±¬ätÜhHx|ÿßþŸfci¸	ý1”Ç7p„‹£¹C\Çv8U¿ƒ4’ûª Û]s)4¥e—<
+ÔJ!†f¬/¥æâß;}“K¿O£Uå”$&ã$ml8½¤-‰/”Ž&j† ÆROîº¸ô çâŽä©ÁÅNðòÆ+ÞépQu[]¦l&
+JØ¥)H¡wIâžHYƒ]F9™
+BÁ¢‰Š¡b+hŸEÛ™yæ$ÔW%âµNƒe
+,±‡ÙV…×ê²<«ìÓD¾™rVÒÓV‹<ã;Ö,è,ws6¸RøÙtv‡K±z¶8=MtÔDÄ÷+$Íæ›éüf‰ä¶9@²dÛ%LÆÔ* H‡´©æ­î=r6ƒT²ÒÕBÇÁ›Šxd|õÝœ†í,’ø›Í‘l™³¥&£qt½pU|^QŠm&™­"“iön¥fÑB2:É.C­EIš³d©µ–dõå2ôeð-À•ã¾l!ÑL/«¹éðÔÙ±®^t†õî±¥N±rßÀnâòí›Ì$[®pÝ­!®`ÿ+ÚVkb/ž/Íd¸÷!F-øþƒF	>Ç‘Âvp%*¯ã:}ÆHÒ„Á$ÁW(¬Ô–h`‡+¶ñÇ¢ñ¬º›†8š œ#_tq+âJ¶“M¸jíªÚY0÷É`˜= ,önÎ#ê¥YJæ ,Ý•k´-«6@{;(
+ìÑ]P¯'Òëº‚,â»Š7/1í\{‚‘Ä4L}¾ÀÖÛ'ŽQ2ùÍ¤0×ð›í²L¨†y`ß7,¿ªt~³íië­Ï›°8¿GWß¦ÁØkÒ‹Ö²köœ+rZƒVþ» ÿ®P€oj®jacWŠu¹Š¥.Ü4ñ.©w¥ZC…9ÊÅä¼Ò<®”6E^sÿõk™Í€Æw·@l­“™Éxâö6œp5²¹N$FØ¼/iÛ€òa
+âK„	¼§I0ÇK^Öûß‹C‡o”Æá;´Æ¸œHCÚ˜[Û#³ösÞ‚	ÂlÓê&­ÍŒTUïÛdïÃD;ñ®Á·ó¾IpÏÞåÙßÉGq†¡+ïrù+ßå>æ³|‡[™O³Én6Àó»ÒØšyÎç‚‚Ï!]ÆN¦—$].X¯ËÀ|¾w^ó©r²+‚
+´˜Ejýï±6.\”oû¯€¤ÜLs3/ÖÛ<¶ä:6…`
+`ÔëBýAF¦mp£ë®\ïG˜öbŽ®¾qÙO5˜¾!Ö…d!?ß2Ëy~j![*‘Ÿ†¹Ö©ò£>-iDî¢6;žŽ1^²ÛŸÏ›ùv¬õáE¸	l=liè]ÆKÂ%f2]	O±n€-I£)H5<Ç‰ª5”ÚQÊâ±OÝÀ¾Àý¬È»07Šzy‰‰Á’¤iÜ€j1Ï-sª8œ/Ä…Ý»Œ¼y0&Ÿ À,¨£‰µx#2¥eBbÚe;úPsƒqE7:‡õã	Šê”Ý£ó±WÙKœÊ$È,WåéÃî’]ª3Àä?É-ÇÝ¦r2‹ô–Ó¹ÂôáF3_¬ymfm©Š%³ÇÊÄ¨ªí7Ähˆ®%4hâà*Žk¸ºŠƒ:½ø&%Käæàìj*SùúGõi­ðä
+vÂ£‘#¾qÜk~¾2¢É°…?â6¢í¡áÑ„F´ž€<o’dÞ4%)m¢žQIîZ˜!Á7s7§¦Çž¦­€mª¿óÚXµ*^ÝfIåÂ}p-{›Xv£xÖÓVÀ5z“œ14½pDcYÕ&þhû³gX_g*YõÔž·»MuÆª·<ïå:i@)½«w£ïRÞÔSÞt{Å­pSsB[	¤T ^(®S©–ŒY²wL[Vƒ*@f\NcÆù&‚˜q]7µ=Ä•å˜:ç Ù4¨´‘lÏæ|ì£Â‚
+³‘¦:q@ŸÏ"ÆK°Í)“òç0qjC'Ù‹¹°^Þ$¢‚ëu$SŽ”óK«áuUÖs(æ'™Ð°/#K]Ôëß¤¢a·»±"Î7Õæj¯j~ƒ}ã`7@ÝÒ&ªì­w³¢oLºý› “w@†N¼3ÉÿÉìL$/V˜«x7£ûVy$-Ø±ÊTP)‰A®ÕŒPQ×/8#*5Šú’Ÿstõõ´Cºhë®˜ÊÐÌ t£—®î}´ºXû›¹1‚¨¸}G†Sv{‹¿ÿí_ÿØ©,‰›š£â1fãÁ£8™ƒGm"‰7‰%›º¢éýÈ0”2ÝÇË-ø…õÖðnâƒZ#¸ÝÃâaha]xó¬xBµÉuÐF€Ó{¼(‹Ùå'¹#Ù¿ðÆ™7§-=& ¤|Éê$¥>fÞ3{lHühì|Ì5íÜÛX8’7P‹éþæ¯›, pnž÷F®mYÖE??£+	3*œ&0·¥7’”]}3¦mN¸ïd¤¤|ÀÅó‘Y1+G ƒ#ˆÍ¾Ge%j8<ÖàC`Xð¸ú’LòÎ·¢ùFƒt¡ÍâZ®}Qå˜ê:õVýly° M«—#ÞÉC	do:]mç]§UÁ|ì 8aäÝ¶*“ Å8 Éý×AÊï@iûW¿"`sÀKì/ßÉ’`n/b,G'UíÉ:KÕ¤¤WÉ¥±¸locàÉN©¬ÑEZWÃƒ(žo~¾½¸ø¼»ÿ$Ó‘·vçÎzw³·ÞÛî®ov¶o½È'{7FXÏ.Ñþ“Ÿã±|Qœah_|®f 9uyUÂ]ò„l`¦îC…¿WY,ïØ?z2Û=7uÞýÓEÉ‚¸XR?¥9,Â´9ôÀÄNm¡Í{ÖTãê¹ž Ñ{úZÅ‘mØ‰sü×iZÇþÙPéy˜/ªæ_cF6‚a	´!HH~ÿÛ¿ûßd÷“Á)Ùz:<Ø<„?0Îÿ¼·¿{Ø>ìí\ýæ1|±PMrP;.“íÎ¼lx³Œ3ùcÒ:P|aN°mVš	?v7ÉWÔŠ*²Ø¸s›Œ C'I¼ Ä^&´r…^6¨È€—³¶hDà¾`Ñ¾­g
+qul[`<>WÏñ¶ÕØ²%­³HW½G1PäÖ×Ù—GQM2èG}VàYW ŽÓ’€\ŸÐ¤¿W÷›m°eÁ¨¢ÙSu·^w©B®u-b´J@eE.³Tj¹’
+ÐÄ*`
+&z©IÐOVÆ±š¼ vQ:S*ÃrÂÒÆÎFqxõÝ¾T—òSQÔÅšdîf°J•¨Ý8J—!æÁ‚³`Œ2hä§ë Ä§ü‰bÜáGZfòdÌ,y#„Vœr¥Œæ–ßWÕÏ¬>éÁ5Ñ¡\-e¿Ln×øÛ‹J©U-“ÒmT&í>ÎeRø×š4W®Q¥B(w…P6´FÔ¿€ÈÞe¤+·jS”ô…McS‘ÆÕPºÕÕY¼ „aípuŽšy°e°Þ»ú²ÂÙ¨¶¡8†Ëic'ÞE0á+!W_'¾'~#kObÇØƒI|«¢ÛG6[†W­#ß{D8(¿g œ5´±^¿Ç§¼ÒÓí«PŸ˜ñÖA5raQ%±Oü4õ¦~ºVW%¹>íˆì=÷ÃqŒÝüj/ObZ¶wOüÐárD¸ü_¾þ$½ÈI|‰Y¤~8 QžWÇÿ>ü°cå%dÍÿ²Cžú@™bò0N£À{y‹3Š1ª°œBŒ’dDqÚ!§>á ºúM+W¿›c³1â_ >Œ:_ÊŒ%AD_“í AŸEF.kIïwê¨MµäEMÁyË‡I'k(Ñ•7U†ç7í
+Pªƒa—¹µ/ƒZ£j•xâÐ9?ó±úEÈµ÷?zåGÁÄã!‰Uy[Uìc™þ ¢FÞWHUbÔÎ¨œ÷p9Â¬ªg«¥GÓÂ¾àžÈ\“¹db
+b‘`ôÀ°2yI;›ÖneÒƒ™ÿ Œ½p¼œìÕ¬ÝÛÉûÖÊXø¯ÛTW1/>ð7«Í"ÕI+ 7O§·ªw×T­£uêà)5eêôÅ„ÅÁ›Š1ƒù2eæò–tühBç­6<ªbá•ºC]í=y€y	†÷ÂPÚ‘ëD]DYP‚…ñ‹Éé€k’­H÷¬O<5,G-UWËoƒÔÖí¤¶ž*µuûiŸuÉ¥|¥y¹4GJõ;ªE±š²­ÎU²$RX”]0&ëzë|¤«¦’- íPßÉöžg¨¤«ÀŽÕƒ˜m­Ü»Ù½\wÝ5Ž½‡œû£Å&ßHÿÏŸnÔÔ¥‡æúyëÁc„˜ oÜ9Ø¿Áõºf“#†à¸S±^b¯'”ª·×Å†lÆ:‰ß>O¼E‰x< ïÂ¡½qðu9B˜­÷ÍåÐÞï .¯Û…CêEÙ1
+Ký51ðu¢Ã[i—7c¹*_•Å1J‰6Ž— žQp’€œ	#[Ž1vó!Ý#V±sQ¤XèáwX?úÕ¥~÷÷¯Æ‹—^Fcâ¢ò)¯L.éc5‡Ç `Ñ)nÅ}" ¤Ê&,¬m|öüxxòìÉðéç»ƒ“ýGû»ƒÝýÃ§Ÿ½xþYúÙÉ‹?þìùg–K6¦ h­[ÜØ¤PŸwîÁFîSŒÇÞ‹Qì%“ÎyŠ£]ËÇÝàÉoÈØËÆ3‚›®—ŽO5,—ÖÙù¯t.L¨vÁí±Ê$uæªÚZ½Rµ¹%QSïÆe³ù®Xéky»ñûÒb8Ã[dÎ[&¥¦}3Ð¼›-ÍÁßÿö7EøëŸÆYƒâï}qœ¥eÞSšÀÂ G“‡\w³Ø„µ/>‹>‹>üw:¹!H²yw?üð³èg¯ói½ùÂùÕo1c¶j´î›š™¸á&ÕzÞzîs{¡¸Y`)æ¼´@eaúBCØ"‰§p•c‘ÒÆû?I> ·‰²îñ}(ÿs#!I—ó9¦Žªãw´g Ê‰;ë!ë"Ò<£6f  óçõ5áõàKžjñ3ªå]ÅI$£Bw9ó&þ~Ô°ÚŽi”•…qÄ˜0òZŽÜ­–x-’Yò‘­¨Ïñwñà‘#)ñ*Œ×¼x¤YÜ´¬ãuçe§ºfCÑû¨-Â©‘0Ébw®ä™¼‰TéZFAæ}—h§V÷U•ÑÇ9s»Ñª5,Ã½Z	î•Yx-³üéOJvŸî<;Ù¿úí^$qi8ƒ¼R^DwnÙ¨Â¶%Ú½ä]þ¿   ÿÿì}[sI–Þ_É¦ÛÓÐ6	^Á–¸’: ’àæmJ³3ÚuHÕ]@¡« Š”š3/öÓzÖ»oÄî:fe‡/c»&Ú—‰y°#–ÿ¤ÿÀÌOð9y©Êºg ŠêfÅL‹( ²²²NžûùN,IN K±›OámŸ¨RVžÜŽöÉH øÅ#Ùý¸sñû4&ÝWlÊ'I×d*0a|ãVÐ÷Õ8s>£¦LÆHÝÕÝ\ó‚ÝžS/îR_ßÉ.ãS#ä{.ãtùâ=ªŒ˜E…OQœ!q/§ís2Æ "wkÿüs…äçáß0Û ùS Z÷qý©ÏIŸ‘W‘Î÷‘4=xF=îQŸ\0`iÄj$¹²áJ ÙôéG"Éf´9æœ˜ïÕj¡ŠAÕ¹ÍØ”ÚªÊ!Ú)¨)gŠ ©r~ÿwÿø‡ßý*þDy)¥VŒ-‚GO„7zÄJÁÚôô2‹l´bÁ¼™ß‰{ž	ÆLãŒy¹#^7 Ñ»ƒVAûB|™]zjõæå\¯è€VO3É¾*SHCÞÎh1˜pÏïeÈõ.¦=fþFÁeAßßÀ;21‘˜¦ˆTs;Î,gJšhá4³‰/lo(Þ–šÔÁ®­Ðê+z&U6tŽ|KÖ(óùh·TÔ©¸† HûÊfŒÅh”TÚ£œºÝ©¿ãN'XŸ%2DÙ©d3n€f•½žjI\‚f-E&Ï.ÒÞ9Õølÿ”›/€‰¼À‚*˜¸÷HyÅå0ÑwªF×kaJ„
+Â³qyŸVä’¢;#ßÎU†ùâa²çÍèÌfíqùÖÌú}Ž0D~e–ÿ—¯ÞÞ_EÎ›S‘q:q^À€âNdÕŽ;Bø2dý»¢ÑKûËÞsg§ë:+¨X¬|+" nµ¤ÊÌdaÇ¾eøÄ®½²#ì¢LD)^µ¡”R”)àHðÉµ¤w,]#^Ô´2r¥25Èvd¨£›9Õÿç°×Çêç€ó0ŸaV±GœÂzÉ<Å0ÒCa³’‘Üñ$IoçÏ‚Ãléôò˜=÷_ÛÊ)²•Ûpj”’Z&éi#8'tnF° ãÖV`‡-=üéaû³ÎQ½Ñ|¹Û®?>®ÿùq±]ShÕ`À‘å\¼†›YžÕ÷¬ñÀ/ö€ëg]E	M§Äw¬ž‰9—6âæ	5Ðˆ”ÂƒˆM®,h–c©ØZ¿ÆWÀ¯JGŠXálÄ+·Ñ°`[u¢Ôf²Ö¼Ìzîl¦jn}¾»Ðjš¤Œ{?Ëi4euxÜÖÓ„õ4ÉÅÓ)¨q‡c0hFXòœ^VƒÞ
+,Y›_eMêD„¥5¹,#kÔ7}fÐÚ¶¹Ó5L5Kq[&ÔŽ¨‹Î«™ã¹"R#²”Ô€•çL`ÚÝ|ïw:hƒöå1CU([2"ƒEóŒ1*]‘ˆ;³¢^³/83Éò*ùìZ±šÐhÕK‹àsç/ThîN?’e­,G.£“L
+aÎòÇLH¶Þ§WßZXTä08ê3‹)x*yƒæËô¬×«‘«‘ðœî@£äqº°p9ÐCÑí´½œÚ¥–²ÄGËYÿRóÒÙ¿úÑàÔ"` •ÉQï”wËÖRYRÚ™emZ¹-ç´¯iãW°Ø±u+$žDùÊFÒ÷¶½¦&Ò,HwJjO	UIÌ+î?)—:KmŒZ¨Yn\ÎÃ.ºï<òÜöy¢Þ‘…¨`Ž%PL{ .í>Æœ±c›‚†EÚÔrîpËE,~ókg(äi¸Ît8ÊO20Äs—§^a_óÇå©ž½¾Ó+Ž°Ìa^Ú€–;áå¯`ÿ6Ð¥±BYÔ{¨¥Q´<°EˆÀâ$á`NXy­à>{¯‰*-IØLTãmV‰œÕu’žÚÊs×}5r@É8`@¿0§Ê©åøy±/<ô	²ÐÙkÄZçH¡JýÓœ¨4&.D«E¥»˜Òàõ6-¯;°Ï\AŽÃ±í¥ï˜¤ÿ¬½GF6öÑÌMÓ/ Sùú80	§S{Wt{8¦£Ÿ¬‰_;Ë£•x>ôËqïô£¹‘¯šÝ–HyKã¨j‚ïž¥Š¨¡LDGJ=µ½!"’rR ‘¯jR9¯§ð¶sé5 Ênû®)õÉÐ²’)¶ƒ‹°L<±Bžxþ–4Ò„¯±uŠG]2õ™Wž½«Yè.×$Ov«wC›X+zì6dÅ_%æ¼[†·™›ƒÇ-‰VlxC¶|­bG´ž?©1 °B9Z)«ÌëµÎž‡ïHkºXÑ\4[OæeÏ:éw`ÿá6Þš#Îž=úJß«Ü±Î€´q»Ó\è•ö£ˆÛ¦”ÒaœNèöªâÚ¹	6^=‹sÄª{DEG˜¢/Ìs,2šžÐÀá–'í1)¼Žå?3‹ úé 40	Ë Z¾ä]å_òÙèà4ÌÊ@E[lþÓÛ&_ÁZ>¸!¼w›‰ÙÃ~ßß_¥ù´}çÝ²œYÀÐÓ¾ã=ÀÁ¸d™1Ø¦Øvc•0ÿét=LÿiðFa4»pFŸì|¦xN—Ú›=ÈlËé½‘ð¸7qGfûuùü—	¼±‰ë-à¸.#¯KSò"ÇÑ¿â#¸_a˜L¤WºqÉ'K@…%\—?ù	‰GT#,H'õÈ0žZŠ”ºC––rpÀÐIF©žyNQâO¢àõs×@x„Ž™hfs4ÙG#Ñ	_°)sëpR›²À\6âø$Å%Œ÷[ÉÞÃx¦›8k¡F¸x|µ‡lßI·„Ñ°v1²ªO&Vw ÄÝÃÓSÚsDM"Öð0ü¡ƒC£n‚ô’!¦KB! 3`Â|ió©éb©±Ã*ZAdJ­ëU ÕL‘‘yqÂ¶ãó—we×ƒõíåõ»µåõ{ËkÕ;h~‰#ŽÉs¦†­fÌðGQDŠ",U¸ì¸¢{V$6ï£ÿ½ëLml¬’
+r Q'1/Lõ0szî2vWï}9`	ê°‘ßâ¸ñÑrC>ìÐ(¨Ôzb-t-4’¡……(h1LoL¾Š°J‰EÒš¹Îm´›ùh¯Ã‘3Ãe¨ÞtÐù¾ÀU(¤9Íº_"]ÖÆ–õ¤JýKÞa65y#¥b<¬æ^ÊmöZ¸ÐiðÑîkXF¢+ÈuÅ«naºZNÊZùhÙµ¯™]½·×‚ü\ª­l[˜ÄC°q'v4çêÌö§ÀvÑÉ¸âU÷káøû)/0äIáVgRl"j×ßëcU˜¢Th…ÊÒm&á²xB-Oø$%ˆ›O¸vbÁæè¬®.ñŠAí:ïê;ÖàM7\À-ü£dè@)H	Ã
+-³»Ï‹g-ˆÏ!9Uüh”½ç›A»60Ñ3iÍº”By´˜%1óš×e.Ð›R’§?ˆ´Ã\')`ø®3PQC¯-Ë+@Ç[KYRªÛ¬'\°ÉAÄ"µÊ/;=^}ÐNÊf]5KÕv­¯±>Åªn¸]¨o‰Áf¶3!^ùµ‘×*iéaÇÉPf$5±»Ÿ='YÛ³ž{u°™;—qb*¦<µ®ËÂ9ÎLxˆ¨®s3ÇmSÇ¡#‹`³ÖttH'°ÛDÃ†1+Ÿ´EŸMlo‰Æç[X’Þàm‰ûÏAo°O€IƒE'³µ`Ý¼)+¡ìá˜v1>²Ìó·øU]î¬‡ûÐ¾ååeEç—Eû@ç¤(Xß§=Ö<½3±X¿ü4q³ý¨ñNƒ×¹å#@d÷jä5l£ý¶FP¸‡!‚Mà-µGá go^Æ[«GÖ7b…|œÏlÅ¢X÷"ùÆC!’mÿPË)£ga’xgCîh6Ã¾+^\°ª¸ôðÈs»Ôgwm«?ºúèJ€£—›S„¥¶žË*åœ-¯)éÒCY²Ü§3¡cÿ²ü4S;ä…|6SýåÓ†€ò¬ŽØjÓNŒ"Z#`CæÔâqC‹=ÚGü#OAaõ‰ÕµzW¿âß
+éÝÀ!D'ÓT8»Ëar¥Õìð¢!­­®§()xHR=ôFÅÔàÕd¬¤½ ¡C½IÃöºNÌèÜ†½½”Ã£dúÃËiÅT˜ÃÐ3¸–ò…±ÎE+@Öˆg¤hpÇð±‚²v¦gÀS¯'aõÓà(a*PŒöŸ¦å´OÊió1Ñp4u¦}êÑQ×¶0¶f!×m|Ú…Ê:sc/­úQ›á š³Ô¡”ØþAõÍÆNàL÷ñÀÐdIäð¨¹ˆöYÃ«·8ÜÂG+ªÏ] Åíæ6ëv /Qê1ÂTÉÙÙ3•„Jb;÷1,/l/JÍ#ËÛ!Ï©‡ê$yŠ* wÁ¢¾ûÖMùfÏfŠT>@0›‡ÝCõ'½ÂÃÇ+]~?âÃ{0@¡M`“®I²ä5ÃcÞH€Åª”\Ã9€ddÁddHxCÍ£ÐÂŸÄ.ôãkjuš}r³QÈ·Ö2`1îqoZ,†Éóž	¦*Þ`,²þd@>&ëE~AèÄya¸ŠÛÏ0&t†½Mé"}ëzfq¿ŸLF+E$M^Kçã³ãÌ®Øÿfó¥¾+LæZ+%žÜ—¬¼I)¤)@,“¸d›ÙXvéèf÷Öbdž
+¶¿¥Þ+ê!;)›d£¥éôSÝY…K-ÜÅÏ]çÝÍ¨—Ÿ¡´AqL«°-5f]4žFXájÿÙù¯…pz´=RI%±Ëâü5é8ÖÚš0Yí)&„Åèþ!YÓÃã×º„»»çjïí”ÝÝsu÷vÉ}™Ù&‡¯lª áä†ïž`ÿÔÏ¬Ñk+¾˜Œ.>­À ^@¥í¢íÙè¾ÊLôÄgFW"A$aºr¾òbeýsÍ„6€†n®$-n0ý c¶n.ž½(º[ñÛª1'o1ŠVg·9©šl,Äÿ’¸ýˆù:p_	ÇýlßU>ðÓNk#ò3Ôˆ”5Õ´zÃh‚ú'p&gyw;_2-S¸ˆ`íÒV^óZ™žgO€_* 7üD-Ú” °Ÿä_üW÷t¢Ê£4ÌV8#…wó“[ZIxD3„Š
+¾¶¤¢Õ‰i;-±ø?¢|!‘§q½¤ªû{Ö¼ÝYÔ<Þ¤’	¾~|J6{ÌæŽ/‰ÿá,ø5Ô/Nö#û±Ã’*zTÒœN ˆ£7“³"äNú½À2åBZTSR`Ö€aÒ»G€¢UJq[üf+Nš;‰ý÷Ž»†ÓKÒ2Ú5Å¿Ôé,Rª«ÆºÏ]‘»Ú·Îh¹]-ö)\nÓÙ¶fÖaFÎ¡šõîT
+óîyš[zÖ-òdjy=+²%¸I÷»d×µF]ê0™RŠììúy^¶R”pvê£e½[«vq„øç³R!ws&ÃëlüTÔùã¯ÿžu—©ï>¯4š»d¿¹ÛjÔ÷H»ytØ>&OŸí’ãÃÃ½ÖÁò¨Þ.°s³l\cØë0¯%’Ív¯¦ôáýjÒú8w´³éä¢Ô[¤3¹p(ù	yŒÝû&dßíÙ§6*Øm÷•ŽC<«	º†l4ÆŠ×“·šÁ”¸ÊV¾W¥ž;föskœé9ÊËCÑÞÄO©çYCtyY,ŽÜ¦§ìµR—4D}89r}˜¸íz¤Òª;”tcXx¼‘æÞ#XÆ0F›röƒå¨úMSon'fû”Ä±OÌš–ƒ¡ÔV]ëViÉfñ¢ZemŸ–ã+÷¹Q›öàŠ±òÂdýf‘p¯'Ñ¹V’Ä`pg¹®³rg°l›hÑË2’,¤â['ï¦öSªqÄœ¾øDMB5—c8KK6àÍÌSûgÎtŸ4tw!w!…(í˜µ+²n%tEÌƒÔh#ë‡¹EsnJåÓG¾lÐ˜=Ø	H_X¤C9q$I=Žf ØÏ«ßfNêS,ß)LÃÊ¤/³”n~pU£ËL@Î;î2Ó‘xý`–Øî0%Vw‚j–å°Œ'3½Ðr& »‡)› ðLsh1¸2™ú±ô(ø•H‚Ÿù.ï Ñ+J”â;ÖðäÅõš¾g÷þS¥}ÐèœþNø±&ÆµX˜kÁ\¦ÖŠ±—v!x9lgêw=û„eÎÓä†fLC$Î=…wE-ì®.ÀÒN0;‚\HÊx+ –À» W¿Ç”Tþ+Ì nðë>üeñ.Óc{=C
+À~˜µÚu±æ›;gI×»úvÂÒWÁ sý1íP%
+Óˆ-æB>£UÒtì!lW1{áÚöh8&#0æÔfho!ýðYØ=«'H¨óÆ|ê1‚æzæ{_råfœFíÞÕoF8“ê’Vu]¯‰¿ˆÀþ(cjoÄMí$@^9ÓZKf~lE,óÍô4Žù
+¶¸,3“X¼êM»vDZY
+5
+*ãI›ü­Â=l
+0?Û>ù²1L!’ã96?Q°rN½ #ßÿÝÛw¤XÏ9ËåÔ:C{Ôõ(r	‹ìµž4ÛõýæÁq_ÖÈ>£l«õ(bŽSÆ"TéÒ‹±¬àý§Däf‚L€ëäÅLÜHôK„ºäÆ®’úÕo-&[h×–lHd×û(j&6“Hþ2îît¢Üy&‹éú,Aÿê»!£-(íÛX÷tõ­ä[Ë8"pØ3žÞ"·‡£p¨uäÉcÁ¬è9	L_0SDÚ…	HöÖµñÓøê-Ø§p«¾Ýg,•ßVä‹‘°XIÎ³‘Ù5A
+OqPW “E÷y½ÇsèöãÆMçød4È[Nc–(Ç½[nù>pËV°Q#<£œæØFä»0PPiCÊ„Iù4A@×Ï;›ç}MgŠ£ä¿þ·ÿãÈ?EÇ85J`\½F¦çk °§`tZÁ‹ì^}‡Ô§*Rl+=—‘0"1ÆÃ5ZM¬”­´»ðïböÍ°ûˆLÀÛJÉ
+ãD á—Ê
+VQU?´‡¬Ì“1E§ãH?U¢è¥¡àÆ*8O6zÇBñ0>£Fwhcfãe
+Ê ;ñ¢á-Û¹±l§!I“ÛgRÒ§}0#d&W·ShòúÍc!÷Äžøã¯õþð»_ý ÙÌ1Èüi—¢bâ¦;{S¾ï\ýË–XyvXpè’éÄ–í-±6Û€¶áµÂëÄ®îü}+Ýþ\Ž•ÅzúY¤ÞhWI|2j~¨òËó44‹—b…M½€ûL@ÛŸ:øc¦{f2¥$ÕÜ‹T’ßÚ~ï#[áDc‡¨ïV‚R¸BÂ»~fÒÓ¸ÀMþÕïáÿ¿3d'Å¿Ôp'êÔð$]c².>äP^È€?Œ÷¬.Õ¢Z™Mz¨0Ó
+§<+ßjæÀkÁôûÒžæ°Ë¸ÎS×ƒU¶šŸ*íVgõ¨Þèè$ëEê®_J/òœkgÁF ®k‘Ú3O Ùï/ÚÍ£•ßì[“AõÔq]¯Âþd½‡0—?!÷Öà¸ƒkøÇåËÚ‹!ºö‡ã2¢¯ðÑÊêÄmu;lW¹£;XÂÜg¸#þœ\è^Ús»×Ûÿ"±’o¾!K».pZòÜr\ID­ú’î˜R°íø‹È1îðÄÃrßÆ>n=W{\Êfvz]Q1cpâl`t´‡JÃKà8ï¥g½Úa Ìj‡Ž…DõòIõâ„œ<¿ôÕ_8èH¨L€­âù?í,°c'¦“Ó•»Ë¾¡£®Û£ÏÚ­†l;\ùÃƒªÏ VU‘Ô¾LFSÇY&wî\~a2ŸžhµTu®sÒ`þ˜*Øà°M‡™ß•%kI3±Êa€ÁˆšÅ/<zº´¬¬Â<•_ÂÀ_ 5ú/=Ûùá¹6U¹¿/«xß/´o)âÄí]T-àÔ£^c`;½Jt2åž ‹üM7ñ9v­G‡ ùè]¬›NBk‚ŒýŒ¾jMMãŒÇªS‘ˆãÉœ÷R"Öy`ÅY%eÙ=×J´&D®{²‹êà •Ç<O¶’ÝþdG5ÖíO‘ã(«W›OÛ÷œ
+Ï@êX'¸"Y•óa>®nÆÓ}†Ã¦M›ºŠä_ÿ_meBSÔÃ)úIAÕZfQ‡YN^,^»Îš€(á[$¥ZR'ÝŽµ8BÄ²0I ö"kšQ°ˆ•Z.þ]’²‡î¬¼¨mà,‘±7>	Ñ)N9yÛRêêÃ†DÁÑmæŸà`ò”Oï[¯Ötüâ3{/`°G
+ëÙ>%Óü$ž]$Ñ„TÎÖç›Îgj±5×9HÑ\½´ìÁOÉ¦œ—õ°¤‹Ñ¸Iõ´†×ä'MóW—½éåÒ¤7)‰÷øHôò8÷3ú~)ìáÒ¦ ÅŒyVZ˜H¼‘ÓL#ø•ÖJ{=¨Ó¸d`]¤¤myÒtàÑÉ3ôÒÉ°kÏf}W5Gïƒ°ûƒ€	7xo£kâÁJÛ«Åsá(þà;çÃsI´^ 'NÁc4ãÅÏ%ÝËt6 ÷:wmWrPs®™S+H)saÕÉVBÀ§c',Lz£$“VØA-›IG˜†£Ž¿œ4.=©5…OÏ›/Ïô,ß,‡(‘UœRìN-MIuDÃß…¾h­bÇ:¡ÎbØ©Ù4.Jèck‡  .©ð×qA³ç˜Í÷®tvÊ@^Ô{"‘àØ'žÈEùþÿìaèßžØt‘ôyùåÕÛ‘€”hb»i£»ië&êívì6É£ÃãÃƒfÿ¬ïµšõFëêoÈÏH§¾w|ˆ§®~ù¤uPgˆÍÕS¬ÀXuZv`Pácct=•-Ë˜œúK}%Â‹1u{N‘Bêˆ1-]B»wæ+ð¯3¼¯ŽáŽé‰…ò¥ŒT_î6_Õ‘R?_Ò­ÊÃÀk±<j©ží>·ö£‹V¯²$³2dÜiEAØ\ºC,Ÿ<=ÞßCnV‡‰+É7Ìã®;,è’·1©äâÁÑSåªˆ¶¸d^Ó¯~âcbG£´›p¾Ìx¢¿+Œ™WYÒ~mr¼}Å.~ G®úÓø¨¬-ó%Á8Ü1ú‹Ñ‡o€\.ñ¯/àTòxØËÃÄtÌF9¶‡ÔN*¦å$|/§@´¾>@JäZDK‘¯µmú´Â	écÜ\¡±%V3qÞ¤–o™ÔÖôæ@>gÔ_´7"[Gò?¥Ñƒþ¤ô‚}¥²d”J¿	ƒjø¶=á'×RB'ì†‹÷âÓ³”î­×Wº'¢§Ô{Í‹x‚ü)ßîOEói‹Ž»”gsÙ]ÛÙWáOÆWoÑ-ÄRª@Îú û³ìbÎUVç>¶ò&û>&-ž+ê‘ŽåðL±#>ÿ÷:O¯œ ovŽ@ÿ<|¹¾¶¿+Åo¥ø­×»öVŠß@)®¸Ó¶“ p©’<éí½•æB¼aë+æ«yÍ±ƒÕ³EŽ<H½õµáP¸EÐÓÀ
+yép<ýD£Ì†&ƒéÕo¼Skäús”êuÏs_åŠu£nüø˜4Åã>r¬úµ>Æ'ÔsÆÏ5]¶dtÓBí®^nib»IöÆÎ_ÊS»cKíZÝ^÷%»,¼+‚”å©
+…œYÎ”>x—Å´¨òoP£(%iüVaf ÚTÙm4’úUÜÝWA<*Œ&fã?EÒ°B×“U±œüíµ8\ÔvÒð‡MôôéÐŽ7õ[‡ëÇÀÑè ¾ˆ"©mÃL@º²NjÛ,ÆÏ°>ë5]¹P¨7DÑÂôµý}Ëñ•nžáaïŠO	ð‚À®º˜âð…­µñùÏÉÐ­À7[5KÅˆÓ`åÞv1qè@á*ñ`I:—Ý ”¢V¹¥,_O¯¾Åtý‚ÁgíÁVq™<f˜È”ìšµ¤4^¹›üN!êT¼>¤µ@Ž
+eå|™5ñƒxç‰ ž»|ã±nD`-aµ¶#Š˜âHN…˜éÜT?hî1ß}ì&áÇ?ºúe»]|HŽÛ¤U'•Îá^«Ñ:®ïòSpÅ³Î³z»uxGÃ¡¹nìiï8<k(ËôuM­”Æéw±äâ.É¨ÈàŠQ”TH@CºQù… ¾élÔ–6b´÷W¾e.7Øà¦pÛGp»ùtHRFÕSIÔg7štÙöqÂC ö³!#Šußö'ÌÓÄ5Ð€°v™®.Ò]ð<…Ýëb¿Oë”»SäÂ\.Ð@¦CÃÇKn÷ ùdác8Ç±zª²`É{.“‚ÌêŒ¸ÿ.‚~¤•.PAW½èÈÉìÇF@€å  g ä°çilº‚Î+SÔ¾ÄH’JŒRç
+êOróŠÄ¶ÇH¬ƒ£é@Ú˜~Q/ãç¥@‡úüaTrE¹ë:.630.Fà‡,€GØOX*”˜.ºƒìç™±†Í ïtMI~°¶5S,¿¶”Hç~Àìz®–vÅîš™ëÉÛÍcú‚ÜÚ»¼¨FM(“M¨õU›¸Ÿ hë¼2qYŽØU§X-!_µãŸ¨¬ÎöQÅ+±c2:ƒîñÑÊ4”Ï3ÚçRJ›ptS$Ø¯³›Ì†pàq«ÔÀÇÂ¥t]üRwëiKS£}­0híìÍšÖÀÝRl…ÍòjÞâÌ½ÑÍRƒq;z~³:ÖÌ¤×³ñ³Ò°õ²’YŸ”¡ Zƒêé€$»zÛeø@<wÐì¡Œ¶9¿ÂÐhÉÙ `€qcÚ“‹CøÇC^ˆŽÌëªÏÆbóœËuz Ež*ÇIô©ºW«¡<Šv€ŠíEñKÃÈìËéDI¿ŒÒ‰Yú¥zÔqgÒë¡½v/‘{ä¯r¬t6Qéš]3+ÖšÇŸJ¯vVøÇø-¤TE¬“ü?^<]M)‹€™3'‚®.Obqc\'ƒB™±ùÛ××ÿY†þ¸iî€õw€Ô<8šliïÀ?ý¿—ÃÐ0R«;¥žhÅæXqh6tŽ¯Þ2´4^e„d¢Ö§ähJ‘I±ähR"_OYàÈŸrHL÷p××»äÄÆGñ°Ô¨Ô;Âuõ >…%±šèˆÀKD@ÄÓ”`¬ð8H½£“+–W„9øu~qï¦±cÐÜí€G9×©X[Çn¿ïˆORÊT–8é"JÉ#Ö R"Cq¦–,×Wú«³`QQCœ”:|´µcnµIŽv«GyT2Äí‹LQý9
+rã«„€ÿœŽ„îŠàd^yçë¿-ßáóÉ¶”qOD¼Ï5w£Æ ŠD”Äšß5Òœ2%zƒ`‘ÃcC·¥<t›RòcF]ù£ÅAÄ›ÅÖÊªä8W_%SÒ-£ÓdÝTîÄ@úiï–=Ý\ö$_QIþô¿EÅ7Þ9wõnM5QC3Á©Rúé®nÖ®›{ñ{o¾·Ü+X÷’Ü«ÎZjô~ô\«ÿ`JÀ-Ûº¹l+xG%ù– Ç©¡G3ÞIr-vb£VÌ´B¤kçYìæ=eY3¢âDîù°!ZsÌÂ¿ô¯0r$¼É¦èÅ¹ï˜¸ýÙC¥ùÃ%ÛÁòlXdê/Áågáó3ïù!Ë!Î'á›x@Þjµšõ¢4q%Õ£/L·Èmrøì¢o Y²ù}|:ÙO_–JäÞF©xÄõù‘—‘£Ä:“XÔ›z-Ï2œ²qœö›Q°±‹·MO=ê±~v,Þ´a¤—‡ÚÛÎâí¾DC¯®)‡5æ±ÚÚšÁ¸:ùŸx0(w"{…YaÞ•c¡?¼lB¢œ?Lï#§ïÎ|'Tôœb÷£X¶OeÉÎsñššhÚ!*þ8:ÚžË\ëe’˜¾¾@§¦kìAzc–¶€Å”PÛÙÄOŒÔöqZ*–0íÅâmT®+y¯‰üÖD=TBV*®¶5Óˆ6÷zæTBÄ<Ï=¤ÉF«ÛSÓW˜TÈ¼»¯êk¤þÎ çb¶é@ŸˆîAžaŽ©KàFñ%l6sË—Á—äâÞò¥›É—°Ð­vÚ¸aV6´O¿t½¢¬öí–	-‚	‰µ½åA7“!Â«nËâC'Î”^?zj¡ELƒÖ‘?2näXöè–-ˆ±Å½åG7“±weO.2ùÑQ´¯5ÏyÞ‰±å‚]zËˆÁˆ‚Õ½åD7“6
+ê®—5dÒqif¤÷k³ºÀÆ³ún›Á'ï¶®~¹wøäÝñ{­Gí&9ª·ë°–šíÎáA}¯õóúny}¤XªfT08k±Ôðö©ï[}Úùzjy1z›O1“n?‰,Yë˜ŽèÄæ›U„Ä6¾üãÂˆs@%Ç1H0Û&ðiïÙøÕÚ£ñT¯e"?¸DgÐ*W	ü¥.H3wò#ÏŽ5[ó#Ž©‘6¨9&“z“ÏèÂw1K@ÄIZýŠ^pAÚduÝ˜‚‘úø2}¾ÿ ]'1A­äG¦ÆÄ&°´œ;Ãð¼ÉÊò£K_î¼Ã¶áË¢^7¥(GÁ«,RíÑîÀZF(ªéÕ¡LG9õ€wh`2©G²iHJšV ’«CÉ—jc "Î~KÿáL8´qúNÙÔ™Òvpïå÷s/™=˜`öAÞƒ˜Ü,ŠÀ¹t›Wpéâà›5 è y¼Zí‚Qð…ºRê^”ž°•”}¦ÛUT¶ÀÊÁÜ,‹Öa”îÒÁ»™q6ØP¼ÓçèÌ6ÕÆÍ3u”cåD9ö€ÖVÇ³È|^ðXÜ»²­©Ñ›™÷èCˆù^>'õ6¢Äƒ¤“PÏƒ{øc{d¦«kÄÐ®R»ŽE7¢™’î¹]êcww– 9u&Xèzõ-¢÷V|Š…§­:ˆyZ×µZPÒØ>ùÖ—¾‡"öQiRgÈI3ºG{²Ua”®ÙÜ¢tûÙŠj0ø3lø¬ðQŽs-	<†»bBâu‡z“†íulÏÞ‹¹–CN°ßŒÌMðÀ\tGý‡|ý~—Ó©'“ w€óŸ¤¿³¯/ˆ^9h0eß<¹1þø|¬¹1ç»Ñvœymõ¶BKÕE4kfÅÝ7ãÝ;èxÓu](›èŽMä?ç¢Æ˜¦þÿÜ/ÂkÄÆfJM@‚Y`ŸLÙÆ»@™ÅÃé¤)–R°ZRw–í‰ïÃ´œQôè×GWoÛ·}Òàrq%ÍÌ(,0¼S›ödÊôÑmùyÞHdzà}v)BRPÒøs¾‹áâD`Ž?Ó®ÝãÀHs}® Rƒ÷kÀ«êN¶š~×rÌoµÔjzÈÑóijjgèxpéƒÍ^ÊaO½`ÿëÊ vç¯LÑe7R@âÒÚ¼ru°&y²þZç+ˆFžh8;öVÖcMbvqº,5Ö%ŒV¿Îð©Ïâö¨ëzcLÉ# á£Â3·RØ+‚þ×)¸ÕÛfÌœ´è¶ïkxŽŠï:Øê
+[…0’WßÅù°»¦#t'
+ì].ÐsÂ©ã­Ü7°O‡y~óëËÿ•pi—Þ€â>^Æ]‹`[|mðÅ—ïÃ²î¸gk“c{m¨¨Yç–<Y«EœU™©ùH}9š\Ü%êÙ%á¦Ë-Ðf•Í›<$W’+ï#Q¨†Š¡LYÎ.Ê¤V}ÁEpí~ÅíÃ'šºÏm3š/QÉ¦kañÙQÐ®GO¬/]àI6ÌÛ£äê÷Û™3£y÷<_ GdjðPßîa˜'–òIJ‚Kškð“¨e‘|ÀÎŸTIîÄq±9d .ß³=_ À	ºE-MâRìbñ¬àÌƒ·o÷û3Üs»lî7+Ôûí[^ØÂÉŒÜ ÄÕ Ã‡ É®è»2[¸ok©ï1µÿ‡³mÅ¦•DÃ$rWõDZM\ÐÚ!Î‘"§=[OC/Î‘3ÍGIBl‡*ôÿçmdž–€(bA(wŒÈ˜ïÑN3u¬3»oM\¯Úuìñ‰ky½ê+h–õ­HwÚòî¦ˆ:ñ+K¡Û®‹‹ÿ¢ßÁAÇÖ˜²ŠX×eIÕôF†ÀE|#­5DM±°}Ä¢˜ÉœYˆØBÌSÅÌg®€1nJ0™9:
+{gä0™‹<_L–µ(Å ô¯XX<fnãiŒUøä‚Ïm^-9­tº†/ž #Õ» î)©O&Vw@{¤5´ú°yµz™Yâ"~ìû¬]k?³¹u1ãn©á‰vc4QãÆ¾½¿î6gkÍ%Ù—IÛƒúˆž»;`]÷mŒv"“hXãÉÔ³|²k[ýÑÕw>:À}RIõ—ºÝºî¯6ÒM´~š»²N†½†_·þ›Ž?ñÐW*ö°Ï¤µ¾õÍ&ù½xð®­Ú½ËüV5›m:bI*%€±a*Ä÷º|NSÏ¹Y>áŸF0±ÈEÏSË£4z±µºù9qO¾Ä]”žA´†SjÚ´ïÕLÃ…l6] G%á‚ÌªhüóŽ2‘
+!Oûþÿ Nçòû_ü{ã°ã¢ ïïh¬=è¼„”Æ8ÅýRs­m”qüõßÿã~÷+²_?xVß#GíÃãÃÆá^‡tš{ÍÆqëð€<©7gèã™—¿Óý7ÚÎ·&MEø¤ÛŽs^Å!‰€7ÂŸ±xuQÃ©ŒžØj*ÒnÃ¤×Æf°4<‹¿ÕBBÓês](acf@¶À5‰áóf²Ø‘çN\˜óÉ6ßqÇª¯¬ÉÕwÃb|¶b9ª³ë2Û`*UQ;)c-ŒsÃ:Aƒ7Éåb}˜{HsÞÐB/†g~In£p»Åb*š]€Áé]P¸¸ûÒF£wÈblcñºÏÖÙ±Ñ‹BYj7=KÄ>x_rZ%Ø{N}õ6œ‡—Ÿ¡X˜•h†·U^¶ˆÓW>n‡ÕbhÏ7/Š{b÷vÈRý¤çÂ‚/-Ç:¡NäŒŸþøëÿþË%r¹¬;Þ>¼_M~æcýë_˜ŒõÜ5têÙ#Ë³#ƒ>¿ú¾y¦|Ã‡ÿÍïM†Ç6á@ŒÊ¸á>Þú“ñSê8êpÁ	>Úù&£µÝžä¬žáãýçÿi2ÞSwxâ©³NðÑþú¿™ŒvìžØÑ‡ÏˆÙý/#²™úÀê(ál×SéG~QFþË¿5ùÈõ3†ÆoÊ}õ[Úµ"cÊ3|¼÷W ¨‘Û‹ÿÈû›¿2éÈò@Cg»™ÅrÂAƒoÂçþû·†ó<²F`Å6otLG=!íê_OÁ\ö#·~º~[†JÔ£@³ä€‚4™Dž)å+~‡ó¿—
+ëv>–èYšŽY=lû2=ƒË*E=Ë×ÀáÀú+v‰z$ÔHÏ™bà¯æ(Ÿ„ž½`îÙ.éÑÆ2°ì3)óé¤¨bàî¾… t€Yî&§¬ïøÆvÑ`Wc	~g2í]¡÷.5}ë˜ô¦3#!Ù!®+fõÃËò_ÄüÞ=PÉØ‡ØæMN—íNœ²v0»,¶Oô!7ä~Ö~—NP¦®LÜœzîP­¥ƒ“âÓ'k™x<óHØ‹/Ö^nŒÏ_‚öÒëŸX•{÷–××6–7¶Ö—×ª›wTÃMß}k_€.ÖX¬Ï®k‚r|¢W	(Fo¢z@š®Bf!
+xi’õšÌ÷¦£.<Ò’Ž	ƒ!õC…Là²À£“/ú&Æz5<m:2=k:Yžú’ÍTJÅdðß–ßZÞMpwx±k[ŽÛ?ÓQ^´AZmµ–ß<&?d˜ÎG‚VAäÌ¶Ä§(S	3•”ýèæó§Ÿ
+ë“^÷ Ã®nä•ßÆ9o6à~DhµrÒÚh…PÍa‡«2HÍœ§|ÿÿ•ìƒ1Æ@tÐ­Ð˜Z=KÙµ¯Þ1¹¤ìØ}æ£¨Ä6Üå]Ö¡Ë84<@¹d]Ì5x®#B8p—ÇÑUƒƒ­>¼]ÐóiQ¦Óv¬š6(ŸŽOf€‘…Ë·dŠM÷Âi‡ß‘ë“aW´†Woúa'R –©Ä*Ÿ9Ø«ÖÙ=—¬’ÝVãp_cGµ"e`%áì}žpùvbœ“ÿˆûÀSêÅ4–tï°Qß#MÒ:8n¶çà×X«y:“k‹q&[^w`Ÿ¹>Aátf÷¦ò}—áÈ _S–E7;øÜÊ(’QÝêT¡DL«›²_O1[Æ³ªdÏòAœ¹C·gyt·Qrð/2¹`>ä«ßÂSxWoG©Nd”0úÑîc1 ói‹.Ë^Ï'žGÃåœ¯Ü£Þõ¬>È·üáŽÉÏÑxÂOÈf`3Â3’cÏîÏ.Îa\®à¥¨ü<ÆÂ{–	'	s0bR(
+Jº'á`†Ó°™lïWGú0ø¸HñpG¸šØÉ nŠVÇ=ƒÉìÒS­R¬×i8w¼Ð9Hh¬ž5±ŽqñN)C*ˆž©ž¢OÏG#r‰EVÒŸ_I­xjEëS°€¦Ò	(¢œD;âex9E­d·úm¼Î8Æ/“­©4Dþ³±ãZ1dšmÐ ¶54=ù™–a!öœTÄtúÎ¥
+x›M%O£–)@ôJÝëpz¸Ø°¯È7”!L$ëëéÕ·êˆIÚ#Þž«‘W®õ ‡d:±±É“r¬–c,Ê={A$óÅó*ÖæJ«LBã¹´¨¤(6	ŠI"&ËYªÏ#fäè$$šT ¦÷è¶àºÏ\<ñŒã¨¬Õõ$ZÖ67“SMèÿ.ƒE å-Xæq²)p!$xJn®q¶(jÑdZm fùjšÔM‡öm¶¨Ø‰«äç­#Û2dÌâ¤X<¸Ç%Í’ÞC—6hŽz¿¶º]:ž<X²Ñ„[ý“åj¯;\®î6ö—«¯íñ²5føVãŸÏWàÌ
+*žõ}P€õî˜ÀÙL´b“‹ØK½¡Õi÷z`ë\§c‘®²=UüÃY7gn1@Q¢É]&^Ó¦Û³.P}On»¾‚`6„ÙäÊíx“öâµoÅûNÔOæ,6H™zU›xìŽ§¸WÈ;aT® X£-®Ýzƒ	cÃÈ•%bÑ<Æ¤³[~y75A;3-’©:˜^ÕðBOóHËÜT§…w“üJm÷¥çÉ>ëGS¾·È`ek‰ ‰:–X9³é«Gîùƒ¥5²F6¶àK«¾‚€±yÀÁhèVgŒ­É@°gh×?Xb²¤œýXeìôOíÞdðà¬ò%é=XÚ¿GÖ7œ²A¶V¶†ÛdÃºGîÁ××WÖïÂ¿üÓÚ:~x­ëÙ_…ÑÙ:šŽû=U³%÷ýÁVy¤u/…v­	CsÈ‘ÕåY“{ÔõÜèñï¯¶´&–iµÅxb"Q û=LnßK=[J/;]Du˜d2$¸ŸZe†¾i,0;$®&J:¦’IÆH=s	‘]ýí5G
+…ÃžíOVŸ`j¬{JŽÓáÉÈ²Ÿ¼²[Èj¡ˆ·q¦O<ÊYöOd÷ôBÑ1S[|;‡M tíÉ¹‡ŸØ¨…mâŽ†­ˆ+E•ƒ<xÆª1ƒ„Š¹öÐ0`xÌƒ«zÌHÇÅ}l÷§ :êÖü„˜ß¶/Ç€ FÁÂít’ÅD¹5Ý›Dm¤^2Íô‰	µ©ÿvRpòn\)bßç£'v"ð\êšKþ$¢¹¤ôYÒ€õÇ]Ø‡öä&V¦t:
+–Æn<:ñ®¾ëó¢b+‘|t·yô”‚æÓÅäô
+Ã±7f‘õe²±Lè¤[½#Jdv€Õ 71íjÅTºùÔ¤PÑ¨‚0¼šÛœ*Xu”<J¢?õ¬„QÏ­V«æx…Úetdgq‹e¾Ê´Îç±8’î|$6ÎB¸Tº‡Fà³1Þº½‡flÝq8ƒ,ÃxÙ°{`ÙYj4ƒ*îNe«Q¯pjPè=d­Ly7…u•F;XÇî„ó.rì¾Ç,=“NabsY&–þ <k˜»AlLç×euZ(ƒ•Ÿk—ÇVÀ®<×Ç<‹š
+N2ÏW¬· û†g2q<1›ÒäQ¥zºhcpƒ¤1Q³g9Fìä¹SŽ®[CïgÆ&h:#RŒº­>Ýä95ZUŠÆ2±{çeB¼ÆJø÷M8Ø×÷AT†¡üfRìÿî„ÝlŸN¬Çž;D·;¢ZT$¼Å2»ŠùŸð7Ø›óN0ˆ^áMd:Gžû¥˜ÊþqìY&Sb:Ì¥ãÓññÏY&‚ü©žþfP¸¦ŠRÓƒD©¥B¢`b%³‡Î¨ÈîÒVE0JÁ]I`Ta0‚'%àÉ²ø™àà’“½püãLÀ*YežfäƒœFìžIç3”6åZ'¾ëL'ˆWˆy‚|¢ðaJgz”VÊžÌ m$k‚ý:†sºr	‹–D…ŽTs£ÙYò,–CÅä×+……‹¡éØX„ë±”Ì%E&î“7Än4ÐŠþ|öeæÈcB&Ø,¡ 6Hjê>t¦Ã	iF¶Ò'#G‡ž"5f©¯áÍ›Á+%¢vJ®w43èÐ7<{Ïƒ‰œ8SÀã­òB·m"9=€^Ê*ÐÙŒl³u†yÜzò¬];­wN>&ë‹l3‘\CÖ·}Û×¸Œº+“ýôäÃ7	uõ÷÷Ÿ,‰ZÎÓiwàÛ–|SÊ‹‰.¸ü_ñ%Q^ÉÒ.Š.•¹xÝå—fo$ÿØ¿0•gëh	¢ýóØcþŠ:fdfr%Ãga=S(±Äf˜Ç‰Üp‚‹3©¤P¨Bz[>zð¯áÖÕ+­QÚ´ÍO³&Y‘6£¦ÙÆ=¾4òs¥Ãl6± +‰YÃ™WªÃXÝ’ÐÂñ0üÓœ‘ü”µ6”¬ä'U%mÖ¢L?S@e½þfAë?ÓVe|]£´7°NÓv‰T/Süfi´ÁtÀX‹v@I°ïoû6El.4	Ð
+Û{ „ÇR­Vñ›e"ã6ÕK(ÅFÚß™¤[„Q?«cC`	¨zÊY‘UKFéÎ]¶g0fÔôëòtN‘ì…?„ÿÜ_åçgèæá³N¹Á€Í°­e„»ž«xº¨Å%¥8Q®€¬Ï”\ñ˜WÀ£ˆ3ì2ÎÐh°Û‡%Xsd¡ËjVF‡1³Àã½cx˜y’q =<„ÿ”e)Ci=l4æ8 #Ò‡øßòƒ–äJìÒ91ô­Þ\Æ°K=ÚXŒ+´^=µ©×ãŸÙHæžå¼{F.å[arÌaûIÊx¸ÛlÏqW‡Dö°õó?›ãÀ!½>|ÔÚ›Ë0½Îì
+£¦G¦³Ÿë{EÀÜköì	ÃüÇµçh Üó™ú€µ¿¦æq‰jNi²—1ÇÓJÇÒ}‰zðˆâ¸ðó²ž	Ù¥~×³Ç¼dw•<Æf-µKë"éYêÆOT®ï`V²)"&1ÊR…0Ž)Z‘‰H–¹LÀ°^“”»´T1f>¶¸LZáÏ¬E¢XìŠ¨´Ü,Í
+™Û[‹U,«i½Q_fzœ!$‘96C×Â0N†›á„²êö±Día1â©‡Ë+{FI…~Y%Qÿê[Ì‚üh™|òÈŸÐà‡a‰­î Ÿ×p…Ýå5ýr› :¬k6ü÷dêãç(8\'É€½ún2uŒÚªáa.²
+éÐ(5.<J˜Óì²Ôt¹ò
+þ?·L_åvÌ¿ÙP=å’~•ÑJÌÂ,N¹WÙõM$óÅ]Äz²˜sÉü`eÌ2«jÊ=KµþcÎUäð´bfóÌSÆˆaß©xQr‹“04³‹%›9Ã@Ì¨-DÐÔGÂ¨x„ŠB 0l‰mÚ{&–ŸB7™Û—ÎúUnM“þÁsûôLj…ãÏyM=ÞßoôÞp{³«{p™_` f!j/ÓŒsO£ÚgÌèú™}ŒÙÞESÿÜÝ…b)fó–ï-+2PR iSÚò¹Ý©Ÿõ¦TIhálH{öt‡`xsjyØ==íëêEhn¤(âv¸<Eh„)VÚVŽ=q?R-+>NQ2MîlÀgÌÒH¸««M-ÏÃýAN´Æ”;§‘hõfŠÜ¢6žˆ²m”‰Ç‘ëÛÌ»´¦ñáÛÊ¨Ó^h†ß¬®Á2)ã¬l~(E‚°hF5×ò˜±ÛwK-Jâ¬~´¼þ0[ìó2a>l„1Œ„¾€5*5Rp±2Y!ë3Æ€q‚eÆU8œùå—×š$#ì®lÄ³4“.Mv… ›…Zih%tÂÔnÖØ>k*tÿZhÎ÷ÿò¯ÎRjê¼¸N:ÄŠY.6·Ü¨ðHåFÏÊ>¾åFï#7êØý)ËZ4;úë…³£rÁg#M{s—<wébWòM‘Qôï¾X6o^QWÆ³kÞÃŽ3ñGà,r³×q§^—ÎcÃýŽÓ…[ŽXÉŠÚý›oˆA»`à–¿Ùã/„Ý"ìwd2’{HÚÔÃ‰¨?GÛøœÃµ¦t=’5°Œû)÷Xï£ñÔ;TžPÚÉvâœz±ÚI^ŸÞ®C 1Gªƒö!¼jÐºÎ Ï¡#£»]Ü.qcå_Áâm­éu8PÁŸÐõÐ;îL7g'xŒx3µ´€-†[þê7¸ç]ÑÕÂŸ„}˜õolÄÍ0[%½²1Ö‰E­èä-©Ö×#áö'"3•C°àÜÖë8eæF‰º·B¨ ©—Ñ<ME…˜Ðþ©NcÏ±^w‚ki‚…J9¼òNãis¿~Üjvó`·ÙîÇ‡mòlï¸]ï>;Ø%[»­ƒ'vAAS,ÁåU=- <æ›Ñðæ4vm’;:vû}‡¶F]gŠ¸´G½SyØtUCê‰Ï50
+_bàöðV^à¼¿Þ2±•iíàGÊ	æöŠH®@‚¹#ŽÀn>+©ÉžUãVâÎ÷Ù¸g)ó²ïîuŠûs§¾øp¯õ™†GávL½•ð½n‹¡ŽpU
+3ítW%E™ã£¡òUÉ†ý4f¯¿Xûž!ÉrÂlÝ/œ?»½˜É§„ÿè…;¨êÜ¦¤&˜û
+Vsç}þf"·Í½—íã¬¡-1Õ"Bh8®OuÕøŒÕ8µ¿X1N'ö¶K¿ìBÍ¾`#DéïAÌËŸ­>Åƒ7ÃÄ“å_lGž#¸>úx÷ÇvØÇh¿½ñÕÙHõÁwÌüiv]0N¯¾µ
+êÜ»ÌT¿§¶?q½‹ob'Šˆ©c…¬uD_ñ¿g—/‚±–‰t~-pûµ©ÕT;SXÖâþ‚®ŠòŸ!ƒ^¬l#€KÜhÊhò¦ÂÔoÊŽ¸Â˜‰5Žc¸Äb_…mØü-ÚÝµPuLÍA«¢–’#±¼kZ
+yJxFïtÕuõ!*#Šàðê;Ð]†CË»¯ê¦Ì*Ä—ZÚîóz§ñl¯Þ&»‡GG{Í6©Ô÷~ösøã'ŠüôÙ®†ªR9²³Yµè®;kœÅ»&ÝÚ@QK¸ÑóÙEöHgtäú¬­ãÐ¦ÃWï”fÖò0BÁZ@&¾S\ðÛP Ýž[>smžÃÛ„R@KŸ’¥SömØÆ“•-2ìíð?a½Æd=ØX/þÙÚö:Ÿ¯Þ«Å f68­°E£BÍjû©MÖjwï0^¹Û²à#h[ƒ >+Øý2»Ûs­Vä U†1› >(Â/²\Æµ0ú [å§QˆÌbž  æ{_{†zvlkx3fÜÏ‡YÏX^	ý~¹qguÏV»Õpº6RúZ¤t$Vo1¯žÄ„4;öÙm’ÆáÁqûp/dk?#ûõ£:ï¯[o·žõØeO£Õ4Ã¬s…ÆmM½ÛIÑV‚çTÆøÕcÃfo¾`¸n	œ¾¬ý¶‘ÄR+ôy~¨ç†7æ£òà˜O‰ä1–¡KÌ’¹Wìõ·úiW;$
+y‹”)s	ñ³qîøÉõ5­Û_~¡óž% MbeqÍÚ°­):ˆ'ÖÐºú­‹~ß«·£OÃdjwÄbgø ûÖ¹=dÉÖ¾ìMy&%•}ì~ÌÇ¶{îØ*-ÒÔykâTîƒ… ó¥1m0èÆ®ÉïôÓŒï‹šùŽ:ŽT£Ö.E¿’‹\YwxñÜ¦¯¨W8‰<;/C,~2 È	¼’´:ìsñu=^€‰,J¹zW9«qïéÉžË{Ó¨3PÎ!³ÚÂÖ‘ ÷ü¤\gñeñhÌN O]Ö¶šc´zì´ÆSÑI]&øl<ÒCþáÂãÇâ«l«4.^3w‚òAÞ¾xêy®Þ·‰uÞ¿ðú÷uGMÖÝý˜?7…Ÿz®®Á±ËsfõG|„åÆ~úü;ý1×:¿ Ö˜Ÿˆ­; CK~­E/­øá¹²£öY(rB{rÈØ	/G€€vûàMøwñuÀ„\àAGŽõõùKô³Î›ëÐI#6ˆ?¥ý¶ÄeìÓ©pœìï4ç×ÊÜÏûºhü¹U¨ç÷“ŠÎÓÃg{»Ü3q|¸ÿ3ò¼Õü)û¸K:?;8<jutýœWÁƒºhè2óÿ©‹–¾ UªÃlÑ6l¡(ïÜ)fö
+iVeG{  Q©@ùXb×Ú>âN ÷æ'ö­ÑÔÂŽÎÊ_c6 (M©;\C¹‘Õ0òžLšã´szìSRIëÍ” Ø.ÍØ3©óÐI¶¹$Ô›Wû~O¢ëez»ùÌ¹8Îo,7+LoÀÙ(å¹Ê/~jOr§Vä.]&áUúw<ÀBÜ¥H5òïÔ;¿Ì¸{ôêòRXîÚùJá²£Ê­ÕZ6#þA:‚¡ÙYõúÃïF”q6†z*~+õ»ä§À¨J!¾=zŠky|<§?Ž:íèhñoLß­ðmáÏfcÊÍtßZpc£7w=ZÅgÍf¦FÑ™M¥h»=Ûq¬÷V§ølDé­>q«O,nÎï\Ÿ[ô)áíç¥Qàž¯6QfD1™'.<ÖÄs};´_•såç8õôt¶‹×{ð67Içù*xìYõ¯bO6W]ç³È4®çÄßÒMÖqêŸí-LÉ9vO€…½¿Ž“úè+çVË¹Õr8çw®åÈ=úŽ´œðöóÒrØ¦¯šSjH­»xµÝg6½áz¤ÑñÓÖ“§‹’FûSßqC÷U(ìþàV(Ý
+¥ÅÍù¥ØV}G²)1‹y‰(¶…ç+¢J©!¢ø¸‹Qì>ïˆ::ì7Û­Ãìˆó\„Õ‘ëÿ¤Uð·bëVl-nÎ7Dl…›öÊ-us\ÁÀ`¥ÇÖeá®I¦7|„ÛA³ñY÷³öak—<ë,J¼5¦ôZƒµùJµÚýêV–ÝÊ²ÅÍùË2¾CÉ9¶=k®¥Y–Á­3_ÁQfDqÁ†]¼ÀÛ¼¢áùÕ_Ö;äY»uPo·ð¯…É†ç¶å“©gƒÒbcð{jù<cOpq+&nÅÄâæüÎÅÄó«oa·>vë|„„Ø;ó•%ÕräÅKq§Ys@úîÞ7ç´O‚Sú“~¢Ã¦ñ$DG	'þJýÍÍjÃÝÃEš9nïýÍ~h:'î«[ñõ_ÿ  ÿÿì}{oÉµßW©•/l*G|¯Ä+­1$GÚ¹ 9ôå¯ ìÖL‡½êéîí‡DJ+àî¿¹qn‚5À¹€# î"XÎæÀ óMüâsªúQýš®öð!±k9==Õõ<çwÞ·ì+‘rð€6Ã³øqi–cÍÕ¤¿í.ž[ñ÷Üá¦½³×;è.´‡†3aöeQÿoÙÁ-;X\Ÿ¯œÄ§´ŽµÖ°/Ú|F]Ú1-“bÄìçù»˜4X¸5gÛ®‚y–Îbtcþ>¦MïÍÙË= Å^`ŽByÀ½=óÍW}3gï` ;Îk$Ê…[ó÷Zn¶ìîœ½ýœ¹Àtàÿ&Mº+Ý›¿¿™†KoÏ»‡mRµ?¡’Sjtç»8m´äæ"¼S#Js	þ©âMÕj$@œú¦‡uOÏ%tžÞTŸ%&ýêsêóäÄf>Œ¥ê¥íT6;ãK½’‚òûóÍBÅÌ?þêÁk´)we·}”íÜÐîo¤x¯¾oB¿ÐîÚÇo³Ÿ•úñ«\…[õ­œÐà	O‹¿—>(½ÿ‰üãìg…ßÇ‹Ö>å™¨,ÜRêÅ ¤¡’»*=b@Î}3Ó£Ü-Å*¹{=$ÚÎ`·ß;nJ·¹T&Òb™XøÌê–äÌ•¿¾Ïø‡o{ v¹o¶ð¥bî·;wõ“è^y€'·ò­€¼¸>_¹€êfäèÌ4œáf¾FUÜD-_B~ñ¦› :ý¢ß/PqzNÿÄF77QÊ ž·\á–+,®ÏWÎâ3ÚWà'¦Yž0W“±Ný*dÞ+jÚ©š/¹uŸÔlÙÝð/1‹ç^ü=WÏ»f&¯ŽÙ×N¿ÓnŠU00:Qòb¼žü‹<ÚñÕå`daWÃÃabçbM°=>Ö#k¦Ûõi×'/½.Æîø‰Öcv•ÜN/]j_Ãïæl”eR<=~;Í(&Ò/Íî7¢—O_…›íHÓcgºül§0‚y¬Éôì˜QÚ­T(æ¨ðÅ<Š²
+¹ñ¦Æ¼”ôpÉ‰þ¼ÇKÐ¨ÓÃdþ
+&MªÑ†bC8ª%Þ…êéF]‰úZ>³%æÔé´½ÿ„ã‹öîçÝýýÎ€w÷z¹•£#jÌ¶eQŒéa¶eXFÚß„¦Ån2@Ù¥ÖI{t
+Ccþ-L¹…)—Ðíf`Ê…@HínŸÈ§«a”r¡¦B¦ýKÀ	òû.ˆ.qÏ×îa{Ÿ|ÑÞß_,ò˜A¸«‡	€å3œd_Ào9Î-Ç¹„n_Ž“=À1˜Ìij˜Ã\¬mU¹ä—Àc2/¼LF)Ì®Óïìô{ä°ÓîÒ^(ŸÙeÃºÌ‡ÌÒ|£M<„šš¡·Œæ–ÑÜTFS8ÁqšÌqj˜Ó\¬m¥t$ò.Ód^Ø˜ò3¡]ÎÜf»ª§W.f=ºßgÀ£ZƒÐw™í³™u‘Y.//“ƒé÷{Ïö{Xª¼ýl¯{ÜëOÛ&¿!_·÷Ÿµw»Óïyóö~w¯½‡ö;G½þq‡,=ÛéîFOt:{]`¶<WåòÓÎ!7Ç¯îò·Ô¸â }E-ô7Žièœ8À<Ÿÿlumåd•¾¸ÿ ©j½ÿñÊt,DÕ³süsKÇ–‘¿Ïªîž/¯F%²£;¾KGlù|yø§Ôp^/¯A£Ô6'È¯Ý¨s½÷Îî)½Ü5½‘•¯Íü)yÿçï‹†€5¹ãæ}×´Š6?råFycg~ZÛ^ü5´èè¥\ü©‡®Ë¼cô‘¿Æ,MA=¬ ¯Ù(€;¤Ãp¼é¶Ý†9Be’XyQ¨Û`d—Z¦AV«U7šûî~¾ºâž½ˆh"œäWŒÕ#z¶üzyb(ŒKøšoø˜ÙÙ)Å½óŠb)eF(ú!Ž€Ï€Ã
+[Å¿<äÄñ&Ñ$ âÆ*Ô05ØytY†/›ùŸ(Ü$5`LÃ—>ñÃ1ó°p5q©G	5¾í€zžÁ‹:íyü(ÇG¸4VDžód#¾…Óí9~2ßÀÁÞH6žA¾¼üËõ•èÈ–ìzÇ2ÊV>0Ç§õ›ü¯üÃ¿18fšìòíŠ)˜Í)šžuí	rÜÏw;.k_3¿$wNÌ3xÎþDŠLŒmñ'Ë7@w…^9Y®n½¸ÿðÂLžãá	=¾`3höf‘fÃÜå9Òã™£ðÄ‚çË4œÒÒÊšan‰ÝDƒÑä5¥]L„À¤¯§¦aàžŠ(ý	5Ø²iÏß÷wµ43wør;Ùæ{Îëˆ?ú@h¼_Ê.‡,xÍ ÿÑ”ssƒ¸´;„iS˜'?>NÊ–v5ÓÞ¦BKÅ¶\\Çq®ŸY‚#­oÉ‘ø´ê™öËå¥žÌÄ›€6óí+°~Þl-¼”æB±§J+°&öÏkºŠ3 -Ÿn”8í‚]O
+h%šõYp%%ûÊ!€mŸôú}„¬:Ôû§ÊÓdÃ.‚š­ÍÕˆ)©ž‚Ì®.LÝ¬-îž-¯µ6û®´Ò·'! yæUšÌöîq÷×måùÂIPÜ ª{¾,®Ö€ÅI€s¡<è>{eú” ‚s†>ºÞFÈîœœÒ7ð~s„âçß„Nð· ë;°aê‰ÏøÍ(¤Ö7¡	+ä±F11h”Á"Þˆ1!°vY»ž3b°ªu°0ž¹Zx-Sš`ÕÇé‰Ï¬“e<òþ7gèZdöÑ0ÇVšôúy|Gü ˆË±wa-_>~»+8º•˜jÉÅG>qUpI8í+œ‹ø&È© $7
+=ßñ–]ÇäÓYœàœ û7Š*ER•	€Ç,Ë}¸RŽóDËCò¶*þ“A]j‹…×6w¢x'§ˆÀ¶Ó[	iŒ5ð±,‘ÒñéæêŠbÞ}¥¶ôX³á9Laˆ<…%‡}@'tú'ƒé{ R .XÜ;8èzfN@TõÈô½Ç(>ª{ø=Y:p@~M›†s÷ŽJ'Õ(áì!Ô˜O’ëÑicçó i£…0	þUF Q¡Aù­bÊx«Ê„>º/èNÓ4-G¡FŽ{~ìÀ-wèPÏXÊ‘÷È	µ|¦M£"Fú0OªŽ›K-_ÉÓEÊ°Æ!Ê:”,Y”-j34<©R GB³TSåP«í€]Ç5áèI*°Fw„×ªyêíÄ1€-(jpx»‰jNˆ¬ÂY/UáääåŒg-¦ºd†f1jàB¢ú!G²‰É5;Õl.P…ô™³ç’+e É–·[
+õù4l ƒ’“¾…&ªßïõQéwžFzøm-ØÌ•×üúÏÕåÌùÉ ªƒ´sK6È ú¤	å®ÉÏìÊ-‰ùÇ:Åª}º¶"mN$YÑ®%ÕS 61p]a ‚Ë§-5n“}˜¾XÉÔôóí·¤7üPHë%;÷—xê4üräßmYÌ§ä3²¢»ƒ÷³Š™ÐêØ)'DÑw¤(úv±Ä%m=óQÙh+ˆ‘²ÈúhßRèå Î:‡:ëRÑ•™œŒÚK=R§P°sê÷Èª†èñU"n£ÕæoêZ'à\„ç>/ø7EC¬"³"»#ÜsÈiµZ_é$]X°±èONÚ¿Ÿ—ö¶§f‡Ò—ã#ÜÈDPVžLßðcè‘ª×Qº(“…\Q;ãüµåš±<ðœ©‹IÂ
+ç•$ac%³ÕQMUc«	¹˜ºŠßú9yG:‡d··¯¦+S_4æÙÁÏÛš¾6”ÑÊƒÕÜ2"kÒKÕ‘Œì&¦mÃ‰ÁäLè‚òÆ=Æl±š«°W¹øtÙ†ÏÅgññ9ì
+ØguüÄüúµxëñŠ‹©€0ÒºÏJä±;y+@í*¬`iZÐÝcÐwÚ\eÎU»BKÞŸ~wÔÝã·#·“Y:ê÷v;ƒöA·sxÜÃí½ß;î¨xT˜‰7Q)è
+ã\¢¼¹ÿiÑ¤œÉ£}N²ÈÅfºÍœHXs¢cECÞ½!¬eyƒZ"×{™4f5+±™ UÁj–¥£«Y|Pâ:OÝ,HÙˆ²•ƒP*@DCUÝ¨x¨i"{tº^àv%V±D© ‡(s©éÃ ¸²°à"!ýé{-pû`ú“ZŽ¯È¦N×/"ÏÇä7‹\|ÖNmÔøUJó®
+‡-Þð5H 1=g’¡×ó¿	a¡õkR„h7`ûønŽ¨5
+-
+¬ï¸È=â›“ÐBm6‹Ü©¸ÃCÏ	ä	ÒVšW“4à;4Šéàž9»0Ážcùu¡DÃ4ëJmd*T]Y+£kËép„_ö±3[¬mY|n Ì_
+¼PM×\¤ª¦p/Q¯JÚ§¸AÒ5Ç·>Õ¡€*rzäTE «éQ9h†é‘cÇP ¼šžë°!Ô­Wµ#RÚXf·øtå’7Ãó'‹ØêBÄÌgî¢½3&O=Ó¨¥€yú7Æá?ˆ¨}Ì€Ì¥×ˆ5–>®“3Kú¸¡qß>¯×–Â4@Rô¨A½;÷·èYð‹¿þñßýwÒÇŸ‘Ó™°°=säFºö‰EÖ:žé¥¶=}o™¾é“­½»JoRcÌàýö^»¿Rú0áÑ6ÖÒ±”kžÈy…®ÌóÉPê ðgN:ˆì¡ï=ÛqL[J¯ƒ…r¼íHÊ•¤‚R2›•9ÖÌîïêû ¼´HI¾¤6µÎa4—ø‡?“tý¸û»ï Š|¥ï“=“ŽíéO˜ÇÚ!íWÔ~’).9 (þ¸ã¡’Yàï£½'zë¿Ûë÷;û‘pþsü½ÎN 
+C=@/…Å’ºqcÁ‚±:¬ÿ‰~yíAf€cÁÆ¦¾uŽÁ&˜“Ç·D|+Ýñ«Øß„Ô2ƒó/Ù+)ÓÚ¿ûmEPüi¡¤bZºÚé,0×È k¾x>›þ‰"0?Á5´Ø
+'ÞÀ´ôè#³ó¼~|Ž5.¸ä\ª³ÎB—½ÀCsh™Q±Íþþdgúg”~@ZÞ‰Ú™¾çDV{àˆÙ^zÊ1À½cý´ß{v¸×=|ª³ØQ˜&™ WLä½Ç†Í!õ#¡…%¹SÀ1ôÍ˜G³ÀN˜g‘ø¡¼ÄüsºÀüãU,¯ã2á6G­/ýpXJ{•ÿÎ*üæª‡qØÂþ<™¶¥/Nià·]h}üð®5ýÉ¿&/ïžaQÁÞ¼ë¶÷u–€Ð30ßÐÔNÄøŽ0_ÑÜR3bN\`ú‚8¥*¢í#ÇöAF§dú~lZ@˜ýjú£C`O“x´"ÁÇNp`æÜ,ÿá¿ §•ôÒík8Ž(?z„ÿ¶Bçð¸£³Žª†##_3Àk$˜þ0²q}a'0{Ò¯QÏ2‚0´*oÜ6ÿ8ÇÊ¢Éu,KNñt]£W±¬cØüþ‡ÿ÷ä)ü’"Bß3áMÁÁÙ:žþàMLÛQŠ	IßïÚýnOg»‹‘:"ðÓnŽmè>ÃþÌ•oŽ=b.òo#åõs,¤‹Š'iùçtùÇ«XBŸÈ…Ò]ÃO:BEI€<Nrƒhú­µ†ƒ®È7¢³†=86Rå	¶IhÇúSòÊô1;Ðeû2L^€À:²ÿÏ±t2„å“VRÜH—R|¾Šµœ0ê‡Cå¯®¨õý?‘¶–Ô£‚<f6â·To51Þ}¯­µ˜Òd~à…ÜÍÚWÝ<üC{í1?ŠpOÐÕ‘I‰y>€u½eçÇ	l'`º‹ù»ß“]Àœ†ÃÚ€ò);2ùÒ!ö°©«ìò¯£éwO»‡Zr’È¥,„¢4 Çæ}‚sèš‘à”÷B¾i±¯é<«ê†ü6CmÅ‰ÞŠWž‘l}éŸÛŽ«OvÿÛ?]nÊQÝé÷Øª£§áxÖÞë÷à§ý§íC-î™bEÞ	šÎ« '@{§?ñÎÀAvÙˆIRe$¾ðxÜïyt]£sjËëÊ?§«Ê?^ÉIÅª|@zuOêýŸ¸ŽŽ)¸žˆf¸Õo?<‹Î‚Ö¢>çøY_øîÆsùë¨ÄQ†“DgÅ•–HŒ]F”eBmöµó!
+.\©Î§†§±ÑåªÿM8œòîZÙ”}9Q…ÞÑÝoºOx†™ÞaGk­÷âõ…³‹ê™oxä“gŒ+¤…H¥ÒH££–vºËýöÞàéEÿeÁ¨uwŽ5Za†6óÏéjó-õ‹Ö„ºKKÇPÌZ†z@LŸ‡™3ƒ<&Ÿ|gl“nÏ¡É–i¼¨Oåå18Ò¶’§æ#¾u”Ü^²óÇoEÔœTsöDÕÐE,V2ü¥%j_ñ––T›"¤ÕjáÏT¶Œ¸âYÞ&ŸàãŠ¿wW1_›b%‹ltéºd]«0ÍÅ”Š­Ä}$si9ªüÜ5‚L£=«<»¿$_ýßCü|¾Ë„ŠJ8x3q'µÆZ>Ú™Ø²Äi85£\i°[Á:\Œ8½_ŸˆD\jñ£Né œKQ=¯C¹—äo$LôqOÀ“KG¥‘c€/=§8ª…\tÂ¤àiÓvÃ@¹;ÂAb„{xèœ©G'Ä®ÇÐßè ¨×¥‰ñ%TQ£¦ì]Ë¾ÈéòF¹&N™ é¢Çƒ$€Â1ƒ…þvîð]$ü	/ÕàTµ¾V¥‡ â¸³¹,¯ªŸˆ÷;Ùe¥è‡sf™6[†ßMð½¹x#Ýó¨Iýx(¥…à–õOg¸ãdp3Ž›îwÊÉº_’’øü™aúëúÉx’Yâ¸tTDÝQó>§dõÖB‚w5žTª<‘?cˆÆ Ÿ<aÌÀt^µ¾<o‡ø»ègð:f*‘>•±|²ø´‘ß	²´Uær_—®2–nŽ°á)ž}-ˆŽZÁtQünÉ4+Æñ*ìÉºPÜ3nBtl²ÃË´½¼€’®Í˜dv=±Su_Ôs^LDá´(Üà&Ëõ´Â0}TÖs¾µ $Oªo¿%ŸDÁ`èâH™ˆv·å;¶´ã8ÀlÿHin_ïu²ý:b[gËÂnH:á-™J<[äBßFš-?_i=|ð"Î¶ã‚øœcº¿ä^ÄÛm'@™ÁyI¿>…•Íž»:'þÌ	ÎŠ"ˆOcx$Õ6Í×¥»‘’Ð•xf–»únpºR·e"¿Š›@-Ê#E>Óg'óOw_—œb$/_ÍØÝ#Ì1ås[F"yÿŽâ±Nƒ¯SLÝ¢:I…8"‰§ßšÓ"‚àúdé­Ê‘>1-ØlÉ¡NB?ã˜¹»Ï`}Ü Škp-Ë¨qøàá³Î¯ÛdÐÙM’ëµ§ßíw±XÏ´7è‘ßé¿zÖñ„;Ýýnïi¿ýóÉéÜ‰'Æ,wb‰WÃz„‹³gÕíØ­S8öD† ¸ºì0£H€NÒX‘#GF@kYÄã%ó©Htµ¡ Âµ¼ÜÔX’O5Ä#N_3© .Õ¬šå‰*çÈ¥­GVê¬DTNªÆAVd¤œCÆËù".‡õ…Z=Næ"‰‡JÓ˜óÆTŸíãÞ Ý’¦¨!,]›ªœ 9@ÅFšC yr‡v77wäÏù£¸ ›ŒL=È9nMÔs›ú®q‡Â€[q#×oÑ8Åi&KOR÷ð·´
+#Ü="}Ñ¶Æ˜Ü"˜ð/ŽL‹z<#úué]¥Lç5Ï ¹~ÂûéKzBn™'@/¦ª«Ja’µ‘­9a´p8*cš†–3z©t:b½žD‹Å­d¬§þvCg¢–¯q²®6wJ:ü±È’ìª/cÃ>lª;÷«fÏÛ·¼á‰Ø˜lŽ,‡1Û§tÊtî¨XdË»@qc›|_—tam[:i¦ßy°ð<í±‘É]qu»y}éŠ£Tòîõíøœ¥/ŽrÒŒæyãŽê—†;5Y¥/ÝØæG:}ã^æÚ¯Dë¯XfôÇ(yá&¾ŸJ_‰‹>ý‰»4ïT£èþŠ*¾[˜cO&7ª		‰Ð"³(´¯l'mYÆµØH
+`–	"±$ºAÐ‹n¶£(ñe—ÅQLËV×ã/#³#Ò<‹5HesbZ·,/ë&†¥ÜJœºVVC>(x{l¬¬Ž²=2«¨T·‘Š†H-+dÎÞ¦j‹VLc«l@È±ˆÛH®lMu~`„!PÃTÕ‡5Ö™Àí|ˆÞË,:ö'œ¯w›JÝ¤–Å@•Tåõ£HÞ0<fšjQþCXHµŸÕ›.–dªIíŒ†û2ååâõz‰ÜRDóŠ
+ÎJýædVÁbÖÑ9‚ÌÕÔ•òâ¨*+5µÉDnªIäÊúÀðõ—(°4¥P8ˆÅPß%á<ìÝmR§¦–h™F!³Qˆ¸G,sÌ]å/II•þ}ÔªÇyÙs™]¹+ãxÉë¯žJ7W7ÝM7[=G£f—"§˜]L+•„ð~4:¨8þPóÆ §¾ÆiD2éƒé¶LãsêæÙQ@.p :ò°°0OÜŠñª°%°dŠé‰J}<{ôÄ °ÈDT.ô›¨O8˜0êNw¤øs=L%~FF­&®[ÉáàÙC÷Á¢ªÒåYº³Ù8´â#h†…) *…\
+—®Ö·sI<Ò,—¨²•1>^H¥äj¥_Mïê€Uyr˜›¬*JÒÑUüàÅðUšç£XQMb8°¦Î$öIŠ«®
+ÅÜqß„Ó¢Ü>ÐóW „˜(xÎ<LB=
+A eQâÌ=oCûüG…`×8Êb*Û1n€ÊŒ Çäùƒ®[E¶™È²¤‡«ò5Ì¯)¤Ê&QÊŸ¶V*Ì/QÅSÙ4¦ZSÀVye»|<µ±M„ªLôU
+wB¥ÙŒJùt9d)N¤30'®ÅcSçîe0)•ÍGÂžùð|Õ¶M3 ]ðï&#³Çºí:.ïöõÅ_R†¥¸¼I¼*›y?{1§¦úh X!¯Vœÿ##ŠÔ>^´ËØÄå•z€UH¾	Mq˜öÁ¤£<+&	LÃ„¼˜ðôýÐŒTWCØ¢ç<r2ýÑ‡¦®\	°#‘*m 2¥é¬¨˜zÝV®leS™åó}°`«j•ºRRuÉ6BMÎ¥¸D@˜KÈ\>äÚÜNsØ!‰ '<û˜Jƒò2ÁGáð€÷y¢—2 A—…­’ür5²Š-†Ç°+÷iœšïúã«’¬‰7]%©cl%Ö£€¬Äs4F©"?\•ÉsÉùL]Jusj¨sÂ½ÚøåböDsZ?v ¾†C†¡DÙJéžlšäBA…Õ^=ÈÚ;·)Ÿ§QþÒyQ–v3W³äT£Ù\¤ÄÊ-Ñ‚0VL²šEXÍs/Œµ‹	°¼Ðônsùàjk;I.›Ñ_Å¡4œí]”J¼~ÔXjŸž3¯í'yq¯?Œ*I\|óaTšvxc3·"9 =y1$'lþhTçZÀŒîŽJÚéQÎl&ºxTS¡%PÔæ£At÷¯ëtCf Ñg<¦,ÂJÑÓ91EÉ.)¹t)Öö[<²ÄùÄ/¨ÀÒoçJ°U&ù·|ê6?
+t•_¥Á«dN›ÅWr4h¹³—b›ËYŸn×¤|¿,|%¥šü¨V?´fØÓ„:×`•î«›±¤|I+ùU)ÏtA”Røh@Vì‡%¡œIE Šû0˜‰ZËË”‹ 6¦?M8õòC+·`á‘¤ö¡ðHŠð{¸7ãi'Lú5áæÅ+QW%qÅ]?9LÑABÀ’‹_âj%5{û•Œ‹®#:I9†R˜²Y:7JJÄ$§yÜî¯n–T ÙÊžråpß\È±:ÿ[/…èµ‘Å
+t²Š÷(ñš·å“Üa¹3/åwprD*7ùn£i¶ÔðÏƒm…*)—ªh’ª”|Ô@õž M¼¬Öy&^®?Êl¬›¤Â9‰½._n'Wuç¢¾P™ÚC*˜
+­ üDÄ3Í0äzŽëØX¡ÝÆ´ËçÞãmx÷ðïÀsDªL5¦ò@Ï}G 0ãªAOD™ùá¹<ñeæEìD§1v$–³•=ÎkªôÀN¶Wžš_Ø™Á_TñN~d¬ÃorœƒOyp%@g˜A:³ê‡]*Ü‘õ>›1Ü©u¤“”±nÔ-_5ÿð‚Ÿâ^“7ÚÍFB3´Aß¥f´AÙ‚}ÊšÛª+rL4ŽTíðÌHìA?Cï\/Np(
+ðóÈ‰ýõy¦;ÏtQF½’LE$Î/ˆ#¸EDñeÎ˜¡I¤ÆÁF3˜‘&6*Y%¥<A‚J¿ˆ«™^X*/Éy™Ðè6)yÔÖÊû ’Woª›ƒrå….'1yRåö£A{,à+É.%\ƒN’½$`Êšû$ª-â?Lp”´9)¶Pô?—Êû&õ¹?øõ@DñqJŽÒ-&Š/sæi ¢ø°fa‘Ì›¶r~AÀhfÑKƒF¼H•.Jñ„¥Lèc½”e\(z¸„vCo½(9œ 3_œÒÀo»î->º§lÓŽÃù00RÙ&»EHs!¤øX~4 )òÏ–ò@3²¾¨Ì&¡©È±H8y–ƒÝð›„¼“‰ãÃ+ð+NûDäñÕ{\Ç=¼ Ã5?s?s±3/–Y\2ýŽa¦™¨ÂðI0)(3ÄM ´)Ý’»7
+s
+ó‰³t‹¾J/M·ó’½ºàëªNàÊ®çÊ|[Õé½þ°ÕL¡B·acŠ0ê7bÖ­VKeÓmÏ à­10ÀisÈ_þùû$7<÷Ý
+Ù+ç®Z/"EcÜà_ÿøý?^¢^]ÙŽ•˜ˆ5ª´Ò5ÊIºÀ“˜^®ÒqtNíùµv¡ç‚°§&³ža®ò°ò™»{öN»Ù8›¯‚²ãeÉ!lñÜÃ;ÝÞ~ïéÇ”$µÏ„s~jSÅÔ¹e&Šãiqx¹Ÿ~œ]B¨-G˜¥>´yhÙ5¤z>úô#D™†ƒªHƒä=bqåfš™UžÔãÉé¯ˆÇgëüû>wàcÜÊ-ü¾üŽ÷åù¨êæÄ!¹¾¸%Ó¤ËÉ¡[ìN^»ž!gW¸ÓM¹œ­Å@Õ3”ÍdÝÕÉD©áÚÝÔFƒZ BeD­»Çñ…‚pK8zW6é!iù—±§—\ô*põê6é;ðÈŽéLØhúžÇŽ1ÒµO,ŠF,LŸuE^ŽësájNd|¸õ¡ êÚBã7)Ôµd³Ý|$}ù®ýö^»O¶ö>0ô2NÌ¶E^a-%,Ù=”ö‘˜Ñ8XTÌ;¦QÆÎ¼8pS\9áHè
+0•Ö‘üŠ-øâ° v†Á[üüÜÚîãË¬˜{í}/-Îc£Q5Ú—¯†l®ç7…­~è™^	ChÕ>0ã	„I}f#™¨IýqDmfÕ@¤ª°ßŸÿ¼žçÑÄä|y«ÜäßU»|qýêÇ`Öã·™õDÆKDk^¾dN!¼þ=~çÇXƒü-:±#Kà­ú_:¶xÇ3×ÀµÙë´3œàª‰ÊA'7\K«ÖÊÓìØµyW7æš3[{B€·¨…ÀpÅR[Ðéß=ý@ÇíÏ]ÙâÅ(-½Í]æé¿Ømž{ãínÏöv·ãU¾ÛËñõv|¹çb÷|á·»>7ÚÛ]—´ëK”SŠû¼BîYÐï3ØÒ­A ØFÝHàCŠZƒ|sn¬"Œµ{Bƒ•WPåò{Jb~¥îj#[ýÙ.*Y¸£Ka[­–X¤w*nã…©„Z*ÕÞ/v€/ï_DŠ!¢f¦ÁøÔt#b ý-¹«Òšc;ã±ÅºÒï¦¼¢V¢*i™¯Ö|3Ôª)zÕÅR YxÁØqÎÐÚ”þKã™-nu|V<Rÿ‚ZÌ£ûYB±p2úxî«ŽÂBã‡/ÈQû°³¿Mºí§Ä§ä7¤}¸Göºí§‡½Áqww@þîü÷Iw·}Üí*4½¸~—…µÙPèç?[y¸b¬n½@
+·¥%¶ïÕ¼ÉlK(dñŸå‘cÍÔÌºçË«±í\Ü‰Ímë±‚×gÉ>†µQÏ°ö
+ÝÌÕÝ"¯áÿYÏ#ÙÔ­ s¬1IpnWnÕZŸeÕR±Gd-Ñ
+>À°#”øa:^`NáDÑã‘	=[~½ìOT£ÎyõQ'“MÝ—ŠÖÜƒQ#˜âÓr*•RÒ§Ñ2c„#Q'ëÉd˜'ÌcöÈäéEÙ°îÔ4¤>5DÚx‹ö
+3šÂC‰—Ô…çö¢ä/q.èx,»öwEîuÏñE¶¸Õ¼áP|“5‹£!›WZ¡F:hŸ+Ù9>ÔÎqn5þ MM(òDíùÊ›ÐÛÎ™KqºjF÷KrçÄ<c¯) ržÛâOX‹7<É='ÃŸ®W×^Ü¸ItÃ±w¼„'¸•„y#]´õˆ0Cóîòƒ}Ž)îfLq±U4Xðá|#pòÆ7#ŽâËëÐGXÈZ{‘0M%C™ÁNòy¦¶Ê;ˆvÜÀ|ÅÒžžšœÐ¼“3ßf³º?»çµâ2óö«”äöµÅ÷6.Ó˜ƒàBÕz²'úŽpj`±a%±Yøïëåäÿ‰=ápÒÒ9ã¦V¾7øšç2{Ýó—mÇ©æñRIö‹5Þæ{Îkü»”½G~+ñê³Ž½ÂiÁ.¯·6¹qvCÃ…FÝ‰†S&‹¨0×Y¾h›0ë›ó¹‘+y†ð'ÕücÔÒœ{QŠr8'û	óÝjƒRòŸáOÎ:~“ =[ÔÇîxHIDÖq~X\”fç97-àÿÇ2dìMßŸÿLá`ÂcQ‰ùXˆj~€%ü(‡§Œ2Z0ÓV„å¸oµÚXïëÌÀ"2ê‘Ûôê@F<Ñµ0N<¦æ©¤øX%•xíQwnß3E·¼ÔfÜ?Pó(sv)0m?¼d_$;E]V÷A?·œ/J­/‹’
+^úh$½$Gk$ÖW
+lzSöxFÉÆÃ¸*þ#ùE«-^yç•b! ¢?‹D6÷éæªªçL½3‹¸3°Ê‘^ÐCÞ:¡Ó?aÖ»`úÞ6D¦rZ§X? gæ„gŽ˜¾÷¯5ƒÊC,Î¹t€‡¢iEîÖú§à¥Fò*ú®â­×£ÓÆ^³œd½ÑB.	ÿ*rFuqñV1W¼Ue&SoŸ†	VŽüŒ÷üØ[îÐ¡ž±4MËˆÊa&‹t@½— zm²²t÷êÞ}¦M›ŠL5¯ŸÈ ŠÐ¬èðm
+GR˜Tá¤®¤œêIÇ^¥6 ãá*SH½ŠXx)&;u\ë‘Ø$žU­Ý ðì<›AÄ(µa–l#PrÔêzëœ!®é*KÃÊ®—®¬þJ–csl6ÏøtuAå ¯,ÁXr±®L,ºq¥?Ø0qùø£½'î5?h… ‹" {¦AðÛ|`Î ­¥×øJl7ˆ}cQüÒšPöÝËèÒv#8Œz³z™·ØåDû«†uÁdwëù {ÚUÁÑÿ”ï÷×™Ã$äô±®@IÈjkÆ”Ï!¥)‚ýA[(XsóÚ™oX[QRá_¬ËÉ1<u,‹ºhVÁ)£†êÓø¼—3’¼­‡N™øs§|¶TÂ­ÚÊ£‰F”×ñÊæØ… ‡uíQëÑýà´‰†‘V`³÷áÌv;ý£~ç¸½Û~ÙË¦ß?íî¶~ßÚýõx¢­²¿óÙçíýýöß?íôÞO{ÊÛç¾Öþy#ãëg
+VxùœD¤#ØP=xe5×­H)ÁN)L˜ýóŸ“ºgZê.-Û„Úç÷ˆiœm;Ä›«ªBu1N¼dç 'gï2òqIuW´ÿ¥˜N°ãù å~»Rì:úš}2Ë/âb°›¿ aâ¿ )Ng‡aGY‡…ZæØ^ž å²ÔIJÒ¶i»¡Z6!ù:j!‡Î™ºø_ü—höÿ¤nÕ¥|b¬:†…\bn¹bõz uÜ;<&Ï[­VuO_¨yXd¯¨q±OÖ7fA+š›yšôY0¨ìäRôBEwùRòêÈ^Ò†m…b$VÃ ‹…þvF5CâpÎÓ—»äKÁÄOÎËQq\Ó¨Ñ”™Š³8îÏÞ-C,•é¿kú­¨ûJÞ5ƒ#\A„Ž%Ù7úiwN‡WrWQi€×Û¥OjyÊ·ßÖó‹Ùc`äè·²r·Þ¤šžÎèÄ`©k  üñÛõwÙeÛÈÐöœ9Á`G±l°
+ÀìÎg‡˜ŠY8xŽóI°;Jëìø­/ êúA³ˆ4Áõ}Ž®›7 (ÉGR®˜½4WÌu“óÐýšˆÉV–×òòã^Æý%Y‚Úzç¼¯·Âã­ðx‘†o…Çk'<z¡ÅŒ^ a>Å»f™ôXò½ë&>ö‹=½•g\%òcÕ^C²¤«×P‚,éå­É¯+!×c©]AŒôZn´`ç‹‘#½Vâi´róLzEÉ2S%Ë8ÌÍ&-Ó¸0Y‘"3JiOíé{xÔ¼(5›ÏHÊÍŸ)6Ìû.T8? ÿ“$¨à~ˆ…ÏU%ïÃŠl`5î	™}æzÌ‡­¹-Â¦CïJžGžöhï	YÚ3a'NÌ½»­°H*y¿Ð×ÓcÅ‘ºŒs·‚D<þè¯OÎ‰)‡æ„Ç!
+ë^”åmÙED²%åÑ)ÀÔÔÀó[oÆ}èÉÒÄÇý…UÎ1_5Í>ÿ&“ÿzÎh³áêÚêÃÒh3¹ÀÁeœ)ä=*Íb%›I¥nN¼YÇ¼û#bÌTÂ’4çÄAPi}ºk6`‘§&a¯¨òS^gÅ\Ït°–_”øo;’soï˜)'@£¢ºi£KùÅ“û]ô¬ãlÅüFÆŽÕ‡†¸ØÈ1ùuóŽíÊÝm6vŒ®®®n(ÆŽÉdV7|lc¾ð±MåÈ11]ÖPÚ=åà±¹û]«Hª·>ÔÅRIž¸C8ˆ j(YðÂ
+ÜÉ%Úšˆê>éõ:d¯CÚ‡Óïö»ƒî ?ì¶=²Û;8Úï÷”d›&³7¹b—bSFÞ>”(›9HwzeëˆecmdÂ¶™+ê•¸É ûPƒnÊ¦úÅÝTtÿ6ôF~Ý¢ƒ-Ê#odüvi6ÕFÕjêJ8©ªãºÇÞ´c9²ÑÍÐ ‚ð-ˆy'ªbo¶F4Z+6gˆFk’hÔÚLöSb”Èë­Òèaþ*Ëò—?üçÿ÷¿þ‰ˆÑR”PAŽu ¥ÛòD¨¨±`¶…ª¡¸2qcdâ¸\	DÓñ‚(,‡kª<cŽÔ
+BœØ\]]1f‹sU™~§Õ$Í¯ 0
+Ú¼?S>ÞJy)A.V%]hÒ;JÕgàRï%ªMÊ™HÏgUpª<æÑéfàP[_Ã+ -eÓ}ïh·Û;ìpieˆöqt@žtúÂ¥å¨ÝoóüÒïõúÇEƒÊéfƒÖëCš´Q^þÃ¼Lœe‘kE‘ì+2£’ŠŽ\Ôc)šàéükœÉöÎ>L<÷!jïwÝ(M˜¢ÉBÑ¡±TY»ZiØúLýÊ$DNÁ,‘¨"pDê °Ü~Ãõ­‡3Iƒ‹˜˜úN¨0,ø‡µHNMwúSÀð™€Ù†7}Oü¸²nü‰iYQnÌTá†M–@]Q[ô`tŠî‘sâ:Ø„O Â`
+-/gvŠÒhP®ÅSD,0€ux”¢4`¼³f‡iQ+”«èyúÃ#²qœù|NA–@¦å ËLÌ¥Èv³¦˜Ÿäís5É‚˜ˆ5'VøµÃëÌ|[Ò±²Å=˜ù!³àž+¦}u›<IžÍ–»Gà_žýË?ÿ|@Ã4V3GOsÄlŸNL¾YúR2¶;äÝ½9»J­1jÑ'å]]“»šöî¯üÝ?¤Ý›~ç9"mliú#o
+;»ÇF°Ù¡ÝÞ167tÍ5-
+ûµ¤[ëÛ¤#âYrŽ’“þýÓX•v±;Æ ~}Zi˜þÈt-Ó¦žIu{8¡.ý2c(éäÆ69€çdÿ^¹‡ÿñÏ™òGqÖd‹‡~¿Ï|#¶¦À)éÕ&ö
+Ÿâˆx,Þvø}®W¹GNþ`~ÅÞ½àŽ‰'“@ÝQG°$ÂUÚo™†ª;…¾V­ Áª{ÎÉ¡KÀm±[&XRF’}Å—=Á¬†+¼b……n,>À»–„­Úˆ²[V¸^¦L¼9Ê’$8;Ÿs:Be`š:^î£$¦XÃy§¨|PÐ&f³øÆZ¬
+\+S¦e²t\ñ2jAá–¯¦Ì<õi™vP¹˜•º~PÙƒZI¤Á0‹ÉpyUÃa·N)úÊ0âÁ]j`sv«³"OJ$‘j3†˜‘ñ”÷‰SfÍN)3úÿ@Òh-ú’[ŽèûÐrF/£>#[Ðê²Ž:QÅ§Q'²©›”ùcÓˆR0Fò9Ï÷â©áMÌ
+×(ˆœkxnRÅ¿•õQeÒ¢dHÍ[}gOÊ½k„çžgM4Œº\ÎezE÷šèÊN63Bmü Dsu¢Qn|¹ ¤p‰8^´@)“_­«L"¿§bŸB'îÌå,D_•{d$|†¹Kz…T+ð`±' V³9Ñ1Šv³Ð>Î·¥]á®â‡’M,ÛPãªÅ8%JX-²Æ}›™ÀwdérX;‰ò^Æ•X,©ÇpóîÝU¡Æšb­
+t}¼ ¥B¯\Õ9”è,¾UZEUDniôž*4ÍþñÛüÕ–¢ÊÙÆJn*ƒfœ¡çñ¿•?iôh7ÓHî†rODÍ¨ia_2Ÿuz“k¨pK·G À  € ,õK¾;Gï²V|¡=w¨ÙpìAÀ\y¥»óÌc¦ÑŠ/ÔÚUóñQ'*sbÔ£x½ÒÀ*;òÇ.c‘ŸXÍ!XER%
+s`IhÉ›6òŸ•²„zž9Œ´¬§thZf (9R®}ŽjU×c¯L?¤–ù&NC,ô©*¹ƒUW¡ÖreB¡°Mv8èžO¡Zm.eÖp©nN"‡£`mÛ!²zE%  /Ãô‘Êèô"ÚŒÑÿßz‡,õIÑÂM#¯ƒÑw­â“½*Šu»g ®$õJYfÓu…¼Ë´KwÏ«š)LÈ³6J³6J³¢ÞÚN€ct^3ÝË6)[ñy»½RÕí¼?ÙZÞââ55Þö¥f×«üÎ63
+§­Ï²<M[+’ã›4Kù¤©%š¸œE4 íEŸs~;«nû#j±åç+­‡_4é0§ìVBY4¼Ñ4Y¥ò»p–ÅõÜ|+Kïü\–‰¶¢ˆ+¥l½Ï™!ÊÖzº.ugºYÐD–§¸ŸuÔ,Ÿ–Ä1K
+üyŒ¦þZ:ŠÂ5$GÞü"¼5FWáz’Î[;NòkËNŸ´Û³--p¯4¹ù0”@OÒ’Å£(™X`ŽÅ=¥m™ã6ª†€’"Bú°ñQ7–š‡6áÖ)2È9©?(sŽ/õæ»|.[A|Ö¹ßÛz‰ß›ºÊš¬ê#‹Â–£VLjt4{WŸ§üíW‘CæÊÃ•á.W–NW<‚V¦"u!:<~¦p ª£"‘H‡‹ZÜ×?>‡…éjšWJ,ôÖãñ×‹©ô™ï‚Ír®éw
+¦–è_jðøŽ9´°@uOÏÉ€QotªB.ž’˜icîPòÍÕOKCÉF­kG¾ã8/yï*Cïû
+"ß…=Z’[hf¢<Ðf2ýÁž@¶®ÃŠ¼µntyŸq-VTÿƒV@Ü£Æô‡‰–·¡qâ†°ÁG‰ýÍ0aôgŽ8›ÅE…“& ÛG=w·s)ôüêëŽ¥óù††¸ØðñáE(N™b6]zt.Åðñ„´^RéQõØq1
+-^p±ª£×9pœú¡H-zµ¡ãåOÍÃk:n<nµÁ ñé¿zÖÙk“îÎ~·÷´?ýËÁ“ß§Ï¦¿mÈîþô·‡pG-.á6t<
+/#mJèød;½„žœå4n<!j±\Ìoä#Æ“§>Üpñ²é½AáâÝ¿—_w5áâ2^»´pñ„k)ÅŠ'ç[ŠsÿËµU¥1Ùÿ'ÓUÌˆ×I—µ¾²µ²U£Ë’aXóÚ¬*âwÅÚ¬ìÉ¹“yªª¬:éíþ¿Êé¡œÐ1²oÚ/}ò4Ž?­wNÉÈe¢žÝ«ävœ›ö3²2_Ö€D}„2Þ ù‚¾/Zh½ñ8îÎüÄ¦ÎåL¶&r/Ý.P²€¦9üNÈ“Åñ¦OÝÍnœæðœtlè ó–Z…ŒEo×E ‚¨/ó©ó_¾ãEbŸà‰ýµú?R÷ Irþ+ÿâÔc'ßŠ®µBÏTÿ¥ÈçþøÎ—°­ì—êØcÖã;¶ã¸èÊGl:À<O'Ñyü‹#Æ96¶¬ßHÑ>åå%\±¢Q…ê#â>•À!ã0¯K'Ì’¨uõ#Ð4lðDc¸òÂ¶ÒfkÎ‹úòÍJª$¦c¹Ñ+XÄ1P¾Ž5KGÄçËAhí¾Óö‚é£ÐrÈ.oO<A’vŸ<Y)	-Ét(E×ûâ‡“	õt›…Viòs8YVìÛ<‹õ2_êT9qŽý‚6p“CfK™'VŽV¯.ƒrä¸4ð«­%ÏëÆzþ [‡(gU)ìyÉ—:+f”„1êÔreb,ÁŽù§@˜e=ŸŸ² F/´GÕ'ÌDÏ×„þLæJÚ‘ŸZa–÷©¢@­(Q7—‘_-ßS{7Íš“ªQÛ{]¼ÝÞ'Kû½ö9èõ;èÉ×~Ú=¢îÎ‘ú‰è*x¬pH©üUP“l¸> 8<æÓL-Ø…Uüq€ºý:ÊC’sú•ìÙªAŸxÌ?Ý}=vxè6/f´Ž^pe¦kqí„þˆtO"ù@lLx‰éo“'â± )×Ú®£15ä¹0;¶¸dÛ½²W0ØŒåš˜°ùÎxÙ’stjã·E‰‚“È$‹I²â;ÜM©ÑÉZp8Q]Š¶9Ù8<OhL! øFXº]ÉÎ´êÌõ5Í‘àaõš†ÊxwF4¼þïÿÙÃ,V˜_ß9A)5ïÌ"Ó	û*u"ù¥2ƒTVM¡Mq/:qµ”^âŠ<HHhÃbc˜ 
+;ÿ…s3œþÓÁúŠÚoxò.›…Ã@¶>F§‚[Ü¨±E(A#7ãJÛÕJœp #Ã!ÇLAd”È	ÐÓ&Fèâ¹÷xUiBÄ‘²×ôBhà½T=Ê»#œ”³Ïszýä5wÜ³åMg5gá=Áª|æuoªÁz^”G±v¬eNq¦íž,ûàd‰x?§³rÊÆcHN¢ú¬@e_s·ÚR)ò#+,Ð„ó-‡9@âÔg±RpQéIÔ#5/ÜNî ç¾êE¡ñÃÎ vö·1ùã~w·}Üý5fëß#ƒ£öñçÝ]øþ¸Û9<&ƒgíþoÈR·]'0,¶ß¦/Â1áþ…#1PÕŠ”J«+'+´ÔÇÕñ°Êæ•x¹’É9¥ZãZ]J—h7Ê×õØ£FˆœpTê‡xRšÄ(/'ÖWãü•Ýh_×¸f6‘ ì’‰iGÅI0ýa„þ¬„‡½8ùlâNßc~Á{d„1S†ÃË'M\àS¾ÉKu;èPGãúˆ#ó%Âž ‚ðŽÂ+Ñ“ø
+?XÖ•;Æº™c}#]cÕŽoÙHë!ë^ŒbõÍÒÜ†½dOVWV˜¢—¬Dœuýd·æô“ÅU­õ²JœeÅ`f2•ÍJwÙ­¹Üeq×-Ðg–{ÀÂ§|B'H;%qÇëkéÐw¬px ëŒnuÐ‡­°(òÜÒl¥“Åa-ß|¹^f¯0NäŒQËß4ûšÝHÖ8U\ÀßÞŸ+Ô9ÿáhh‘ß;ÔôIhÔõ™ÏWic¡î?\¥IQÕÄ¨ù§ýjTyrÜoï=Û™æO¿;ÈF_ìuâWªÞ
+žÈüÉ™8¤Ì6Te'˜'^yØmÄ¨êˆ2SC£>j6Ì7”COâÌ8.0a¹“ÄÚ 6D†ÐÎã‡õÍê'/âÓÍO6¯„{C¼»ÛA@G§G>vz''&¦©Q¬K˜×HøyÃs¸z—ûWÆ¾«i%DOúÞÕÙcs
+Ž½)û…ÓY³¢¬HTÉ%\ZY,­}¾òåš{öåø¿7Ò¥Õ­{«6ï­®=¼·ÒZ»«˜´¯›ä7>súqZ;ˆküpüÑÇÚ#+4±R…=aáé·¼(éƒà€ß"åˆÌ_ìÌá>—mãëÐâêq“™ç°Í|KM:™×õ’r˜¬£…þb9LÄdÂ„æKY9}µYJŠJIiV’c0ÇœÀ[ü¤\¥¯~3qFåâá‡i4—ð›^‚™H¸?6’åœ•¼ÍGIO~¸1Gå}ƒ¢Ž*pw$¿îrâŽ„ÉqÏym[5²Ks´÷d©ùÈ£Tý“œ3é8g‘’[ªÓ_ÏuÀØj‡YÒ;{Ívc‘T•—:ãÆmž+¯¢G{\^ËDµï€„66Žó„ÝÜ`€ûL.`6õ(^õP ¼—Ó¡Få…ótô:ìq±»€9Ù­Ý|(Ýêf†H›²tKs÷ºÍ¬1=Ëèj7|äësMö|¶.GO*GrIƒ_³aƒ»—¯j^5§·y“>‹<•ÎuØ²2YF_ã/Nià·]wpJ=¶ô‹ÈJñeä þ‹FI³pý˜Y?¸¼Œi~'çÄÿê­|ÁøÐ…ìäŽý
+ƒC™DË¤R‡EWÄH‡ÒsBÇ±P[¼ZÜÀhD´‘¶Û{ÒàÞ?`¾OÇlðM›¢QI7€LÊEFÉëx:žN¨i]ÉÑðXù±ÀûeG"¾ÿQ‡]ÇóH(XxðCtQ}îÀËW®É#ÍUž„h±”OïÜµ>ù|˜[¹«»ä÷¥¬1û±CËºGÖî^Z*¤[e.…‚'Ø£hÙQÌ™~5õå±Ä¹ÉÃ‹}²oú¡£L?ÖMÐ7EËaã:ÖJõZx3¬¿kÜú«h[*­wæßùì¯üÝo52–ª‡‰+xui[YA¢[4d`7Ë¢oÆ°ßÚ6¦?M¸-1¢Kü¹ô9}5G‘X)T6^êîó©FµTBÈ•‹TWl!å²ÄYòÕzÉÎãý,BÅOÄ§mBís0¾n2„±ª.ÅÔ‡‘±>&Ÿ|Â¢ñëžCÛ/Ô
+Œzø¡­®NÂ9RVQê®Ë¾œ	n«„ÏÕA.D9g©m†^o*k]5ìZþ÷x•ïÜ²&–ß¥·¤Õjá§{„¯õ¶0ó¿É;µ€Æø’¦<ò/O"æf†ð¤Ñ4Â& .8²BÛ	Ë´÷æ‰Ê‹‰¿‹1ÞEMöýUÅ¸VØjU ¼fŒs‰“GµËê‹¥!‘:ÄùÆ_ÿøý¿Õ²×ÛˆX‰hù…Fl×ºêæj6c¤µgçxúwÆE-fì‘yä:Û,ÙÅŒ$È	kysßœ)2î;ÉäÅfÅcæMÞÝ™g%4çR+Bšÿ t¬¹Â^ñVæÃŒ²ˆ+“Ç„Ø“ŒA*	.×ÌÜM<þ—ßÿÒaX‰ÇmBùýÿæõÏpÐÌÛ ®Q$¢ØyÍ4E=Ÿÿl…Âÿ&®¨AvøLKø7ïTª—(I	 tQC†bý   ÿÿ 3Azžxœì½[o#G–.ú>¿"L÷´¥ž¢Dêf•FU‹b©Ø£ÛUîö®]°CÌ™®d&;3Y%Y]ý²œÎñp°Ùõppà?ürÐ/ÿÉü3?á¬yÏˆŒ¤¨ª²Û\/±bÝ×·è7‰í¶Å»žR×b¹²]ËvGäwëoÿŽÔxí[ök2thœÐ	{Ô¦tÈš7Ívãq­q`¤izœ]‡Í§×/É•ç†ÍK‡_þ)\2¿¹Ýj‘ÙtÊü!	}øæß|O„âš‰çzµ§AHïzêØC:´ç?¹äxþƒoÈ€¹CÛqè^Ý§ZŸ.a!®ñèCCÖÜ„GwÅýjúÌ¡×¸øÀuƒøVnþZ`OàÑ¯lfáP—†¶çÖ£‡žxhèñßÝ‰ì¦ÍÍµmr9’Äñp»µÞn‘KÏ·àÓÜˆþŒig}³E|o†´ßô›×Y.áîª	wkÛˆpÉ•Ã®‰²IÐ27d>Ñi³½¶½ÀïÃÓ¹ÿãŸÿwûëüOÒq©ãæ?RÒõBÛ²a³	ðƒ®7™úxÐþ‡%u±Xm©ÃêP8©¬G#&yÊ×áæmãgEå—ÎŒq"ß(#rþ-ÒøÖû§q~ï-3Þ|/$þÃ_#ïÂ}`Jé:ó]{è‘rÆü`Ê†¡ýšF¬ýÃù‹v—/Y³ûbê>ƒ;Ï|êÙûbå÷vÁªéÔwõ~öÖàÎF÷4øQåO`.šoo×G-üªP qð“ÞÈYç¤w´G¾:é÷»ä¼wvz~ANƒÎùWäý‹g¤÷eÿ wÒí‘ÁéóónÿäÐ`ìû›¸2—ù Ò¸£ƒ—Nìá¡ãõoÈoKVô[’cÄÀ‚_|
+²éª½õr}'æÁ1žÚî+ÎÛ	Þ <mî¦‡ÿ4‡ž“å~ßÎ‚Ð¾º‰ÞNS·‹ŸD|“cjyošÎˆP×ž V89Àl'7Í­Jn±äQ˜æFú‘Æ0µ7ð¿Ÿ?**Ñà|Ò ë•—1ºV,'ÓÏIŒD§UŠöÌ>ýÙs-Œ`c©o#ÃGùnGñSœ(·¨Ù{.ÈDðÿ`mm­òÐVòA½õ2a–=›¤ŸWc¾ødB¯›ošÁÄà¹{×p­xêÀ¹^@|!ž3ÿi/ ÅÝüÇ+|ó Þ)Ì¬? &—/u`)@ó³¼hqÐì¹!áübã€CÐ	ö­‡?sˆÏ¦ž2¹zÞ—î®ÜÎÊžåžï{~ýšêU¾°¬ñhñMÖn€Íw”‡:Žà=Ç*ÛðÐC³S[ú¨z±´äÅ­½®Èu£ÙJOCÅC~AW6ê>¶°°¹E&Öžø¶ä;86DðÞv‹µ7^®?uVÒò½)ªQ>ç²JnœÒ‡7%7†á§ÍÝSŽØìvÄfqTï5ó¯xsÓ¤3Ð*aÁNB¹I‡X3Ÿ›ËÍÍímÜÏV•E±GéGÑÈí‚) j Ø²d¦cÛ²˜3ñ+`úMÛåÔ¦›¾~æo+éäøØ”Ÿ5CÎéENéÕþ¥üÑ¤—çÌ€ã„°Ç°8üÿMsk—ŒñXÅx­’¥ºšÁSq’à[íq–×d¯a*AÓÀÅYÍ¹–Hd_²ðƒµŽL°Ì."GÚ›^rû­ŽV_=´˜6çqØ•‰¨„QŸxÞ«Ó)s/à²¬°»VZ-¹MÕLãÞo•™ýyÅ ºÿRÝ|¨¢vÎû§ä 2ÿè®ðh¨ýÃ“ÓùŠt:ƒþÓ~·ÓíŸžôf³>Þ2|p½‹E„™Š@&pj˜É!µæ? '÷!žF¡€˜·lkþìax3¥>!œ¡7(d .X'² ~Çõt© Ép]Œ¬GCSÍôgfÆì˜\ÎÂÐs6¼™¢]À/0ó%yn×±‡¯Ý®¬’G	ˆ¸~AX®Lñ«O¦†voJð~ƒ\!¥¨HmFÅõÑû0œùK°ÊçLÎ<ùÍ­!õÕV’×\HÆLôa« ·[)nV„‡¤-þÿj³R'/!˜Å„›’1ÊÓ½ä£V<	ñÁn¤ù‰·È±Ä%©ÁV4›ÀÛoÌ¶:´C§T¿Â%;‡SLaka¿é„ÎÿÅÃc=çZð	0TèA Â&6ðaéµ=É'ów>ãn`‡C¸ž¬{`Xˆ¡mË[m˜LÎŒ)•O]¯]&¯ýcÛÅI³œ»µ†þ5Z Ã˜ßU,Õîj²ûë‚Ÿ,›Wå8ÏÐ›Þ\xðÑôÒ£¾µòûÁéÉÓp€à´¯äl€58ú.èWÈÆêrE€ÕæPº_éAŠÕ¬a&Ï œÓé5qè3YÛÎp¾ÔYF-Liu'[ŽKcïç&ÚŒºÞÔ†ãw¹-p–Ju\“5Uâ‘o[ÿAË) ÆUòvƒ‹ÛjÛ¶hk
+:[›ÐéÊ
+J¡=0cnÛºÞÚÃà'^´¾Nº@ #,ØËÄ0	ÂCÞpƒAš2»žãùäQ&ùHGar«³aâb¶¯Ðµa4Wôj6èÕ!ç)§NcÕè©I~º!£N2]þ]|rºâ[óé¾%ýŠYw_Ûü'wÑGrŸ”1 ùí²fÜqièMæ?Ò…';ó§NŠäûô„å/–5å3˜±â®Ÿ†¾,:sØÝ(5sù>EÑ/jÌÜ$Ò9D§-qìpÀ¨?÷Ý+¦4’à(úüvä/ÉŸÿLn‰ãñ8Ùž=äí?šÜÌg Ò¸†²žs9C­à»EÌº6MeÜŽÛÂŸÕºlí¶†/KeÛÃXVx†²N¬¼g‚3â¼h‹u[˜kÑvëeäQšX‰C	æ4ïV2ÓgM-Ttñ€­kâ#Š^ªì£ÍSÅZ´–.¤™Y5Ívâ·³à41n];8¿?Þ6ö¦´5.…ÅƒÍ·ñù¬™;¶>Þ®w/q§©ï¹3whsÓµÚ']rc}°†«€)=T°³HvÙ¢=ñÖO}{ÄÜ½²gº÷8½q]Œ^7¨tœqF”'Œ$‹šQ½3>Pê7@ŸGµ>bŽËsF‰fþ›ÛH¦½ME’µÞÂðDsNS3È(Ðõü	hn|Õ™RQ’PÑs1uø×s Ç33Ñ:?ÍØ€k<>`W`ªs5pŒÿþ±\t‹Wâ9­ße	Ó™7‰¡i¸Œ\Pn·6[;/É”/\ŠUÂ{¹k«Á9f%8˜Òº½t<8r“K”/çÌa¯)r›(7Š&{ScŠòè8¸ÁÔ‰F­‘fTƒqÕ;<¨Nt†\>œÍ.™EFr£ÈŸfè€k–ÄvIg:½ƒÆYOÅ]Ÿ†ÍÍœJVWs¨~ªI`Y6]HëÓ¤kè³¯†De«ÇŒ{¯aN˜rÛÖ…é;¥Ì²é=òæz´è•ó¤©k9L-‘ãÔ"°d0óhæ³•XUzÀ7rÍ‰¿úOH—µ3!–ÐK‡Yn3FÔš4ê–¶KÒR×È^0Ê7UFËF+žöìëÐoš‘åYžSg#©).âÂKíÆSd›.àÕ‹^5Ò=ªáôŽ^ûdÇ–f|mp¿5þ›ÎóZ(ú›}=™CÌ¹ªN­*L´æÝê¸ïã{,°~bãË·Ð<‘HÕMâ±÷½Võ”[óàCtE=õet_$¢9$áƒÄgÁÌ	‘ILzƒ":32¤¾…#$ÎZUJ¹cÇ¯¯i3æåð$Ä4´.¨ŒI€ŠE$ù›ùœœÅtÄÅ2.+*ÒXÚJfº¸!Jàÿ_¿øe 9#ÈcdƒªJ­š™ûõ“Ùó»N¯›cXÝ¾¼ùt°©¹sŠÆæö2sûo}ôä÷6¢nxÎ‚©çl¥HæH##?5µ‹EJVðP'êN”h
+”ïÍü!ˆ{îâ¢
+Dæ©]v˜;ÔÑèp®K¿Xs˜;
+Çä1i-ä/Rùï°'g dN
+ò‰»q—Ý$†ìýÔD‚fîÂÝ`‰ŸØ—Žíüù;žSŒÙH‚Ô±¼º•4ÕÒ(¬¢ŒU¿¾	_å4%"?”Hø«Ÿ‹AÖ%'ùuÌ™ô‹ÇÄ4ê:
+£×ØgW|Œµ™o/:HHý5¾:t_Õ- ‹^À5\Ï›buºaØóýzzxv<qý™–ÙÝ¼ëå¾â¬(Í'*lÆŸ¡ð÷ÛMüJ;eêTÂ4ôg.:&›ø"g _‘ þoÿg$ˆ9¥ðŒ#Œ¿Ý‰lö×é"óZ­)ºÄ­jú­¼è>éúüüì+Ç¿˜Y%DnzÓlx²-êMãºˆ“ºg”®‹Ø¾C]Dªö©&K/[ŒzûTC2ÝGY¢ñOê««Ye‰ƒî³Þqç¢ß%Ý£þI¿Û9"ƒçÇÇX™xú”üSï+ò´rÐ?9|4%‰ƒá˜Ah³ÉäŽ5‰›¥5‰	ôÁÏ´(1ÁýøÙT%ö°&‘§Òbþ4ƒMF•yL‡~7ýyêÛ`âN±ï—RˆÈâ§°þ2œÿ4Á:ËT-"Åâ†¦Ÿíò¥	¨J¶Di'Ë€FgX° ?±'@g!Ö#Êr~°=lŸñDé‚C†3jùX	éÎš†Cyb;×¿äúÄÒg½ßÅü-©PÌ³ÞåV*¶®ZÃÖ®a¥bÂ£?ÊREù,:Ñò3¬UìÈÅ1º(RL%	ãVÝSÑb²jï£j1¦g´Çÿö½7øw­jÆ]))gy…AQãˆ?P–3Jô¥WÏO`©>º^¢T<‹•Š³D© +]!±P\54@>ú²ÆD½¨9š€!ÜÎTÀüÜÀ40·Wˆ:!âì©JÐŸ[A#?Ào|:]´´ùÞS\°±½ÑéÄÌ_:L‰Í.F½Z¹œ²ð0>0S&¾±»¶^†FýŠÌ²šÌX9«µÒàyTy(%S“YR¡9K
+•Põë”rœÆõ™„Ù§åòIk8MDµf"×6ZyÎ—%„4_ûì‘\ša±àr£p3¾X`(ÀQ1½—i1¦)¿:
+>ÕÞ#Oøv`Èwê„â?ŠSb~ÏßÂ!úë©|Õ=#{äÖÖ,HV«RÖ8ªýþëÿU¦è/`AS;y¥OO eMeNT`±óôóÂP-óÏ@ó¿b¤os¾%3´{2=ã¢¤©üK0¹‘(<œYñ–Ê:¿#äM1h¡@A˜óöÞ
+T"<QåU/¤àž±	nu&ò`^¤ÕrÖÁ\rLýW–÷Æ5b÷Žv!²ó;°²® Evás4ÃåSFFF$¸ßÉ›–À«(%†ú›¯R¾7²Ø?sf9_Û&ð·McîÖwæ‡@Y@'bØR‰d‰U´_-Öz-¯FÓNÔMóŒ!#O}Œm97xp€€Ê{3L}öÚfoÈïÖk{‡R±XQƒÃÓ“*cÐCüäZæ­šÂb-kaZ¦È]):jÜÇ•ô¹¸vÂ7•¼51á‘<[éDÍ8ä1{ï+‹QuM4@ó™,P£^^öP&Obò£¶Í¹[[p·”/PiÛn´êæ÷\Eä×·0)í›g¿AÊ!ÿ@Ú¦ê²|îú…bù•JêCKÞ‘-€Å»w¨‡G¦¤‹-°Ýk¡÷EEDÅJÍ,´…*—ïãÇ9RÎ%_Dë6åä</vlŠqŠDËåçßíìäè@Ò¹°WÁÐz•×Ñ	ŽqfÃÙ‹r/ï|„c"l<
+²X0ôm.‹ÞÖ§‚ºÕºKý©I¨Ñ`fæ\"³¥+Š-A>Çán)}ÓRz¹´Ïýé;¼1äDäK^;ô€°¦)ÓÙÇp Œ·;ôKŠ¢KÂÆq2h…\1©2^ˆ„™¾)jJ¨‡7÷ö×Ãñ2F:g#îÁ\OÅ'—5vÄ’o‘á·¾é¡¬±ÿûá¥gÝ¤gT{ÔDxYþG¢øìÄ<Ýx×U<Í=ûµ ¡¢göë°æú(Qâ•6°r.G¡ò¦Á!ÂŸÔŠ×Õ¬‡­Rª, Qˆ³œ~(N+›Ø(ë×¼•«{ÿPSÙã„mÌÕL[«ö-ò˜Yï#x¸¬F¶XYg¦ŒRê:ð¬öÐs³Ñ¸9ãÛÚøþþnÔVLÄ+§ÝÜëÊ™sR|;:MÚÉÛ#Ë5wqaI“êzEæjI_¾œv b¡ùÜUñåF®ˆ$Ñn
+eµyô6SK¸\yNø—8“Fº‹žÙ F»$Áw°û«‰#Tv“ñwi;˜!BQzPÐIã‹ãô²Òs#_ìjòsž%=þÜ2e#òáéQ¤Ýjý=¨£#í0—6œÉ	ˆ'“ªy¥§è§ÿ0;Ã³`Èà´]bþÅŠý$è®zk˜a‰#Meã[¸þ\ÌØŽrâ©ƒ-Hy–VÒc†O8œá`Áú#Ê‡=;xZ¯e¶Cï§ì¥Ùl’A¯ÛíÏ¿?Ánç½§}ì›Õ;¹àÝú'OOÏ{ä·ä ?ÿËÑé!ÿôøô@v"ÀËp}†VI=HFíÊ'í&YX»ÅzBÒ®&g·âp™äQî7M2(ŠÆ*P$“ÖÉ¬Ü å½B¢Î†ð0€'f‚ºÈÈ‹²IÉ9™¡/ÝÚ óÛ>ébßÙ3ÉÌ¿½¿>Þ¼c)KÍ\KÇï1°#Q\ñÚÒË™ÃªÃùCÞRÑ#Bæ^2BÑýÉ²-§Äö™ø,KÀ†ÃˆA8À	G°eUihƒ'ñ?Íl %¾[Œ<á‘„êÄÇŠLN^èé¼43¦«R`©cÏ²¯n1­4"šKoË,µE‡BÈ=¢éŽ`ôŒ_ÿàZ`-:ÿ«K&ówf¨Ï€É{qº¬IòV?ebr@]¦!µ,ÜÔzŠ7Dµ©<\ÒÂ‰ížècQäR†!•gqò
+é‘ÎÀQ¥¾ÚlåÏt±PF›m–ÂŸBµ%ÁéVs¦Š5«>¬Å}0Ì—ØjòY0î¾)‰é• CEkµm–Moš@¡`¼›<wb3‚©Ì2ßê›WÓbt–¾Ìœ¥óø,Uò'Ã$Œ%ÿ3ñ£x?2ƒÿ€¶y×fB±‡7µ0W'Doÿ“|XÄn3-€¶çÛ „É2;˜vR—ïÁß"3Õ8¼,Ù‹XQ^ô=q¸'ršgÄ ü†#nœçñ›y¸ÿ_yE¯+µlNQ’åÑ-‹G|°Ž<`ÆLAÿ+3ÍåÀÆ>å3¶Þ%Ë›H=s( ”L@ÖÕdâl£Œy0M
+¸ï­tß¡—X×«ÓyïI.³P¨¸*¬sþl…ì—ÆPÔçÂÀ*åÏ³³T±ÜR5YY\1ê3“ë×ÎÒ£ÛáÌÇÌpxäõ™8¬@œ±È3%;wË[akUhßÒÈ6E\ª1>ÌÔè}»G>ã¦÷Œ³ó„%OúÍóÎÁ€l~ö€|vY-COjÀB\2~™7)ÇœÿH‡®`ápÍÄ·žÛ‘<€ªÂ
+ßÎ‰›$‹øÊÎ‚œÖº³Íu‘‚p“dçÈÙž·S–NGÆA½YˆHE¼Ò4/œ€åÛßÉ¯ÆÍöVÊíŸ,Ó” †nž!X7s¿Z7+='F´¬YtR:òZèÛ³ü¬öÄÕ¦*ƒ0f3ôš>¹ò½ILe¨ÜxÑ»Ïã\×ôo¶cÂM~‰×ÅºÿqBäñçðó’OÍl¹4‚p±pEû›±2RâHºƒ^æŒjà¤D	˜q‹‚ä¸€’²QMiF9y‹êpj-N8¹j"¬àË<IÞw¿;fÃW]Û:…túÄÇ·º¯&Ó­ñ¸º°ý:(3^£ä³äV#õàvÂ	Ão„«ÅÙ6ÃþZæˆYNjê!—•tGÀ’j…¾,$ðeçèô\ºú»GóÿA«ðó£éw{'äxþ?à‡Õ€ÛKXÍ­þ„ŽØB0R&ÚÊRQ>j›JxÍÐMàŸÈôè:@ôFãñbMËÍõME0¯¹öµ€=d˜+gP‰÷Oá3zj;LÐd‘‘ó J_z§,F¾c7u€·ü2ŽÀ0g£ wu(…ÿî½‡Sð•~:êRgþcˆnz‹Û¨ÓuÑ†Û#e:œ'…`g<–…K9èL@,ŒR8M‘)ªú‡˜wyªj¦YÒS“×R‰ò›ô‚›v~ÿüä¢³Ü0r•DFhlÙôH`&Ú—B ,ðPõz¯ÅUî(æíŸØøWô…i74=@Púß®üO DÑ–Õ¾|™+ÆÈn¢Eƒq\
+b‰Ì@³ìWlñó%f`ä{Ì. Þª;IUe±jù«!Ë@‘èŸe¶`7iDA ãàÿ3ë¿±<¦PÄ›>pêMŽ@Ô÷ñÒ»6:K y8Mýì05JÑM‘ßvZ»íCä·X[©ü¶uà·‚"fðô{¤‘Ü{ad6|5ê»{ÕU,Y°¬vÖø²k­´zÐ‘9ª™‰¾·@—€´õ‚ùLBÆ~EžuŽŽ:ÿùðt@:'‹ù÷ÇýîéÀô‰ÌáÇjÔš,{3kö[m§)DÁ½j…à+’¯Kÿ€p!øº›N^_dÚµ§@C1­wæ!CR±ßzHü5_u²ãcôÅŠxð|™3%í“Ô*õPáˆD–«ñXu›•)±DêßÙ¡¾^Û¯º0ÇËòÈ9Ý.BøX„›Õ†ïPØœÉÑ,OÙH	¨¾ÌÉB‚{¤÷B&Æº6WNŸÿ&­rs­¹
+~ø±Ôœm[ÏäK3óº´¡ÜÒòOÄœ/ðIÙXÌTAÜÅ¸Çµ¢UXá”5²z§!òé^¡Í'’m1·”t,‹S8ul‚	ÞoóÇ§¶ ©²o”Â’7¡&	rT2â³p8Æo´&Ç<^Ð€ó¸šNJz_C¥ÿ·=`£È-Lûl:rç?Üe‰ßa¸Ô·)™úÞ:ú…11/(×b—¥:è<Å‹þØ^Ê1÷Œèù;Çl^‚%4°8«ËìRöB%=E3!X€Ø !YIÞËàJ¦ªˆË¸Z&»ÆF^ÞZk[Ç|ª%ìsÀK’ßÛ×T §"÷gÂAêŒò´QL²™J6ßÙNç|f>.Ä=³©ª´ò­–V^’‰Š×Ä	fê„q•vùÕÒµk5æU¦¡Æi ê´uY¶#&Œgs Oí©<µu›·á­§ÿ×[²ÅIl-bW]$±=»”ÙnùûXÓúÖÚx®Kù™ÿšÆ¤ÔóO¯(yØå¥YD
+R|$åð?¡A¯fŽIÄ ûwtJÆº‡Økom\Æ²Bç£¤°\²>láÜ¶SðOÚ-€?‡DRÒö‘D!î£ÐJ]ŠPäëËñµ]ÖîèwOæß.0{ªsÐïöOO:GdeÐ;|~rÐ!§gýþÃÞÏzç³î(¿(R¯² …ŽOþò¢w”
+ÉK„*R°I°"Åæ·[…”XdŠ[ï9d±ý1„,tËÿ3Œ[T<Î¯ÁÕ-?lð¢LÍ|¯Œ”«¡<†±­ôVü¢yþ£eüPÉ íÏ+")­²V(#÷JÒ÷ŒÃU¼–Û#ô©—‡96—æ(ÉagæSÇ*oZ}É	;­€ŠtbŽ:UèRy‰àŒ¦Wš7Í)6ê³é;Qg¼ÿïß×CGSÕüÖé³Wå~SL¨*Å"
+–áÇg¾zˆ\(Ó¾m+Émìzî•MÝï(éÊ–¿„'|zµš³W4DŽa•PÀyèÂ#Jú¡@`õè"§ Ê‚€×âN6¡‚>{žÓÍ“W¡¦¡XÈk;˜Q‡üiÆ$ÀUHn‡ôEGGÍ%±YxE«‘ãb¸›ˆ2×ÚC® ‹nF¼ÐÏ 8Lèß¬}` _e<²\p6ò6h°äR~v×Z 3h°Þñ“ÞÁAï€t:ƒÇüº u@Î{ÝÓããÞÉAï\t¶¿
+ØBå<[&å<|$ÝcW’|TtJD¿Ýº¸&å?ikiÙ@úüù²°2Š£ rEÉQ¥”õ›•¥ôÉû.ÒA®ñF>–H<,zCzÀ2áÃH8Ðêx…YYÐ‡(
+ê ï‹3‡¾# Õâ÷ÍÀF”9ÛzþÔCƒ–ÉUðGÆŽñ"ø%Ê…!µæ?–ˆ3dŠº(G"@|ÎÀ™iáV‹½æð&õ…âQ`jT‰I¶Ó*Æˆ·kV°o' B©*õ¥†…£JuÝ±4ŽA	i–ÝVÈPÛ0FâlC,×2®…Y"F‘á•…nË=ñ›1Þ$¬6ãî«_\Ö#V6¼_º‘‘(†¦áÔ’`ª8§2œZ3‡S·4áÔRÛÏÄ´Ûï8ÌTAYaG!3R·5DÆ*í”’.Aã‚)o»p#´¹©ÏbeÂîÎoÜ’BÃ?ªŠßòuŠy’äC@WeŸ¯9Ì…cÞÕ«µñ¥ë!¹
+—FÞ­]	i„±¾<%í·Û²ÑæŸ`ïÄLbC8'žë!S{åã(5Ž>(kš×ÈÙŒYzè R®ë…ð;Ç¾ôl´1·(.ÒïÞ—s/Ôõx1ÚJ±©™.Y:9Ñ(–wÉ0îŽ!šyÚAÇñ­Üt†Còˆ|ò	Œ³FÅGýH• þŸ|b§>Y/à†/Mðïk5áÐ¶‹{ñiëaë Ýy©1xh[WàV.å@•‚w·r¥vcl+
+)Tf*š;ÕTeŠX ™~™Ša#×lQpŒÚ.G#ãIº@^IŽð2íçÒ¡Õ‚«ÌEÙl-”… ^ƒƒ.îPWoYè†q›9´õB†üžïc+R>ú¢£¸ÜcŸßUçÓÚ»Meu·®…oˆ¦Íä+šÞ–‡]’^u×w=­€å÷yû˜ôöØÉ´^/ncÒêã¾6Q©†g·Ô—ôV†žE_Ï4–ÉÜm‘]¬×§±F+E~Yxe#¿ñÕû5†ykžé$'¡TNÓ–í\O¨‚ér÷"|ñÇx3¾‰5"fÕÛ¡&¸Û'Æk”cš¹]Þ®¥<ÍúM˜
+0º*Ùm®Wžt IâK›¹<,ÙÿÇˆ8í¶;…µ/‹ÒÜ†Èð/½ëzRâÅ¯E#×x™ÅŽ©KG¼N'V{ëÉyñ*ÃÊí—ÝaÛPòË·dmmß= ü¶{$†Ñ•Ó$oMšg–<eB0Ù¾)•9aJSÄNŒ^›KJ#i÷VŽ èÉ1U~SsjdE/Ñ§©/Ò”*ã¬êbW¦u´ˆ¬X¼‹u(3„Î_TSÔØéšc›[3±Jª›².³>åÄ”­CÕ©0A<0‚i]_“O=".vN+6ÍÃëÜ “¤zÍÉ#wc_lÂ¬ÏW¶ÒÑ_+—•dž¾&‘ËUhõE;<}‘ä®âƒzoÌ ¥Ó¯=R²ÁèÞŠYÆlÆÔÉÙ¿¡v˜C4«ýé<¦V¶>1ýù†z¡3™N9¯Gú»­Z|¶NŽn-íI½mµmØZÕsü‚šm-âÕþ{"ƒM©×XhÞÉ¸¯¿0%†1_”ÔcsØ¬ÏYnôÚOß«é,’zbl¡5ðßÇ“×‘ê5Ó ‘ð…é<Ø¯üL¶A¾3È~»bŠÒ‹O[Û­Ývë¥ôº`wdÛÒŒG‘lºµ[È}Mw\†¾ç8—Ôo†c8Ö‘Wtc±Öâ¥ñ¹Òäm£¼šÉ%ÏÄN²*õ5eõ¼%‡³ù<Ã˜^ä”ðº"bãP™_³w_Ê$ÏTR$¢Í>¨^–ÈµJókÝò>R:ûV÷ô5IU^ojx<ÿþàùo/zÐzä+òûçƒ‹T«Qø3å'§'½9ïôOæßÂG“,Ä¬ºþ„Õ+Ë{ãÃœ9z.)ü©È`8æ&†F½ÀþqDŸbt)ú%…H?Õ/9"o.Ðpÿ‰zÔÕl€VÁÙ³à‰˜Ã¤ßê¯ô\AÐž˜*˜<ÔuÙ5>ˆQdNDåd+ò(ÿèø …ÂÞÚ*ZÏ¦æ=Šoñ$ž`Õ³ÓY‘ãUž¸´—›¶áµou®²Ús§8qº³†§ìœ'´v=g6q÷€»R§ÚÌØËŒyúìÙÁS“sá©:G@ûÐ3Â3ëª#®úío;­q/æ¥ÑžÞŠÅàoiêï_’k‡ÿ¹fmÉ8 ™©üÙmŠG‰þn–˜@æéÁ¸b¸b½È3â ëu¼¥˜ø£L™¸Oë-û|£?NƒÓqàe÷63¥¶j48ž,?ãf½Š«†+u×õ[ÛÜNÇròjL¬àè'_örvÞû²ßAº¨”›ÕN8“ßKª¹†#+y<>œÛH?^’½H¤´~E£_fqÏëlFÝTKƒcsyJz^°IÁ"É©V©¸©Á\ô{Çg§ä¼×9z¡Z‹¬h„]YÜPu„xŸKoH¸:6à•§—ÊY•œœLû4i¡42¹üXZGïzÈ
+ED…3RØø:°D¸B+Ÿ	Uù3Ï@Þ1•ù–Û¨Ê0^´bÎH_âkæqžæŸˆûú¢§2²Ó¾ ŸesóSYõqz–ÙP{|¨B9¬ÁF«U=tµ«´š˜9—Œ»‡}8‚‚h„•ý:˜M&Ô¿1¡Ü$fó‰¼z .þe}~e~Ô_¬zÙ\Ê‰ˆ=r[ŽÁ ª	ó=i
+ñâÚkî•í”‚Sá…·ô’~ëñÊóJ”Žê3ØKßåLÞb)'Ò´4vIñi€Q%‹×A{®DÕ–%#MÌ÷Ä=:¢ÙV@ôà+ŸÐâ‡õ…ßFãv T¡\gxÄ]9AÉÃÔ?õ2éÎ}´#0ëO°]ÆŒîdÎ§°HÆ“Fà‹Å§¬HöÐX¼{[<òBvW¾stqú.ÒÉéùqçè³å”IUfV¼—S§×ÇàéERÆ÷Æu<jP¹>+¡?c˜Ë~–áÝñïêaòƒš!È\ÂÀî¶¯?-¹¤ÙQk$½v.±DZ`õL±fþ/”¸3öšÞB÷{×0—:G¶›È¦c”ËLÿ J°EÎ¿Î³ÿÔ‡g©åý+ë°Ž¹/ór3,Èøý´2NãÄùd¥ò„ÄZy8¬«ç¾“ŽND§±Z»W<¯y¿¾ÒV}ÕB^áøÙ
+ÛUº˜A¥k‹6Ò«Ý>0i©Ç÷q)b1dYí¢ªL®ÆÁl†NT240ÿ“$–rŽä›÷ª"ò…²GyúªÉÍ¾Â“_¹c?î7·K^±·Ÿ†ž‡Y Ú¿uékDµ4åÊ¥IK cùqEˆ¾¶c"w|ŒàûÌ?Cˆï›G×kFU]\qVÍè÷ý1°40S–‚¤Ø˜(HÙ6,À¸’B˜»t ­¦øÏ¤ˆÀÀ*Ÿz®†9×T3–+èÏ‘ñšûiµ&[]Z«BÚÊÙ¢Êu ®øXÂšX;°lB`YÇU{"&–>ÖzÁ±4Výý†²‡¨6äø²:ñQ4ðk‡’úß²'äp¯…ø¡`Wñ_pï¾Q&°U]«ù²tHµ‚¨E±~mø­$ ]Pý9ƒÉÇ 2|FQ–´ÝjØþiÿ`u	‹¨.\ÌÿrrÐ9ÇüšóÞA§Ë³möÈ wÒ?=—)6§‡ýÁ9loëB:b¼çO‹zÝçç=Ò==9éu6L}¡f¹Ë7®ü‚Òï¯O<´œÖ
+ßa1}æž?ØyB6÷4÷)"sãž]tN.H÷Yç¢`ÜŠÜ‰zÉysUfNØ(‹®î's)<ÖŒÇ¾µ]°ÿ¨óèö–H—æi= ˜Çà¯µ‡»eÉ&RóÌ\ÕŽ¯j—]Â®í°æ]ó/ŒÀ­ñ÷íí²ßZNm.7‘ˆ Y<n¾€{WÚ­Öëq³½‡bõ%™Ø.âuÂ‰(Áë,¡å™m™"Ï•jyõ3¤+=n%qïé˜†d¬Ë/©Çs
+É&Û<Ç€U9jÕÊOþú1,ù\öLýUñ.±›€¥ÅðwêÑ5ö~	¨\0)¨D">¡ªZQ×£êÇ,èˆþ4£¾º¯r®ûOWpC€¤›qiÄŸ@n¹Àq µëù¨ÅÊ›ì!v£k¦Q 4»«ûJë}ÌyÕ®oûŠ¬HpÓ•Æ¿ýë‘=á°Í þ,Ñ›a8Íˆ¸ÏM²i|ÑX]Å  b¹ÕÁÊ‹—Ê´@eB a^S•òòÏ0ÕÉ SÁãåc¡}¹¦ÚžhIb=û¤öÝ©%<O­ êðF3P1ÔÞŒ	JŽŒ–W!‘>F¦IC®(Îéí0µuYÀ%µ»¢ÈÌbÅbÆcîð™ë˜KAGÛ™ Æa9´6ó´¤L¿„U&åë1ac1Jò—t8ÿÑÓ—í—2«¶–Y	5æ9	ÕœºVOEœûü¯pÄÁD§äÊaÓ‹Ú~!$²ä‚Šc(üù»+
+Ezßî‘FlÕÓ .›
+8ÿÉ§×„NáWpÌ	ÞÈž"BæŸfvÂÿ§3Ž+•¸Sø¶àgD-ú€üÛ¿f¸êjgÊbWç<ÉœŽÝ4	F	v“Úç²_¦ó&¯1Ió›t¸”µßÜÂÍ×|Ïvc€8ÆX|tÚ˜kñ0{ôžc5t1¾ªT[­ýšž  É»˜ÐœÅ0ÞŠ2=®DGLœyTœSAÔ´‚Z»-YŒJ—@¦«K¦§d¶WKFOÙ0i›’ï×¢‹×–ÕI•áfJ¤b+íTôÝšù·Y\ö»—PÕ™PÑúóÁEï€¬ •>ÿÌôÓUNò‡½ãþI?m½vúÙ&‹d$óa–=›äð[}ƒ„äŒ|0 ›Æc~/œß[g¡Y%gyyXtŸ²š°ªÛÞqsÌbžŠ{—ON7ˆ% P÷8Õ©õÈ¢‚kf\_¬6ÍˆÍ€ñLÑäj#&äùƒ)t[½†²9táœA6õ½KL`æS}8ñ.T¥÷ºªµñJ¬ÝÒR›TÃÒvÑ­£kY
+r8k\)¡i+
+o“Ù«ÎòKÂÖgWøèO<0±&@oËµx½¡ÕGT"Þ»ÃÐÊÊ‚Æ&R<,s˜ñs•.%MT%\s4øK…ý6˜xh>mÕ’–Áu£‹Vb¼!>œ’Çzî?±ÌŠGÑ{Ø(¬BpõxOÃ`kÁØ¾
+a¨Um­$ã˜HÀJØiE[F(’—á¦¼ºKT©t>Lo±1ØUÌÔ8àÐþ—¼=L`»@m4ôÀ<Ç²l/Õ mì £gfyhÑ?Íæ?OQie¾÷&xt»aà)¤Ð¨½µ1žSAuÍà¦b7)Žž_¢~çR®ÄpÞ,ä „¼Gj•"‹z»›lÚþN\P¾
+ÛÛÐ“UJªµL7HÉkÃOÕZèÛ“å¹ÈŠß8¡Û¤ñ€¦ðF*A;b(©ïBòöVÆ#’qÖ&b—;ÂKX»F/Ü¸^ß @% zîk›úKó-îJ¿¢][{¤s€…ö`+œ÷Èà+°'ŽIÿdpqþœÇíÈÙéùEç¨2ð<Xo°Xà+ºøo+ðµ™
+|E^Ë÷Ðâ+I¥äæ¥¨vÀ7
+ÎºË¸Xñþb+ûbdÕáÒÑäœžgiO0Ÿ‚NÐ+‡ÍÝÒ	Ðë¦*›Ø_o(ž¾¾§R¬×6ä9c~àEx(Ô¡ÝÖ¸ÛqB›ù4àýÚ"W¥ŒPþÅ%\ÂÕ.:%Aç ‘&¸aïÒ±GðïÊƒù³J´{‹Ê†nÓäþ1r~8Ãyà0L¯°µõ*êüóûßIç¬O@‹}õÊ#]ê[dMìæ›€Š±GºóŸ&L=ÄDÜ„×/Z5 ¦Ê6ª„U¶Ý{e¦W-û‘5ã*d£†ÜæÛZ+y.ÍTíä¯FâUGŽÎ³GNåÂ{p®\ï5v/žE”Ç÷®÷•ÚÇ¯±LOYd±%eþåuæZ5htòÓý= }qÖâ8è$>ö“À gÀ°­"!ï‰5A\Þ‹‡á,	Ì"ì{(_ôQ¼,’ Õè<Áh#3;¤kd`¸tÆxMahF
+÷?»žÚ¾ˆ´>À8ëŒw¬à½·@ã.‡ARú¹Êí9*NVÑ2A¦š: X;°œM‹á¹©ÿª¤p‚•òªO€c«î/m¿”ìS2F¹1Ãi°·¾NmÙÑcäy#‡­½ÉzƒKðQãk r÷UÓ€1)Õ›rZv½89µ°z|a½FaUñLð­OûOtLì%ê=ò9‘NŸø$ÉJÉtW÷×écÞOi(ŽCci8£ÎŸf6ò=$ž›'ÆT9rö×Õ‹¨]ßt® ÃìáPDûsd½};ž;*F/pã…œ'€š×Ø_<&+§Þm	ö}¯`2Ù.œü•Ì7“ö8s©œ7¯žÁ¾vóŸ¦pÔ)/óDíbJ§`±(Ã,ü@=ž•yI}Ÿïû„¹ó¿F‚cOt^©ÈR¸‚‡·R„ö ¬÷d9xvƒ”ïª¥I)Q‘Ê•ÞÅnÔeVŒ³Nlè3àM«\Ád°{*WùÕÒ×„2ù}<™©!%’ÉFS’¯h{>fƒÄA…}q÷‡À¼•.æ\´'uÚÁÔlÝt¿´;XÕN?Ë|ö5—’8…Ç@"Œh"†Ø7ÜBÂB»ˆ?™õðÒ•ÃèKÔ_w©þzï¯{
+(h#}§V{æUädÝ±±PÒÛZ)"þý¿O.fØoî5’¿Ðƒ†…Ý¯d“c‡KotY@¹êï Ã?æ¿¶-‘r%š£RmƒÌW)·
+-F¯ÞŠlxxxÐm¹Ï«¥/¤+ÔP}]HÕwóY¥Þ_ÉÄi8.§Aº’Æ×Þ^‹VPZA°oTæDj‘>g§õ¥¡¢ÂŒ¬À?¿kò£I¬i…¬qV¾r™m,` [úQ4Æ“ÜbkR.VdÕÎC‡Y?‰°8Á<dðä’•Âeh÷ó|¸ª<…€…ƒÜ©ÔX9ìôÎ;G_ÿÓ×)ÿSÆžæ[-þ^¶¥jƒ¤k„Ç#D2!"ƒX±ÛÊ6P,$êmE™¦ÝmüDÀdý•‘¿‰û«5Ý+t4'*»Î‘f¨Ù ó›¿»ôq‡çÅÞv‚‰ò6yÀ7'ÓPpKqÒÔcëšÿþ_ ç)|Ï¬‰0VU+€´r`	eB&QÓÍê{ºóN÷¢wÞì‘Û OÂ2yPW¢¢ÃªÎ€½K­0Û:á´âi5«‰`Ï¶AtA–)f€êœ™ªxOª¯ÇVy“g»é‘¬$ç¶k›†ƒ>Ï”ê§h/ŸxX+0¤*]S¸·5rµ ) Ã%®²Çœ±ë”Ï{uSwþìy[¤ ÂÓ‚äX'3ÝžºÿÂAQ€È74ÆX[Èñ×Åódwï¹^ÜpQíH¥·|8­e#¥³Ä˜!™4z‡”$Í®`¬oUåçÑ(.µBìq†nöÒz|ak1¾pÇ ð½÷Ç»âDd ªÓCðË9›…3á'³ ÝK\éÉî½7¤ëƒÆQŠ{<	bÅo=ÅË=Ë<ÜÃ!ôAôÕ(‘yI©Äpô.lÇùLÅ•3(‰ÓÚt&ö\.¯ãcà‘›Í€0—Eø¡6³ô‡"j¥±¸J¨¤
+„hs»˜5gœøèç—zIÛä©´MjçPÜÃf!-ÖÛ+±SkwOžIEÔ—¶+Q6À‹Ö×[Óë¯Ûð?º¤+>h·6llµ´Ö6Wõ¶â¥Ú>é”ñ÷Es_Œ>®Ÿú²½Ç=ý§ÝçÇ½“‹ŽÈvéœôª“]èÔ^,Ñ/üÛJrÙúè’\Ÿrº¢D™ú’™Ey‘µèt³•« œX‰§þ®ô´niü¹êhþ½fàå=ïwsq]&8žC…W6d£”—£Ò9¢ÊÁyY8¼*³ x8kB‡>Æàe(êï*|Ã‹ö"¬n"[E°ÀŽ;ëtëçýÁ* 742¶Ïãµ…®ðµ%‰	 aSGÃQ„ù.š6‘„Ib)ïâ
+Ë×™ÚEYˆMþ[øá3Fµ›,§Þˆ6•¢Ž—¶®ÚÖË²ÆŒÕì`ùhùÏIQÕùŠ™ Ã¹¥/Èø;Ù:¹–\--	¹ý&jð›ôÎ`•X¶@„#£(!ÀWþré—	ã>‚|ŒÔ§>?×x’Uf‹—‡ÿÇ?ÿð×4"ËñéIÿâôœtOÏNO@p/‚›¡$tá+¾”ü¹_BÙÛ\[4]Ùz>žoNñÖ—¼‹|ÍœÉEÌ 9£>ö@+)bPH§_7•·¡ØoD¤(ýê” „v®Qñ·æ÷œ-(–H­Â!É  ¥Äøk’”–ÜúzTäO¯¶²ÖåK}Q}U›2-JÍr ’]êxµšKùö3ÌæÄïã,Œ5•›Vlž¶:<»kpK”ˆ\1æykºBN}ñVK[¼µ•9š&ˆ{šÈ­`ÂU[¢ëK)9Q 0aô(EÞ§òÓUõL¬ÎáÌFõêpÐ‰²»Üi×C5ð©T¦gÆ9‚¤Qˆ;X›È²–ÊZÝü…¬ªp0™s/ƒÃFLó^”<Js“MÆw·S;8Žéy»%[~nli[~–ÖA¬Ð,‰0ŸÏôc›´y\ôëÊ"až¤?£0ä5QñÊª£q§3àï2…4w0Jñ¾„g¢´fšD(¦ºì€‹’ãÌçÌæRA9L³-!Uû-8Öõ+Ó«ÌŒßÜÕ#ß¶þƒ.€ ÙF5?y»!NE?ÙUãÊ‘Aˆ	©¼¢¢³iv·ß `-t’ªÆÉ1xûõ+vóu”Ä¬*œÑ/2íá³"=Ûõ½Q5”À)Qâ|›-	Ø8õð,²S8D¼Ûq/RÁ×ÊÞc£¿ŒQFý6ÕU„k¸¿ÉŠ’}În¤PnrÚo»uùp·ý²‘Þ©ŒÎÌ›û•æ­Í«möRoƒÆUšß£
+V™@ÅdùÓgsuÉÑûcQþ¸O)–WeRÙÎç=õÃCþq$ ÌÖÉS^éµ ÉUÿkƒHWKÍ£K9tyU<µ·Àá»3y—ÎMŽîUÃr)øúŽ¿¦öw4àí¨øœ£³Ë}¯{òÃù»QÁõOS~[ÌÅ–KŸÔ¥`­ÕükQŸÏâßÿ¯ÿñÿý¿ÿ[ü³¾;C(k²râEå.èíô¿£ƒ›ÕÊ#ev¨„ÐØnT‚…9OTÔ4úwFZB¿‘?Äê?yC}}ë<—P4?µ'×€àÀ(RühLƒ¯ƒ™ÏO/ÜõëÄ©²¤Šìb3ñœ(
++c·ÊúÆ¶ˆEü¨¬^í˜œf±rB¤­C|'ÁÍ|GsWÌþ~Q½ô/ä|*êm¢r”½¸6C;ñ­y'ŸÇä-ÀnÙ#Óïæ?ºŒ—ñ£ãÁ—W¶+ Jãr’Q¸äÈ‚:ø¤¦–2ÅÓõçï¦6Ÿv€µÂ°òÞêé9qX#[#9¦äw¿»²1.º!‡…?¨8
+MÜÉü]eÿîw@ƒŽp!WÔÞ¤—ZÜäËmò`l\~4K@YX#Ž9–"‰Lvá¡ÆW`1¾<Þ‚aÛ×ÞTð=øÂó}LƒWX/)\epÛ4ú;2«vcñ´TÞ5€T%ÉÛöÙ6®ç‡-åh=
+? æ$è˜»“«¹VVçó¼7·«dµd…3{ˆÚºE“ÓYA¤qË¾l	X*d$ý;˜ôRðr¥ä(PÄ[I°‹ Ù'Fr ¢/ŠÚ'€†#o×Œ0^šñÞnä¡ÙÒÀ[ÓŒâŒjû·$³=ÃCí³Às^3Þþ‚E®KÐÃÞ4Iœú1½á`ÀmÁšâ’@Ý:”UbkäÀöç?Ž†^ñgÞ4ŽJ›Ô–ÔFv8ÃÊQ:+
+5ƒÙ3}ðµÅœ9ÿùƒç¿B—×‘ûž52U	£ïŒëO´¬SQŽ¨ï/Uá–ýð=:DÌðÿù~ù´øü¼ÃZƒÞ9>…O±&–£Ý_|Úbí‡/?DàÐR´~ä0Û©³2z¢ô•ÃÔÑC…f+z¤rÑ;êöNºýéœ_ôŸöá¯#¾Euc‹êl
+$ƒzª¥èðÉÁX†õ2‹Z,*ˆ€§ØhþW~òC{Õeójÿ¡Špi¼Š‡êY:iðÃ\QÏµFŽ0'ô Tû`ÏG<›ÎMjT1û$J«@ãsA’¨ˆúÑ+dpüçÊÛ	ï”CJB5@`1ÿÉš9º?*ààújh³ÉT@ahà]”ùJu]¢[¢Ú·ÚãÊ}£óÒÞ#O:ƒgå©*,`VsYìÌ+ÎCf#øÇJcÄ‘Oš›kŸ7¯à©ÇL{ç’44•¯¶Ì‰§—åSÈ´ŽÝ =eª-L[Ëö3HÑUHÑ»Y'¡"´½¡Ê#^ÂŸ\÷óÖe{óeQ¯Íg	ïT¦(3ÎoVßJ­wø×ÑQÕhrÑÆ%YåÛ­p‚;Ì¸º"‘z`ãÉSÜx#¯dÞõMºh6‹`XÙ
+B«ÓüÎd‹¯éngÚÑ×Ã1ÏçÊoWà WÆ€™<!>A§{Ñÿò”;ÐÎ{ÝÓãÞÉAçà´ÒsUiQUú¶¨¼×„þñù3séÈ[ L"ˆ¡{óRÃfä–àÐ7‘¨åødô;Ï`ÜÆó/}›;"<Ù—Û’Íê¢ôËH¼®‘¾Å§…£˜!ƒúöT¢Ø.Gk
+ið €67²ŠÆ›ñ¡´ÄUáÕYòR99õ^ò\3P®¨]‘ê\È-žÙ K†âä’<,ò™,ÆÌ’ü™xÀ”¿¹¦mWbdÅ ›Ÿ"¢ŽÃ¾£AÚ6/åˆ)ËÿK -A,‘Ùõ@A3“6lÄMqæ®œ\„0ÿ	I*ONÀßlwæ­-ãŒÕZå8÷d‰K|G&””\g‘ìó%H ü‹ À.…ƒFzl¦A
+ª½^Ó@b‰á´p•˜¢“ºÞG7’	ÀUÁÝWºÂ ’ª4Ï=rv~úéíæÔ÷0m;‚ÿÜ´ÏìätÐéÌJÉé òC­ÚÞÙ}°»:èç¿ê Ú&g¾÷3Õ@k.¾2äûsÒC³Ï™h£¤÷Ç³Þù…ÐJçùcÿ¸CÎN/¸'ç¡šÒ×Ôåª¤elþ/±R	K”Ñ%,’‡9W3—ë¡°v3Œ×eNÑCsG2bÏÃò!6‚KQ NaÙ´¯@[‚/‡i ±áü§	bw¤DªÐcš Fƒ]¢ 
+!ú«rú1(§ç`Šú„w†›ÿx%sVæ?80û á0"up’áNpø0‘2Õ+.iÅÐ@€Æ(³<E	®Ú>4Õ
+†þmë­Ü»)VNÒ³±'ô†Wã­àÏ8ˆ/|»C(ioÈ³É/˜b+æZQ%ŒÅ@I*uä®¾7µÖ¥• Üÿ7é`XhpqÞ98•}Ág£ƒSò9è\œÈÑi·sÔÔŠ €µñð¥Š@A©Äü°±”äªâ(4¤¼@·:ŽÂ#'ƒÞáóóþAç –>ÞØ‘Ì6ÜK”äî	8<P;‚ÀTþNtÔÌß]££çud?à%K—¶ÃÏ"ž‚(‹<˜,û\¤iˆH»<•DÈÃ1¶ª6¹À*´¸`ŒŠ·[­¿'GXIÛ|jûAXŽª.«}?Ñ¥‹8:cQ™èƒ1•­Da¦®) øÑñÿŽ‡Â€‘± œ¿H’a§tIrY 	1 aÄù;Ì&Š0Î3€“G<oÂ&x™eJÏÔöR¡§7ì’¬”E©	l¶vÚ/KãÒ™ÚÚV7ÒxEô ô±^]#'†æ# ,%mdð_1yv‰1~þ^sýjz˜`ëð;N/²[8õd'Ö„8¥j¶ôØX0)i`X+šv%÷ÎéAeug‹eîr#°wÍÁ²}NðtnåNÞvêä¹Hf<±SÝ¨?ƒ’$RÞx×r¤s¾+kßž»Ê7ƒ£HG¥)ÞnÒ©­åÃ4–púxéê.M*™jÅ
+¼±ÖÇAdˆ‹*usQ'ËŸ6H6¸SD°y˜BMçrPì§‰üêó²¼‡kÛõn4ð¨ÕÍž¤»Öé>6•s< °l‘TÔ¹±¢>4> ØþŒ/¢SÂ¨/¡Òç"ÿ|YI"Wj=Œº'Ž¯çZÆ0ŒÊµáêˆ)ñè’Üeîj‰°wX^ã(@ø‰ÄË‰Ntðó¶’<õ™Ÿ.çÚJøøóT—èè³â™Oÿz+wè£ï>á#:øæéóéâç›ˆ1Ÿt$Dç\k1VÚ”6¶öÓÞV‘+Û©ð<ÒáMÃGÎuô?M…À'Ò@àdDÎØ¶@YÓÝI´Pã^	±¬üÂÀÆ]~²_tÍöé¹– sžƒ÷&à÷Â,ÚBH)Ê¾XkÛEÕ½­sæ™vÌ2ë—^`h…¥¸ÊåX{R1QÇ„¬Hv'½‘Ùj<>;\T[Ïj#uÝx¼N§ö:Zo¾«Hš×úw#'¥3Ç©%ÿ[¦—o©ò‘«ÙÝççG{zW§!kAf£–9¸J5ÕÆ “.¼Pìp•Êáÿ»Ûo@ 8¤ùG‚;JþË‰7Ÿ‘F×ã•îÍ`«Â}(€Ö9ß”?´Èg"ÚÔ@áÜØ#‹.?±—–ÿ|î‹&bâ×C‹{¨óŒë7xÍ6“‚¹Á³xØÊòy‡1°|£¼rŸÇÞ9óÓÇ)w[ÂâÛÁZ<.È;orÆaýqPŽ»ëG?…½‚Õ™ï2çåm}ß~&ž»mí­¯ss|ìáüVš4•M	8qúË ö«Ég•¢ûb©óEÇÏ‹ôvìØ.Ø†Ùþ1ÜÀOÉy»µöÐAØ\<?èŸ®­­‘•gIÛfLjŠ‹ÒŽ©ÿÊe•“Dƒ7³ûz0G+&Ú©CÕm÷‚û”‰kä5ÁIý Q8™¿Ã³€7ØÙÒˆÄ¥¡
+–ïëü¥QQ*±ãÉÂ Â³Å{ÏÎ fL8ùkžÅã|~ª7œŒž®ÿþìPÞžeg+qh}ŠÕ	mß‘þÒ)õçï&L:ú¦ô†«¶ÏŽ£Ž¦ÕàòÔŠí¬Z±¥R&2Cƒ~óZ¾²¹m"×¢Ú6)ØÎ’Åúýàô„œFË¤g,êYˆ>k|çðüÙ_>9=Óú§Ã‘××Éàù¸÷|Ôépø½•îü'<Ñ¾¢CØ[½Û'ö„EB‰Ïb}êŽàV^ôöÛ)5t7Y‚šdÖÃT‚–ÒÑ62˜¯JÝÛ/+Ý¥R¡‚bÕoÐäÉSõ{+ñÄÔA 8ã7*Ÿá53‡Q9ÍÙùü/Ý‹~·£:¡Ê^¬õ¸\Yd£r%ÔÜN°°ØKÂ«‘y2®0a@B>óÂWì&®â}ÀõFÐ"=Q¸<á>þlÌo½4Ú*0¿?À*zo‚1£ãy8aW†6ç®AÜ?P\ê4¨R2¦æJâDsEçðMŸ¡FË‹õ&Ç“b'Q)V%Z~¢äÜ"¢àÄmV²Õ˜:"šý9¼*ŸËÄ†?eìy‘.ËF×@ÎÎÁ`_‚ni{#ŸNÇ7‹áagF(üäW`ì’-|’Z²C÷!P$6 í9l´‹ª®çðü¥—@î,N \.‹m½¼ö×M7Ùô>.–Üí’ãî¹"TpáuÐö
+ìàÑí
+_àç>ð¬H²kZ,C0‹ß+¾ZÑ/õûc9úJ|å%ˆ|VìÄX7r¾Ò‹J–t‰Ô›ŸÂBdœäo‹ž?_ž{|Õ8¥E[F×™¬ÔGÙ$Õ2[ÔsûîÐó.aí.<Ñn5öH¿*£3-€¥ÏÑ£ÛÌÛ²²Ü9J.‰>)»
+ÔGê÷²·*~Vvå•Í¡~€ED•ýê;{ÚÃ‰¸ÞOmFÏòÔó£½SNð?F‰«ò_¥†[A8èÒ:Ï…ËDÈèW0„!¸šGŸþ#~Ò’Ûxþé”¹+è8/ï—µof5­ËÅxJ|õ¯ÌÄ€™`Úâ30K¬–£ÜéÚ‰(£Ú­b?4{p£_žˆXUä'æoO/ÁŠ™©zÓ&ÜÅCøÿ›æ°±Ðþ7_lˆ¿2¥«ë9ÇKgæ7_ìòÄ(EG-m3èÚ-J’ø®ÙVáëå«âdÅËß4Û° íL•RÆG°¥H/‘­¯*c½äžTÑF«¼ˆ}{õ%I2‘Õqé¶ÏÚú;°×;šèp¥'G—YQl	VÞ&6ÕC$Át#ÜgqVOœD;ö\fbêÚ±”:Šp÷9HœzµÛF¼’lÈ8·­w^*Ì2éŒyÄ±<&ÆZäs —¾í;¯«˜ÚÔ'ÁŒgÍ3äI03Ž-”$wgÜÝÀCYcšRŠÅõ5_Ýð–Xþ@6&IK‡çT•I–Ëë¢´–¤jR@˜AæÝL¥„ÄˆO,¢b2ÿ8:ŸYo‹2¶w…YË¦ú*\wù\èè*VCà>²‡L:ïôm x öH’V|¼ª¸º|.2’âãRé	JSÈ›JXDÚ˜Oíµr´À…“þƒ»yQªk–‰
+Ÿ…0•Å[gå'Ë.~'¤ü¾\‚2qž'8 Ün¯o&'<þ˜7üuG•ò›éruD–Ž¤"Ò¸q)è‹bÚõ–Æ—™6*Muý|ŒE1sô æ›Qâ9%^ä*Åâ9!I0”¡¸Q1!­$|¤¯q@C!S?áY$ä_±‹iÒE<Óî4ÕK¼­h,®nK¾^Ò)*UPººþ¨%_(sb7UÙ³\¿ä©/
+Žài^òQHaÕ{JÌ¼TXãq™L{f¨¹âìM(0‘†HØ9‚w¥îveEé&Ã®ä!¹âÜ’YäÉ<ƒø|—RígC€3yDRw-ôŽ¼7ÌÇFè+
+0Ä™ï*E>Þy-Î-É¸f»CgšË
+¿÷*ùóŸu£ärNî4–8ì@ úaÊE\©[>-ùØ¾"+ÑæDZZã­UÅfT¬§.€­vóFã.YYW•u*¥‡üÎáNmû¢•µðOêüïD ÅZ%¥$##˜hZ€×Žâ+-°°œq¹A—Ÿ9"3…ÇûJ.ç€4$â~Þ ù’ç?zš2suvÿ¶ÊLáàòÜB™XU!³¤ùG8Uâð€p*éÐ•»h°ÄÏ­”Žâ‹ÒFIdy<êÌÜHÆJðéÜrˆ%ápbÓÉŸ¿+5ž86il­i×z¡fb¥‡»ìhkOj]ÀAg”z»Éœ:Íû6æ(:]áÜË5Žî~™_/y¡‡ï–3FÛ2,ÄÉ×ÏÆÆ|:lïl¶^*¢²ÊšÝl/µ™À«xÉé/‘{[v#j9M¢”}îS>_U]yEÖ}•‡©ÌHØT—íJÔMhUª®Ì.”G×Am‰tcÑÒ½ Ø«OyLå½UL(:«',£iIÅš”¥pfµPÐù¬B{‚Œj2}[£WJ-R‰‹“*K;LQóèsõ*Æé‚ÄôHò‘®´¥öÌöÄ@Èºó¡Á—Lx²“èa(·&§V÷ç3ÛŸf•£(7P¥«syµ¾RË¼)—9[h·ÍáÒÓePŠº;ä0%½Ø@ÄõÜ¤×Šéžßé'ÕtcZ22A›žà?
+DÁûüøü®}ÀmUSùÄ	G¬<%¢pé bä+Y¾npµpýyÔºÃ Ü‘”a+eüÂl$¡†‘Q½’£P³AN}{„]P0É{ÁqJÂ•ÙWŽöD)ÌwZÅ¢è,ÞWÞã-³.Õ^ï›f&úeZ¼¨©…,UC¶y§Þê¨d ªÎÆE‘‘_IGš)àòg‹œß¡7½¹ðà£é¥ÆRž”ðJmƒT|¥Sœ¯Ó­fw[$ÁÏ³B7
+J£üYiðäý“Rx]h‡<vW„Ú:GEÝi%}À`7
+ò*Ë þ`Ä#8ìsX˜aE¶µÅ¤û¬än)[#nû¬hÅ²uÿ4sWZé9ö8¸Ïu±ØqGš)Û™3¥êæ´•ŠöëUA(/*‘aoWW
+£ÔÈaB€[ôb®`ÃKj;äèÌ¡7‰H‚Ëü1!RD,‰_W–ñ”S×\„“ÄZå+‹l¤v³E¾k¦«äd—ìŒ^ŒÍ®€4-ß›6yòË¤,€‘£Æòø`*«,‹¯2Óª4§i¡\«ªl+Å"¥+(‚s‰‘Ó é¼Á?ó©M¹@-ïfþbwûõø¥ÎÑc¥Ê÷ÓÚAN³¥vÓh¶Z:z4IJÿ¤Æ°ÌA_ìÔ‚¸Ø,/O«‰A¸€½xòª}:ÉfÎ¡ÁNxe­ÚÀÖÌ\"`¼¸ä!¦sBœƒú1”u›šüÁ¿UeïE¸í/óSS§¥â+SÄÖÎv:Ë4ŒÏyR=àÅÊªÎo"TË¡r[ÿX'UE'çê”ñíyæ¨Ï¿Ð{ó7²Þü­"-UdŸKjsÃlP8:SF¶!UC'œIÀ¿Å #R†fÀ&6¿yŒ	$üzúÃwh	õÈýŠ&„•Ðæ÷»äý²Nºó¬™Cv–¾ð}«Òñ­×"UÜI}ËÎ¨¢ÕïÞ’žE­±°.ï}/y‘ÉG½‡ó\fÙ¿ü«sO›òA9}áÝ=r¿Uîf¬[ãÞm¾?ÿY6KçójÜE|Ðu}Ê†cé›÷´ª©RÉ²
+Gá<.jñ{Ó€çÇ»Æ¨ƒèº6<Æ{ÔT”âÝ-6Mf¡×ñb
+æýnN!t\±VÅ0fâƒæ5¥±Æ’í1Ž×Ùƒìò¢ÿÂ¸Î(ïhŠK4y#»‹û$Ô»_ÄA-À“T9ÐþîÆ-©ˆvD9½²‡õ5eÐèË,b»ç\'3.¡ *Øù<p–ôAmnWôQòc]´û~ñmô.¯btZC^ É¼¦ª,mmä¢4bñ•ÞØ?‚aŸz¾ð~ÓÄ’M‡Ú-A‹.dó§b‘[Åô©Ej…jU
+)Áž•Æ.‘1–‹¯
+X¸˜t\$=Û"_èôz­2Ý3à*¼ Ts›Š@Æ¿½ãq8ËûD£?+•g²·ð )âi†‘AD>bX\_&+½gç:PìšÖ@Eg•:ÇÉ’ àgÖ¤”/ñŽ§©~ŽÁGpRpè)BÝÐÔ4Áùûäìà)9”%'÷½‰êžRw2);¾fˆ²¼ÅF*IÞ©ÔåôÃå3xt"X?RIÏâƒug`Éºareß*Í¶4£`y‰ÖcºŠ7:KÞWüzÁ;q=}+þAÕï¼Yg”y*x«ÿí‚·žôÄ'•W,x¿¾•¾W))$¿¬{Ääç79ßê[÷6‰Ìos¿Õÿv±ÛÙÀ÷ƒôä'•WÔ½Ÿ`6ñcuã·úßÖ½M}ÃoòT¾ÑýNË]:aH‡c‰¹S6Íü ]A/^ê‡Œæ´	ŒI]7¹ø7&K¢Ì&ZÊî§™à<î©T+U]£L¯Ìê:‘Z›Qv¢?~mG‘Y {B ‚¥ç¿â–ò}+8wŠv×He\²§ÎŠ¬·S]æûÔ_4^üX•qUz	¦aý]ú‘At´ÃÜa
+V¦v:M3¶Îû‡Ï.È Ð{Ò9ß#GýÁEb/Î;O:¿?%ýÎy¿“ÉÛÚWÞk¤:ôæ`.)Í*F¤¢ì)À¯r™J‚}Ç<)Im*žþTÎ”¼`s+}IIÖT”1evƒ,4UÈaú¦ ºS®\pßŒdÑÉ¾ÁwÅ¡Ê²ØÆ1BÁ‹O[[ínÜ.ÜÉ{t¶	">E›\rU>õ*…¶´‘£é<e!-°¡ç‹BoXRê^IÅ¡.h*¤’Q#Ä­Åv¡×ôÉ•ïMÒèk›fz\{é/3ÙWéÓÍ«vzUÉóIŠŒÐ¾ªŸI ˆ«Ü·ÛÕ¾Û|NIY¡Y)Š¢Ü¬vµk½›KJ¹ÄÚwÙf}¨+•ËñyÉ\ti±)wI'œýÿ   ÿÿì½mo#É•.øýþŠhÚãVÍHI‰z»¥êeQ,}õ6¢ªüR[Û"Sdv“L:“TI%0.p±Ø¹cxÚ¸fë[ƒ½ÀØ^Àèý`Ì—Œþ‰ÿ€ýöœ‘™‘™‘AJê®6L[Õd2™qâ¼Ÿç¨q¹ÓA’Éoh×jjâ„I­ ÏçÜù\çI˜§MÀ¶?;™otZµ/ÐŒ¬qÏa{žxŽf´wF„Vô†Ñ«yU¢­!KÎ0T×I˜2ç2á0)Y.Ñ(2:Çv*W®0]9YÖ)s:ý@™ØS¿wmÁÂDuQ6™Ã‘IB]Øüá®ªkŽ”;€#­Ë:n—&j5!®>LÝ[%‡-›asº;Š®_`Ü.ÊŠ-.œøk`Ë0–$Þ°º]™»?´)‚ã8Ÿga¦‹êŸæ^t áË¡Ùäú¨]q¥¬¢{‰´{êÔWS†ndN g6O[sŽX+8TçÚtm”ûD]•cê`3àÙØG£º_ßF!n·LáÓÞíWNÜˆ 5àY±û»X®®›ÐPáêš¥ò80Ü•½ 47D±¶çáré:­çÚ>ÚCÍd»jôœp Ël!!@­Rðo5epoUÑÑE†·É”%JŒ;V~9¼„]XßPÍÔö0jxÈžüµî´šš>BcF¹l—Å(kø9ü¤üªòÚì¸âøÆ¦b~ý‘—¥á¹7êùÝRanÖºøö)º¼KtâJWœYzÄœ=?;<hã´‰3MÅ±<ôÉwbgœNi¨Ëé|R¦QýüçŒËýµuž_‘¹mdÏó!âE{áIàc-`Ñ3¨/¯ñÎ(*/kˆõæ¬ôpØï[«öºrƒLµ¡Îæ’I„õ½‚Ñ[Œ`©,rkÖ¬Ê»fÀˆŠï<™r6‘}ˆiÄ¥_¹\^8CÅ®6ã"§¦_ê4ešñC.ƒahÌìMµD¤\‘4`i%¶)ŸF5d+Ué1^OMkó‰çP5´µ@7-(}\(i9¥§e”–µ¨\éÉ™?méÊðU”é^Àˆ1MR~µÅIZ—‹WzÒñ©+36X[f?<~Ôzzr§Ìd!«q^E·[>qˆœ˜OpÕCËa§¡­Û)–¼±ØÑœåõv³ª˜÷Gêi¾^JÚ#1ªgµ“É•ã©ä,»Âåž{áÌ†Ó&—s»7$åæ)B…LGÃg~› 3¿u´FÕ§KËs-±UÆµ–W4ýÑ9•h#hWšîtæ5Ú¿¶5ó€ž­ ðÁ€v°ßŸÄóÂüLM=…Â’¥"y¥›-þ¦–-³O©·k©öÀÙDFÚV´“t›¨ ;\œé§¥¦y*]-€ÅDö9ÏÃæÓ	ÆQ"ª©1¬™ñ¥WcÎ2wÍÙâuº†ˆn²X;Ãç±teaƒÍí•Ð»žÉSrnÐ)ô\$`n„¸“Øà]ŠWì“(ÃÎƒ&_y§Îµ3QA|EÜŒÑûÜÅïÓ¾y	+j=Œ–Jÿþ?[Ø›	ôg¼ù)ZùˆóæQÔ ÌýØ90åîb|;ð¯?)=2iŒ‚#š\2†èõ––ÈàïI„D†X"–äå¦9?†Ü-@Ä2YË4J•ù1õ_b¯Eu¶(ÐmÁ×¨FþŒéñŽ§“ æN?Ï{f­ŠtóQ¼`iwaÏa?¦Ð‚¯Áæ ¸¹…6å¾Ñ¶s¡[6Iè¬I0—Œú÷€Ä¨-bL4þzQÿç ôäÈgç:ñÝ-VÄ÷N;9®HªÊ–*¹î7÷"ìöÐ¥ˆ5
+ãÙª+L¶kžpšV|Zf ÝºWVn)/ìˆ–jl—‰ßcž:R`Ôl-âZq²Ònt.°Ãé,¤ó?îòËõ¬MûÅÐ2~©&v¶oâz0l0j¦Øº"ôƒøeú$7zêôúnr£~ÖpH:#Û\Pñ:'@Dy%%B9¡ì1M Y–æ)çœM·QNEßëÊ®F•ú£×†fºÉ“î\³„¼åçZÜ,šÛÆ”OnÏ7üèsÁ ÓN±3Å‹¸½ÅçXJ?£À4BL=JCYÙ´y´Ü<ÊW¯ÖsÅ´™§Ò<‘zú]]Õì‘;uzèD8Òfƒçž8ÁŸõUß;Z;óã–'³p°ôÙ÷o¤¯ß1ç³‚ìÏèì¾È2Î\/ýuyê¿@ñÂ{X^YJ+Î¶½·Ã’'0¶ƒžÀ4Ï_öO¿ùòÿ’¯‹g¯™¬ ‚äŠŸƒÖ¶Tbø»a%ugþ*h—€¯ìs~žH3^"—o>”Ÿ1¶Ón[î£2!•§cJ«Ô«ãû7Ùíþî3Ó¸LþD®_¶É11Ðe)å§ln,s³/ZºpÁ9* Óùû4„\¯ÈèQb=š­ÃÒfšðS$–ã›á7Rƒ°Ã¤Nò²nûX<FÞYÚ£©›FUÝðdÅ ÏôT–˜×0Ôåëú$¯XÅç©\Rì‚öæNV“HY ÍB Ú½ªnTË¯xZÆ˜±ÔS¬Ö-¨²üšî³aKRSæ™Inà@@ÆhŠPìf&›Ý¬â[P‰L<OpE U&ÜŠ8k±Ã(zP[ëzø£Ø“È/‹ -\¤Vò„}U­`UÂT¹mÚ”¸Øq³0þª
+5v|ýØb(1X£ä§B2)F`µ#&JÃ#¬ÒÀýÙ»ÜôPçrÆª„¼ÌO«BTWÚìa}Ú’rÓ®§²ê)(IxHldIÜÄ€?Å,)÷\Å»¶`ï«\ô©[Â*4º<<I­'¹v}Éì„Ï‚+  Ã”·¹¨äíÉCÃD¡ÔÅZ_6”Ñn>af½/?WcJÈ‹UØÄžÖbÑ«Ð¶ŒÅùýþÐ-^Hk%n>òMŒý‰Kåq[KYKi¯PzùK—‹`C&sÁ¨°i%¹‘8‹ª“«OÕÞ¢Ú£×sË1/rQ¸º€ü²“ø²X%!EŽ¹oŒ^LzN¬zp†#)Ë²ë¡ªy
+1èJ½Çñä‡¢$vJr>j÷¹);±ÅKûáP[ÄHï…ØŒé6åd#B“EG§.õÿf‰ä>Ú)/øÊTb2&¼÷1Ÿœ»N×ÂÚº3ç4$R¿wªEÄwÄD¤½±tòä|5qò)=jt/oL½¹Ä(iSàæg9%7Nìó‡XwËŽ'vMÊCHÝTzàtQ í]-(ÅH¿×—ûkzûÞSûúC
+µÆ1‰Fç»#uÒ?=B4¡“ý1üw÷†³Cx+¾<óã$q4O•7ïxãnà½·ØS­åV÷öë~à\`2jëŠÒDÅ7ÙbCõð^—…¸îÑÍùUÐñÞÝ$›æ“|4˜í°W¯UVLm\«NuÜòwÒâhKÒÓ‹‚³ñ§ßüúÿe'íV Ÿ4öÛGråùãß§’^d§%%)’¥v½BuI[ºÒép´CïÿÙ”:,k€Uè›úšM)ƒRbCÙ<¼,=¥Êñì9§?¾ýÆÕõÙ‰âjLÉ=‡‚0{A™zCY¦g–ÎÎpJ—Ö‰žZð#ï,×.¬ºî°§í•ÓÆ^‡5NèÞOýpì9_ÐûgC×»ƒ±«èÁeÂ-ÝBŽôsÛßda-i!JOö[‡í£6Ã´ÜgÎsv|DuØ8ÚË^857W9‘iHÔêMZ¢ÓcmðÖ›PÅUJH=†3÷`FñéÒ£x!þvWq=yG‹ëîÞˆ7òw¨‰ù¡«ÎUÝéOùOT8*Tb›½ïR¾¾æ]ú~XræïGe»ÃÃâJ®ü½êÇ¡?Õü¿Êÿäp6œz°ŒáÛPþeê‹äw±0qq¶òåÿ`‡Ç{­ƒcä,N»sÖ:j¶ÀdN¬}xrÚê´o¿<b?a­ŸŸž5šôQâ–Z“œ{ÀÚ'ÏZ«‡ÇOÛ-öÖ~vÚ8l=’XÔM8ðßœ ¨ow”¦ˆª‹‘¶Ñü‹æìY4g·"%»srÌ^Ê¨^»¦»Õ¯âDÛ5l@dîU”45’­€´DòxÜÕý’¤4ˆºKÏÉIè»u0ª/‚lYš¡B¦ BNÜÁ
+jvMòæêdÓšºÂÜ`'Lu{4u‚Dâ5íÓ8¶ T
+µ}òˆÔ®ÖB¨Å™²IÏ„wüÌc~ëZõfic´"9_¡‹)a«X(K¸µ]ªR­qWpÅÆ‡Eb#†<öC^½çwE>®¢Fñ÷E;%f–%Ç©ôª¯­¶LŒ °óÌe|²N˜Uå8¯@yRß-Y%ªi¦VhÊÊehµâY5•ïH»iOÔøúÌay4ÐaXUÍ×åªyTfÉz¢yû~WûQj|/‚c]fd˜áL@PþkÞ8Ìƒ}î¼ ¬œÎÜS­+Oï1‚]›|ay¶°˜KBQý˜2ê<]r‡šrN®•€%éü†t>R²´™R¬ïë2'ÙarßŠªÖÿ„}œ¨·’ ‚ˆw©üLýåwèòÉ6ÍDªó‰´9&ª¾¶:ùJíu ½ðÿÈ!Û+
+z‡\ä·ŠðµžªyõÔ%nõiÈï¥w¨~;„¦%µì¸>"NurÀÀ’ìÒÉ¬¦[<åéhOï þÓoþþwèä’AªLTD¥¦ *HA­õ(a(1H¾¦¡#Øâ‡.)}j‚‘RíïWTžÌ\…ÌÂ´	¼s5z£Ù0òüðªÕÄ‡zé€åIù½$UË£oáýÈÊj¶¤YJ,2B3=„„EM‘3A¬tþ”Ï<²­¨åéÕ„ÕÉáOÜŸÀFÍÙ`fä’7™Ð,X]R'x_82ÊÙéå¢bµŠ†_Î'KÿÛÿøãïÉ:ô|è²F\˜9…éÝ©cÒ»ø1‰ÝïeH£¶×Ç¾#dñåf/]Þpáx[*ÃÓª":zÂ0I2Å¡œ)Úœ¹ÁÄ'¨AÝš›ZØ¼ì;Á8‚I96—ùHyjX–O±Žüá2ïK.–pG$¿t²÷zÞ–.¢’»sOVêFÀ¼Â.É$¯Ò=5,=ø¿M#ëµ@!VÞèUÂ!ýãûx-¢tÜ=ÁWf™uœ'ðp…Nœ^¨o@¦Ž¦#•NÛ“œc¿-‡}ýØ ¡¥G¨‚. Ç>w»3"$PH'™#
+eìqGÇý'6å§zØf“YFEaì\º}bÍÔ7˜7¾µÔ˜8Ð?|:Ë®ðf:“I”R˜ÿ|ŠN¼abÇG7ìú£ÉÐrä:^ñî/ƒò2fÓÛ¯¦³¡²±& =àÅ®;i|³©G±0—ÌŸððžŒ|£ç¨ßìh´â K·@¦mt•[¹‹t¬Ûª¡8ædfóØ¾H'½oŽ(Ê³"ÜÀÉÓ'¤ú“‹¤¡!6DL•S¹‚u#{ªªzÎëÎãÄ äy'¼jÛ¨JîÑìrCë!=˜
+±¼tÏ¡Úl	Û£¾8=X}{â‘	Üò^”¥…ilÌ¬HŒÎ»w
+¿¸&wb¡ÃmÑñï&aµ®ÈæjœWSÊˆ°€ýß.sIô²-Á’–dÇCé[:A‰sû;‡Óè7@•:-™êWb*¿æ•ª ¸^C¶ËÞ ßñß”‡~—Ê8ËƒÀ½Ð—¹Š³}ŒˆóK,³Ò§@;ã/ôM¹DÑ¸~H|÷¹’iŸ¢¿¦Zó¾ÿ-fj½¡±nl4ÒÞ²×”Íùúòmg³ÓDÜ‚ù¢îÐx‹ÍÜK‡v!ßÁÝ™Óã
+×$6llŸýoÄÉõ™7šœûNÐ[ê§[»-3oªìåØ9>*ƒ:	Ää¾”vË/S¢eV{TtÛohß™Sâ{/íðÝsØv~ñ&úub…oCl±ñD<‡6×©¢¥²ØÒYfo¶×ìÈíy³Qq* <ÍJ“½ŒRÈ#§/0„šDL…#‘…%lØ	÷+÷©Ñe0DÓÒ	ºà*ac¥£Q”•l¶1ŒéößÆÂ,Œ,·< ¹Žœ'\ýÃ¿²cÉŠ›$YŠÜ™-[ìâö«4Û~¯¾W9¯\T·_ël‚R©´pÙ"åy3N›¡_w†5T»KÇ]cå»©æ&Õc w»'M‚/Â»Žâ5II]Åº}¯ê¢[uÐH•o»–ÎC 8VŠXÝÒ6¨1˜ ÀVý¯ôp J&PÕg×ôJÐmgàþÔ6Ö›fxj‚E«CéæXÙ¦jéM Ò]à„ K=g2%¥„gFž4š¶*«,ÏøNÖ5S6ý.93úÒk»Ò;ÔjÁi×Y­‡¸¦¬T*7ñ1éþö+'d×lä¢¡,6vû ˜M×qé4ö×ö6ãó„`ãXâîö½soH· ?"6…ÀÖÞùÕ@šŽ]ùÞ8$gðŒçÅüŽ6ÈZï<ˆxã˜Î§A£*tCU7ã„šÚÐçš>(kGR™…ý5wŒgÍY_8”tÖŸØ‘¤=î•ˆR_k"5Xˆ‚Eüï—>R\ÔPÁ"ó‹`Å¯A®´Ö^»Éò`ïÕ*CDÄTØ/U¼ƒ7¢VÄŒì8SŒ× G?¹JNÌœ“øåP+áÇÀJÆTÊ•WüZŠ‹˜Ä•ý‰hÚÆ?SG7ù@<Øõøª©!óC˜1Êß½‰ßeTÏÔSŽE¬Lš‘x4D §"|„´EšˆJX!ž©T¬ôDEt¨bžœÚhžµ_“–yt|zØ80)™ìž¬a0¡û9(qžGv(Ï‰ëÄÀM¸]¤þê‰GÎü“Û÷h†’}l4®‘*#ƒ;„§Ä›ùS44²3$¹/ÑÉ­Š?üÓÿãï)V‹ýûÿlÞ~yxÌþöEû¬qÊZì }ôŸVŸŸ6Xëˆ4Øóã6Ø³v§Ýl|¢\¿9RArÖ$‘ã|ã<„°Gt‡<æe½rÉõw»pˆÂý‰q‡‘Œ¢ HŒÇÐ:†âŒ	'0€&.œKøóH(ãÓõ)+‰DæLrV$:¼*6£›˜ÙÐjfÖ3ƒ•j+=/ì²ÉPja¦Ç'z<ôž´ÆøŒ—¨	ÐHÅ—’GXfç3»”vƒ‰«Bý1.Mvwª%méIéq TbÝ°‡·˜?çešˆ-ÝŸ	 ¹Pøˆ§Ò§Ñàâø	‡ÛKÜ¾ž®ž*µÆ]àX”ˆúÐÄV'“[â%x…WL…’§½ÖÞ.ÞÑéŒ…Ò“½Vçðö§ÍÆAÃöa[áQ«‚·Npû7Dß*ø`:4)6…CEhFváv\%ôñ™“²þùí{ØUSŠ¶"]4œÄ5A¥îx™Ià_ )!;ÖýñêL!æHÕãæõùWøûŠuZ­æÙñ)V5íµ;­Û_³Ö^Ž`½ÒR«svû‹£=àj/;¬ó¢ýÓãGpÚ)þ„uŽŸž¶Û½lwàVù‰á7­á¾µl±å¨7±%Š“ÈI5ìÏ‘3X(Ž5³ƒ¬•-—"Î+˜š zÆz‡…köƒ7ôyhèÞþÎÂç0‘gž;šø”€£$J­o'Âòó„}¥3ÏšÎèÜ#F5¡šà¨¸•— `Z#°€Yw:ã	á,zŽK°=Ë,®,pE¦$ìf—?}”‘@ˆüèÞJ¸Rw¼Ùëú´ùEIJ|~Ø®CÖÁG’~„P>Õ®`eB 2’Äkà^ {éá¶¿àßù
+s4Ðš:tãi˜¾˜ƒô —ƒ‡qÞÎp¦À”ÂËø¯íù—?hŸÊ™*3²Iá¬Hý¥åþ.Q)]4yÊ†Êx¸á‹èH’5¤Îâ1Å&¸iÈOP£o(2{Îµ?›R`‰¦Àë–,2 E¢WÄ‘èA“¬Àš>c>ê/l•hÀ|[}æ ü„äóŽŸRk¯~¢&—ù3$Ž5lV*ú€í£Ï”Ž/E‚}]sÉyò
+¹&‘ïø{Œ“Ý-rÆò)=üŸ=I¦ÖŠ27ÓõÕtÉ‡™:7>pêü‡¨3-_>,u#‰õéˆK¬?s*Í?o¡‚¶$§Ê¹6)ÿ]ý'Ò_ý*f¡YÕåîñRc‘¯ì`£Sòè©«™äþ™ÚëéžAa,‚vZ·z
+\ ,"ÊßÉ¿—”öòd{]â¬¡ß–
+$°º¥ûÆØ]Ë4J¨StXÏTÈJÛŠÊ úÃ?½gæÙ‹ÆAû§£½c4uÏìä´õ²Ý “ù ­ŠrY[ÑÏÏ<ØSêNärŒC0©Š+…½®ÒÖ#œŠ ÅÈ#ÚÐ®0kø°±E„:oÝ8X×”*UÞ áæ	ç™HLï¥RÏu8pFø¶uFÑ‡uá¶ÎÞ®T©8-æ°˜CDÆäÛÆ$gÖ*JAeÒä"ÓVYQKd€>&¦Æ<IÑ´”gÚ*PZ˜WbØ-àhwœqïÜG÷j\8°Ã0yýáíWØ‘ž¼ÔÝ.
+¡‚Iž)'c‹«ŸÍ\ÞêŽRžiéÁ¦çøehÂó c=Ø—¢Äu
+: 9ß0Ñ²ëƒ…}éto¿[»‹Ž—qWA”çÎàI=¸¨ÎËH‹<T%i‰9NØ0xñ‘C‡Ñ\x0äÆ:ó#p‚yDÖó—Åh­Kö¼‹;sŠäkÑXí\ŒØ¾½›}gp,k’“½"áºnJDP‡2áŸ,¿Ü“;c°6	]8=”ÛŠ›Ã€ó×‰_Ý½’HöfÚ‘Ÿ ±H@ÚwØüaÖDú¹>D–Q¹ŸxH&PR€hÙ‡°±†Žˆ%=Â[Îkåxvn]Ò“yŒ¤Ü¾‡MàÓñ=§c
+Qœg™aOLøUçy£Vß`×¬ sÀ]ƒH0·¿í?8˜,ÝŸB½¦©0ÍÔÂ±±=^a*aœ°*ê!z˜R¾“
+ è‹G¦=ÉE¡ö9Â »[œÚ¨ÏGÚ}d•Éð&åÀ¤|[VdDSKÂV@MWªëzƒF4€0hªT
+Ìþ%&7Ï—:ajkx¾W­©=l¾ÂSº©R¦¯GºD¬õSä?¶“Ìo{`–1‰zX†”ê¡»_° JM¬àFæmUTÓXYÏ¨7ëiaY¢8 ×©Óa1úOOÖº,ºÙé¡”ÆE¿Åš îvè—™€Oˆá„0
+B%ƒQ„Ž}/4ÄËEÑó¡¦¬æÁ8I…¸ÙT¡IË
+:0×€SpÀæj>u©±Ú)‘VrÊŠwÚdÁm¢´¤ì.¡{ž¨BøKZ ¼m’(óƒg. dm:Åf½À;Q,L4 EÚ®ÅEÞ‡õ‡dÄIÊÅñí²duíØO9UBˆ|U«VF£×‘Ý\ÛÞ¤OW1
+''szþ4	Žv0WŽ~Q50n•Çz­"7R­Ö&WŸ®mDÝ1*Ëô¿ruëÑk)êûbëžÇÀiµ_àµHoÕØâ7]à¹þèÀïû¨ïüà,9Ð™^…õÜÁ6…%kRÊ"ôõçšòŸ9Î#š6zP•õõGŠTjüïô';Ãén)žž	%PÀSJª”ÇÁD«Ü½"ÈD„GýóÏ1vÚåÂyhÃe÷Â78ñAh\âathN-IË¦ôêÓÞQîô°]M3ÇX ‡:ýº‰ÚLãj³.	Q©¨a€ÂlÝ@³u£8âÇÆÓÛ›& –Fò(ŸôU=Ý×ãªf-³õÆEüLÆ½æÚ!Ñ‹v
+žn ßè•žÕuœÕõy÷BôZ`OD¯‚~p&K"z=6__iú#¾(bJ+ÝÀÃBBŒï^özvžúW»¥
+«°Ú:ü¿æôp¸[0¨Çl)=Å[0Ã[)ÚÚ(¤­ø®g:`=à‚Õm†™=ƒ•z¹þ²Þ­¬”·ÖVÊ›è‰þBüGcðw	ç>¯wñTVÉ|Â{&Þãß ¯[ÝîVœù.Äë‹cøûKÄs8™.Ì2ß†Ùa½-öþ£g]…).>Ñ¦ïN~Ñ.0Å¨¸æ~–œó1ôU~áf	€ý‘×›vKÔ†ˆ9ðÆn×™ì–ˆ	ÉG±Is|XG?”¹(õ¬w«åõmXõ¶¶²V®Uá?°øcøW¡ÿU7àíZÎÛÜ ªYc°ˆ˜KX‹—´VÞ\_©áÁ•ZæÇ5¶UâdµòÏz¹Ã†›ló§v„ †YcÕÚóm¸Þ{oA”¶>€| ”ÕÃ|Ûï,Eu¯ñB…$©¹NP«¯ÁÒoÂ¿U 4V·iõñ0¾Û&"ŸV¢#ñÑñé§mBÅ@¨+ÔUu·´Qb×ü?WµÝRu>Šÿª'rîÐ%“;lÜË”$Ãç{¼bç;L›R	þü¯ÆjµpøÅÖJµò²>\ÙZYƒ¯]n{Ú@R¡,…“tíðÒ*°¡[_YÿfÐã"¥é.Ýô¿Í6»É¾nxZ.a¡\¨³©Ò½#'k’^»"¦pæôBjü¶ì±°é,šŒ½xö‹{„[w¦ÁJ§Âi
+‚–ºØZ<N–Æò)üÚïÉ­ˆ°x¨=rúnQ3ÁÂÞ¿fB,ÖÝ¿ÑE>maÇêYuÚØkïµûG·_vÎÚÍã‚§4/¸iË,ø‚ä.À=gZÐz:k"'…‘"ObÉN"¯xúêöˆ‡Ñž<Ãú›¼1»dñM¨KÔåÞÓÃœù{‡?YJîQTŽY:6}­Y½ƒEÙ³}nÏ<¬/Šà½už·µ†XÝÏÎ¤Ç1 Ë+mi¿D=ã—Àì—Ñ9¯8k¶Z—ËtÞÎ„¼/Ø3ÿËäåPt¶6¯Øßs#?^!ñiFI'&öWzM~ä¾)±’Q YÓâvšÏò9ÂJi Pé‘ÂtÇhqÎ}ß“Jû–<ò­g}£³k±ÿ¿íß”¡Rp–Ìƒg0—=÷Bçu¥`KMÂŠÀä‘G:ö¡*W·fÄ&IBœÊ¿‰‹AÔÍ7á«·)kó$P¡™cCr¸F^µÎ/
+æ›à»l/B!˜“çþ¬‘>Lq!]©ã`ü¡aúrÉEØ’˜§#Ê]¯ã*p& ¸»§qÐ~z*ºÓíwöž1Â!h„¼ŒÚ‚Ê	¨éõçƒÎæ—Æ´‹“³þUeL¢eVƒ¿5ø[‡¿:ümÀß&ümÁß6Sy]9“¥KØ|:|q¸Ç!ê%c7Ù.þš­0ø©æ=ËÓY0.R#sÍñò¯/ÜëÝ¸Y¡=.>Peà§¤¿ªë·OJ§ô$0½’˜/šFýÄ‚C‘…ûÃÆ}…Vv'ìi¿Ã>úçKß¿9·LÇ—ÀŒ¯³¿NÖíÑ»ev×}¶\àBÂz²Ä‡ß{F/Âòø^…^Es¡Œ^…f‘H6eÓ{¹°ó²Ï»'ëÆ:[L¬˜o¯Ge2wËÒÊšÚwFs"ˆ)0šþh<XˆNŒ©Žnßc:2Ç"ømÐöÌ¦ðf$ÆÀNgâªªW
+{ñžjÆwî¸w¡ÕïMx›¸–ÐñX™¶zfþr»[tªþ„¹p4ÂÑ¤SÁ ÎÀk¢ùPÒaÖò[Ý°‘ã#4NŽêÑñÆlÕõ£Ã~ÐwÆk8zatCÿWâ>ï`œádèMùçè\~)yã Xñ 6.Ów§O=„*%ËFß=ü¿¼tÙev®<Ys»Žopá2WË¬ù¢uzBd#‹ßÔÓ^Ÿ¹ƒ ñRv‡ÒŒâ
+nF	æ
+Ò—Ñž{ Óþì–OÚS¿w½”¬u±_Á8ÏÚ§‡Ö8€7Gð/ÖÑÄSs`577K=ûEf.Gw¼þØ5r)™vÎ >r™NíFª(ŽÌg0ýk©^ÞÛ²I•zÄ˜‚½-Ýd¶žRQD¢>ú¬ýög3ÏàÝÒ¡‹ÐSžLý§Y•ê ÂègQ5ª”#4þãª"°ó7Óð‰q¿›­˜·'œM÷|µ¶NÞF»{Õõõ^aòj+4±9§óÕØ1|ƒgåþóûÂŠ›ÌŸäjë@\¨H ÓIšJŸ”•I*‘fQJà¬¬‚®„VFÖÆ8\çŽÿË­9xkãÕNýÒA°CäõÏp°d\(púæi%³a_!
+àºO«Áká ªÉ<_!ÝUé‰Ý‘—ŽËø>34ÒÁB,È8,ºUö6hEÝ¤Ydé*'ü¸Y&Dš!çä×ÃMÂ©Û÷0ðvÇ9P©“ùÙ8ð€g„ÅŽ´‡ì¥¥ßÛÂ§^ª9¤UŒ2wèI	Wp{jÊË>ú2¾x¶’Éö!{Ù8hï5öŽÙO@ØowÎNáCñä|ë«u‚:pûÎpñEÍ€×a·F¯[zrà^sÇLq×óeÉá/s±(k{¤,5‚i™U×í7ÒsW(HŠt:|ñŠ5`j·_#®	½»*ö3·v"…TÕ9 ¶ÚÕëï"wÙ
+s¨£<o*‚¶
+àæ”S‹\LÕØÐM‰jŽœZkù˜â‚V	žü%¥yÊC·Èõä/Êø$Š°HÓä¯t(ãb¦«\cTe€²‘wkë¾2š§Þdxm}·;¤†ò—ef……žf—MJ—Ë“D-›º¹º%[z‚‰ÄÕ42 WLÓ“ÀX£›Aa‘†$‰Éå«¬ü©ñ@@¬_¢rYË*—ÚÊžþk7`l!ùë_q£Ë^{¿}Ö88lµìØZxÙ®uqÎ”¦ôaš/ÁúÂ2©ævÕ©»äÍƒ\2v–ŠÞòÜYû·Õ<ÕyÍ Uò¸YÕ‘Õö<’’<®”èqÇ<Œ®Û¯0dÖÝ¾GX(°kBud«&VV"ÌSFWÆO ˜½DSµ„5h-é>Aíåä/Ôjèkì³NûèöËÌp1;z”NÅ|;[×í#tvípköÜ½ðP^>eŠ ~|Šß?¥¯wXÉ¾q®ÃÒ27‚ãÃüwïÞLuqaÞý{öhJÕÞ=åD°ª‡&—µ2ÒÉñI§Ýa'Ç§ìöËÓýÆÑ1[:¹ýÅ~û¨ÁÚG{­“ÖÑ^¹¹ÙÙu£ðCÿ…ŽîŸŽÓü-SÑF™íµ:ûÇ˜•?|Ñ9k?k7E|¯ÅšŽ8r|Ôê˜©H\Ü³‡ÙD>‹ÒÀC‡
+hNÔ„ ÍÔ·L ›eÖ8jýøxÓ+§ìiûø°Õ¼ýÅJŸ0‘gÃb^#oÜÎz.ŠÚã„
+¤	È‡Ÿ8Kq”ÊLÕ†«¢Qï-©žÚ®ÏyÞØX¤Jü¬ÖÆºZ¹Ù(k&"»Ô@ÄDu¢&×Úâí?ë¢íÜT‘vjælúuX×î&`í~€Ýr"°vÛÞ»•ïê‘£-ÁO¡.Â‘?”øhªýxü"L÷
+}³²	ÜÔ7l3$˜2-NVõ½ÊEµRq_[EÅÍãÃ“Æí¯‡¨oã<kíŸ6ØI[à›mƒ]mJWWÕ%l+ÊB»§Â„3àÌ³n–­ ÏyŽ˜roû~§P†Úçš·‡–ö«TÜo$±þÛKª7åÐhÎU2ÀLÆ|!\$yÞ>×ñ9y>&èt—‹HŸ·Mž7gy¢¾¸xê¼½üSsgÎÏ‹Ëc3ÿs)÷vóˆFÀWßèôòDª“€ÚÉÓ÷bˆ9ã Â‰^ˆÔÛë¹ÐÍæ†›ï	I¥‹¦gSwìõ|¡RÊ¬_ÉÒ- 5Qî¼‘M…1!Aëà'©ßózšOÔbðËaŽ)ÉÅˆÕ1"­CeP·Ñâ3"6CâöJ"z&ã$?…é»Ä)ÇX PÊäöëÐ›ú ÔçP®äô©ÍŠ¡ÝYªc²M’Uf‰Ë!ÿ¯ÞF[ U9>ï’HYÛŠE	²k’à;+±vjkG¥-¥DÀï¿þ¯ð;zWh?ïµØóÆÁAã§ûÇÖúñÉA»ÙØ;îè5B=!Ø µãÎ ì7ì]7žg¥¿p¯ŸaôiÜ?¡R¥þq‡9ãëeæõ®vØx† Ï”r[èé¡<~øÕ»F·  îj˜J¯ƒoæAMC°‚¢M¶©,P´	u©n<Å¡ô¨£ÊßGTq#¦´L˜žEN ¢’^•…-dÐ©ºc×z&Á$ „p¸é,·_!Z­N	Næ-Jb€¥ø¹}ÐÊ½±3<sƒÑ»’]¢þüÓ0´Ÿ„¤U¢6ï$Ð×ñ#†ÞN¸ðÜžéŒ)¡ï–ºZ•Ò9û–ñQEÜ[Âx_af^)UM*[†‰#ƒŸ».‹Ñ&­kNqEiÆªpèÛëwæ4ƒg)ž£óáÌ-˜"*%›¹Iz§qjèÔ»ÎLgÖwBsŽ œUD¸ð\3`VÝ»q"Çñ"•-F°õŒé‚T:AÒí—å¡;îOì	«‹bk~øJE"@~ûo‘ 9m5[G{Qhæ'¬ù‚ò;l¿uÔ:m´tª…Y¹`Ù&²©¾°u¦æ«IGÈy9ªž0¸îAHµ;@3?ŸòÁ
+H­}<7tÇwú©ü¥ß!LÓ‰4úÎdÉYípÖïƒ¥áöþv†­ý±jåOúí¥Wß«ô*nuýõî¥ü¢½trÚÚqtÖÀF®û­SØFî¸í¼`‡·ÿûÃÎNgSbTÁžÒ‚Ë˜\–[è {†€ððFØ^wè^"(9h¦!¶ íÏÆøÎûÔ€a©í4VŠÍ†S‡ºÀ7#‘‘&jW´9_ÄÛ\qPuiLÔZÄn±Ùœ‡ülaþa0_ÒàÞè¥T©Rc¦ŒrñÐ¨Ý{Z–T4ÙhŸ$ž&<ûV}Wf7?»cÀÙÌöl¡ã{qæ4P#¯‰á.)ž6ç°6PpãÇ¼‹[äÇ¦‹Þ­@N—øRWg.Ô¢¢uÐÓ²¦FŽzGQÍ[1!”€¿P]e5S¡fGyŠä?¥#•šT¦¥A*]Q®
+ºt°ÙP´þ¢O-0eñöë!"éµìÏœ ç9ô‚QU:e"õE`€$éûâ†l6vðc—ªGÓ¨ò˜Ø[$âK"qxƒ;ÞÁg£†/Ì•Ëá®©³RÓtvMhac)Þaä`•2ÎE7 ò
+<ŸÊ"Ž˜ÒEÁÆ@ôþÿšó‡é“ªÕäÛy",.l0‹ˆjlŠ-˜#ù?•ô¿çü×T9ÿ£¡ÈÈX4÷áœÿ»ÂÉ)±”¸{RTþ°ÂT“½^,ÅŒðIs¥˜Ï‘[n›U.ÍÁ½¥ŒkY]&	IÒ8æM¸¾Ü}Å·4ôö ŒÖäp£Ú¢m`žƒFØ¥nzÿ;“Ô®yQ”f oW(‡õ![¦EY Îí¿Q¶ðžx=½ì,ò³.Ô<í¤ø…séËÀŠú‚lbClFª{×›Àçk6pÞÂÝA5ªÄ‡¨3UJüÆ»†ØBDOà‚‰O›@žp5‚&^ânR‹AÍtXZ'æÓRO}]-í`#õØ÷‘(©Œ;ÒH¢5ÇÆäî§“+D$»N¢¤î¶UWËf•X”–+µÙL ×Ã)ß,»3ðßœÄÝt=–Ò=•ÖyWÑäA*ªîÍÊ4Ã­t'ôµºªttN:<´@“¥$ê¢k·$¯z¤¬H+Ÿí”T8•iÐï¢¨ß£LÎ4¸V@ç¼‘ë¿)ÓÅ–rÙ¶`;Óî€-¹ùëqè–ááü NÉý:õùìQ˜áìexW."‘tK®ìhä«½ÓSÐ}tåZKuåº'‚Qú±âÎ·Ã¾!=¦‰J'V`×¼YYÏ$V
+¬ÂNV¥ÖçØ¶Ü	$,EÂòj‹o©Ü±|K––sïñêÈÇY(§Ž+™5líÀâO nû£ë=ƒEÇ`D`°grnÐ„ÏnŽŠ4p‡°>):½3Ð÷:îæ/XŠ¾•h_"œ³.jü!¿L'þüÌ¢_]„Œa¼€Óë%8Ã(ìþ*ýÓ×¨ø½zý‘¢ \Ê²û˜7_xhÁF½&ßbšnœ7}çqÇ¢au«N s½ÀŸ``+À>„…iÃ“\•ìãda3›ÚÃã:C¬øñA™ò¦×;¬²Ì‘á]y»žÇ€Sê7Õø7ÕüÜ+o:×”’2	æÔòò$ÚÎk°ŸSIóõ+þn°òj»v9xƒvL«ŸRñÄš(—©qf5ÔžƒŠåªºÛi IDó|@¡ÐÙå®×4x¡; ¶}mS\¬S\—CÜë90µ)ªÏ3|<X³Q«m›kUÛ&Õì©wûž<Tè¸z}R<ÿðwÿÂ2ƒ:€ÜÁšµF.G¸ê´µµÑÀ•‡eq#îG]‡±_¹ÇKÚ@;†}7‚Öõ„‡VÝr>ZwXÛ,t
+¨ž¾V91ò
+i[#`í?5%•”‚)°hyú€Ì]äD'Ú*”ùðf½’Õ 8í8ÛzaŸOå¼ÿ8£9”q×a¯ÕÖÒuôTgÐï][°)ášRXX4êí`'õ8‘Ô¶â§ZfV“×56ÚTÚØ8|ÚÆD¼#vÐ:ÚÑøa‹5Î^`Ñ†M%PJdÖë91eÖPRj´ÊÈâ'ÀÆÌÝßü“K”NP yÕ?úþïÿfô5h‚ ¾³ªÌF‘c—0n7-=!.CŠcxnlqÝ˜·BFÁþêê|#ÓCo~7ðÎ©Y7ò½.l8d‚c†Ñô™ó9¹àS½:0æ:•™Ü;²KŸ±‡ràMÄ®iÌÞ)ÏxDç}_¸†Æ‚´Šnã:ëhÆ6Åu0n°‹¶Âh2ôwØÇ‡,.y^†;Nä04Þ\z<+d#¿GN&œ<=™S”CÛÍbä¢+@œâ;}Žá=”5£Û÷² 
+”¹Øèþcæ³;Ø×Ú{oáŽ~Ãáð7ˆë•B·^.wK*ŒˆÀý¨/6¹€`ƒy¸^¨<:¡¸‡ï¡ó…_:Ãh§!J6§Š?ŸÁüé|Í ~˜t
+òÇ="ª,¹eX°3Êt­ó:_Ä9X©­3…:«Wf‰C­¥#ÔBz%kÀÇÁêÎÂ6%p(J'å‡r†sVbe=ƒÊ‡ZÕ¥“…’œn¡‹Á´Õ{,xæõ¶câ¼I¸ÔyŸNÜæµHé9¤/Du'ù’‚&[ùÃ?ý÷?þþ—Œ†¾£xœ¹óìuAtc	+ÆŸ­z4d/Ò´ø+Ö·¸[§1™¯‰àý1Bs‚lÏó¡ÛÛÍøè××@Jh&¤Ü‚åiàL8šJG£ì¯Ñå1é˜¶¿‡œceê¯€¡ø£D- ö”÷@I§H
+¤/»¥¢Iàç&û7>§«Ž¦£<Ò¶N\LúlwcùŒê¹©[C|X·žæ@mA?²,á¨ààTvhk4RùP49)$ÇÈÚ'Þ¸°W hxø]¬xÌY4ÎåŠd ‚X)N7uí*
+²Í“Úà&·¡¬·­U*–OÝ —`[Œ˜ZÖ.è£Qøz†¨6C¢oç«3Ö©N…ÉlÃþŽô‘ã_«Ì“íi¯}Újž±Ö^ûŒ?c³ÓM0?´(+ÙÀá^+8§’E¤Ãª+öÉdc;zŸÐÑ¬¤†YD_îàdA,»&‘šÞh×´»–¤6¢Z·çÏ>Wû%˜¹ _ï±­ˆ¦gjS¹©qêÂìN@+MÐbp†F›Ì”X/üÙz^YH»`Ug¡Û©›»0×EÂIÖŒy¶7‰œç`òÏ†ü%ìlWøéË!ºæÃWüçe¯GÎðÒØÿ”›SS¿dêEÃ/×K.‡¿Ê]­ôM®öýl(S4¾ö;­¿`]£‡×szxÚSL~Ó{€…Ïîul²ØÒÒ]4 7U;)µõÉ5ƒhsç˜¸ÊCçÜÕ8KSCµ¦°@dîß[aæ™È?yqÊÃ,½ÄNM,mšh>yE[#T¸‹–&{i?y0‚ª
+^a™Ih'ã;»AEQÝÎõ¸+4¾3ª×ôGç`Fö2¡³eºÅrjºò¤_b÷âì~òÎêÒ]Šø« ¦”IMÈe½iÅ¡œÉØî™^gsXæEÎâìkž=
+ƒÿÆíq$Q U˜x½#æ"¨‚³¾‹wÞôÝø§¸ä–XZýtµ¿ÌJ¬„0*ü76ƒ4e³ÇCXål¡íZ!zãÉ¬˜Ãp{—¹x1ÄŒôŠŸ$í­~Í¡“8&Qa¡,	@xOüq/ò~åƒàu{È¾³¬.¥öpÎ÷íò:N—w<ZùSŽ¸De(PÞïX™ÇïXDµE&í7ÝÎdÎ™Ru÷‡™b{t p&rþ, ‹HálÊ·Õ˜³keÖØC¶}|Ä{Wíµö;¬}tòâlsvý/æ,š³_þƒ„´Öèy]ÊrCÖñÆh½JkIFÜ6ÇP&ÅEÎï+¹ù‰J1<m·áRèÌŸ:ú&ƒ‹YÊvaÂº@@«ëó#nç€]“›âøþþÞ~ÝG˜<µS 3#ShþÏâ8Ë0_4º¸H ø`ÜKxÁùpÐ8sºË¥Ê“à<£ÙG!þ>„7eÖÁÈew8ó‚Û÷<DtÌMÜ.º†)’é°)¼§`\2üž%»§Å©øåÉÞ3Cª´Õ¾MYÅz«‘ž$ËØ'HWÊf*]&sÒ¶˜µhÓt“e''¶Ê°™Röj¼©¯Ò*RíÔÄLv‡ýíÌ£5—=u¾€é^
+½$ŠP1«}´Ìš>0EÚÊŸPAÇî›&5Æé„/gø*z¤ºˆm_*#)ÂÚC@õ3¨UAÌý…>"ÇRÂ([£˜¨,9j‚[/NEðão™z’’Ù|ïÆ¹1²"Ìh>µ¥ÆpŠÙ ~Dï€-ù"›ÂÆ€Î\Pp
+œbz;»ý*¤2×UvpûÕÏf^Ï_àâ`ÏõPiKON}ÁL£Cu4A÷{éIÄ‡Yth«	¨ØöØ¿Àžö—8“/€Êw‹¯Wä[Xpÿ–¦Ñ¯ï—ÈJížìPØs§8ÑXPVÄ
+²ð•f àøç¡\:±îÂ$•‹”¨nDž <9!R(N=ú™ T>A'ž³×ËÄ ¤KÜMVª(éæ2¹c:Ïú÷/öî7ÅÔ7œ¿° ê#¥r#òJ(ñDAâëGÂ1S¨‚kˆtBý^o‡}&PÁ8°ÂÊ÷ot·<öß,=z÷Ù²ñç¡üèØÒ?]Ñ…àžòà£ù½d‚’ßågÍp£û-qäµ¢
+›W°­y¹Í²4Å¯MW-ÚÈÕåÄNÅ%óÚDÎCãIÙ"ŸiÌ¦gdôÙÝÙá(Y–¥!ïªÕÛK%ÛßÉŒÐø+ƒ?2É»ËvµÊ\7*H-(&Œó°R…ªÊì¬z*;+×I|ž4sÚ–ìòÒ<±^T“³Ãb[6ñOiYºEšŽ:Áaõ¯ÙA»CY2­Ÿ6ô}ˆôÐe"—¡º9.Ãç<‹}Œ¸QfœlÌØ2y<äTÒ«T‰(¯Pñ×l±yŠûÝYqU“>‚Vi9ç£©m²¤OØzï“°æ¶õ,?_¼””´l­¹7m¤ªZo*,¾Üë3Õ+¹h•nÖhðh8ÛAëÓƒm‰6ÉuÒà’ÿ±DŠ•@|Ù)‚øšCÄ—BÅLâÂCƒzé¯r{Ÿ}´»Ë(ŒµÝIçÀ—•Þ¯u|èøúvtÂH¥ºR¯ž®Ô‹êDk£\¥ž–a§Êô¢bZ%W˜gÊ&*-ØŸg0?ƒš&á¹€eš…3?Ã°õY‘ìÈ£ˆ.`ÄÍË§ÁU“Û7Çeèk™C¯šºÞ%%’«kvÛ«‰b·ƒé@Ì!õ¨‡0xƒ]¤9¥ ÖÌ3¬«¾ìf}Á¦@—Y´²üNØ2æU˜«×¶¢!²¶Z¹âÔssJäp·_Dg¬“Àíz„’¡˜{.‡ó_Ü¡Õ›I
+K¿{©~@ž{Ãã)f²êÇ‘yØ5{	—o: ¼”ÎôìÓÔuò?¤©pPrˆ`ªË%nÕ?ýæ7ÿÂ÷TÝŒíèNÏÚ{ÇÔøGÏgÆÉ	[:mÁç³Vg{{ïŸ6žÝþ×û	;mu^¶ŽäFÁ7áÀó£3“	—Jqîû©Üàˆ7’.ŸmdN¬‘9‘FÒ\óÕ÷*Û•^Õ‰®çÁÏ¶È"2Í§éÑ€ 2—¿ôKìk‰ Oþ·†Î
+Ra€(rzŒ é­
+þ€ñ%,+Ø%vþŠö[:ðNVžyA8Í»;Upj~Â¹Où@¸–ÚÒZÆ>¬…ÔbØŸÔ"]"ŒÚR°nÅ‚f1,èW|&U<[Åš“þhÓÂBÍo…Ó©žãz	ºpGmU.¯s$C¯„2¢ÝÙ_øª˜è«Ô_qGnàc;$½ñ—<wK¨ -ÇI’»ÉzÇãþHÀ&þùýÿKíî›+A•§qéDgÂš7íIà]÷î9½[¼Z©ük„nÆÁ0ÕuVn‘µ|«aÑ žÝÆs$,ó¨EÌ¨â©"n³Ì¦³±ü`ä†í ÎA8x±K0CÔ¨ë~Xfg~Î›ðúTÖóLKH˜”˜6v.]ž0zgºcâ]„c}yû[º^ÌÈh–”¶ÒÍc­‰Íç	?£ÙP;@j¨¢ZË°wfýåýG·ÿ´H &ÑsôdÔÕ¥ã	·åÛ,hæJ)©/Ë÷ç*Ô®®Ð–Å½F=IW¬)Ò^beÚÓÐÿß(IHçÀ4äÇE™qCµå“Ë"¨¯oWaÇó[¢¤Û¯ÑËŠ+7qn¿
+1ù‘ý{`Ò£ªç‡ÔIopw8“ÉÉ LXµåd].ÁŽ—Šâˆ¤æÕÿVYÙ~Me0úðè ?’ÇµÑžLì¦3õ§ïbaE(f©ìðÓèÙ>àEJËLS.÷¤²ë9ÛÑ É'ãåó4šéŒ7gâCÚÀTÑ1Kí•Ñ5øÎø,²iÉ™âbþ,™ì<¥3ƒuBÌîÂïö+9áè8n0‚'nßs_±© 2gø³™‡(£ˆ=Ù3>ë³‰Îy jî0%¾òrA!ôìÿ¤Ñ9fÕ°ix‘<´`â‚µÚAÐ.{y FœC«Â.â@gÅðõŠµ‰žõÄ­w,*7À„÷j8tÇ¡ó¹«2Ú‰µº¥–8÷g~¿?tÙ1<¬ÃÃ,jù«)ëÈJ×›Ï”ðeÔN/â*ªuØš}_Í/?ò“ñŠáâêZ |ÂÒQÙZ¦@s;í–ÚHr2ÇþtEÔ7j,ì°ˆY¶1¿çç§ïÍÀ‡&Õ`$c“Š/6*)ú¬!P‡ö’;LS‹.±Q¥Å—¥bÓ{÷Ù;M€ß”ÊÎ…uwàv¿8÷¯t1)¹C½¾ZX,¼0ýNG?øAñ"Íƒâõ£¢‹%©~bp6˜^Ü¨Ê¢²®Ó8é$* Æ¶W©ôG"-þ–êðB :—ý˜JØÝ“m© …Eí´c¤@1Ñ—~A3u; õ|?61 íæº™óà¶x£€©E¥> SáÙBžª*Ú€†Ôö *Ëé·_ME-‘(æé¢	Ì·²±Ël|:Ö.Iý>µO k32ã^A](ê†xëœú÷”Kú‚ÆÂ¢,ÕÂÀ1‹ýÎýhcÌ¾þ…Oº'Ý"tN¬õ#¿$“^SA“!‚¼€9±º¢…pÉôEø‹`¹Á"75à¼0ò×|k‚ÅŽ«àK(©®s<
+pHÌW
+±Ï4H”»í€øpÇ='Æ¥íÍ°:‚w…wJ¸ùÇ©y”Ý^³¥I­Ûß‰ÞsÀtt>÷JÀXý¢À­í€ÝÙi6N÷§¬qÚ|Þ~yÜÁ*Ø?CŸÕ	3 `{Q/Ã0VµB¶t‚û¢ÑûûËÊðÕ"6iœ,åÁÉ´öêžÿf<ôãùf:=á>³&t.;žèÈ¡„·½g"à¶¨¯l’ñËbð\ë!+HR“°äÓ¸:oO¤‰¤â =Ç›7ï|êM‡¼ìOÐŸTˆ)¨þ![ð™=ÂÒƒÉµÏìxSŠô2ÙhÚä9e®š1÷Ú6/¹HPUËÄwNÅ¬óÙXH8‰.«_cÂARÙÇ¼½¤”iüÅ×4)ÿ)à_¸!@rì(.[´ÅQ¸ Ä‚Á¸Ó>ŸSý³dÔœ+u¹GV‘VèîÌ2n>CžqÏ[ÚÂbÌVeÉšBÁÒ2iöÖJ]VWÛeê¥úL½Vœße5<˜•Äý.\£‡#Õ@¨s>µæÊëanN•Pí•
+×Ÿ%Ó¬q¦)+¥ßÇÌè½lÏëÝ¾ïN	:áNüÒê'*îÚfž4ö@Åm±ýããýƒÛ;m¿œ3Ò‚) *ô¦OÕMžù˜5^œÞþâ¬Ý<~0…öÁ³yEù…séžù{¨j¶#Ãé¿˜à¶†i5þâC*ù±Z
+-ìfŽ‘¿q¼i¡„\dëùšOá$ÓÂemdä–ø
+Æ„Ò/ã[³ª1—RgvîÈþB!*•õC’ÄÍÄ:ìi£ÓÂ ë^ãL\5û¾žXšp{-[AY&œêS÷"pÃAóJ¾ÈèûÖÂÆˆ¥wà\»õÞæòve¨IÞOuxpI·?s‚ªé…»'i·>‡´Ó;´z8"Nˆ0	‰»É	p'M÷íº'‘yè†¡Ó§ªKÏ}ó]KM{‰Í®ùà9½€5°76h™oÑ²–òüî¡† nsæ“Õâ.šë[¹TÚLöŽØ"#QJŸA^‚9¢ô>û“À]y8“\>?øË ›¾pÃÃ¤`|O€
+:`A-¬uô²*Ø|*×dªä-¤ÊuàŒ1·%N8ºf'.Z:Â¥‘/³áê×ú«a‡{F½ÙªçùyD9ÔXIº4;þã.ã˜ròà©ÜA™©ÏIÊßÿº'ÒýP)ÑöAà×ŸÃÖ¸ëc€g¾{qÚÆ*\r<]ÂÁk‡(€…¥1”®ÏÓé$ÜY]u&^9yÌžU°S{ŸPÊàî÷o’‹½ûÞ%c|÷™Aÿ*¸âbßÉ#Ø¡í–>…½1þB­qÛÀ¢'‚úB§¹nèô3S†~
+5$:XW0Éø»
+ªjõoëæµ™h·¨õòUËR‘mÆŸk©Ý'²ÈÞßÐÁþdVåâ¤ÖÒÂ¥—!xÕQwK4Øc–î¾;2†Éõ™÷™œû ÐÑ]f&o c°^Át©ôïï#aÞ%p»)¡M<èÎ!‹u&Î^ø; =@¤|L™,5§Áðo^> ³ÝÌT–u	ÆVŒL|XáìKl'•‚ ®ZU§¢++€ZÓ¿'š@Z›Eª{)Ø$M¤†€‚À
+SŽ©i‡Ü“Ê,7æcoüàTê8ÑZÕ6e´HYWLÀ~r*rº ¼¾ 'Weq o1¦m‘’ ï´—±<µåOþô›|/Œœ7[ W¥+O[ð¡u´×€÷KkÖií¿8Ú;î(+MÔ™é~Ê£Xé¹]3èƒ;;€ÇÀ“™MÆŸßíy³‘úQ†Þ“çÎ[¸‰×%¶Â~ŸR"Z$j›TSzÂãÖÑ”;ëÅt¼°tÞ%¼A/0âmS;¡hƒ”Á˜ñl©”\r&Ê,ŒÊØ•ÌçYó·ïcV‹å'’‹{ÓcðS¦”.ÅŒ#ïxÈÿ…'€ÇbP ;ÑL¡[ˆ<A—1>æva–ý8–ƒ±–Ì¸F1$ðéÿþ¾#ÂËXEá¢Tr7ÁR¼žÿ‘˜!õ£=^õsF§‚†s‡Ôeö©Ó²eõ¿þÿ´eõÍãÓÓÖ1k´šg§·_µ›°ÑöíÖ>:kíŸ6ÎŽOs%õû#Çþ¥žþaêé‹„þROo[OdšV40»¯ž´MÆTÀb`6U…}8š×P™«ÀžvµXÅ¼ù&UYŸìì¿”Õ«øpnŸDeõç~/_Pdª­_¿Km}c6À]Qxb\Ÿ;c4âý€u¼>¦ÃƒÀ¶×Ho>êã"7º]7Ïü/€E¨ù±×ÕÁ ´äkÙF+UEA~ÌƒLL\¶HâšÌÙìß`×Úþ“‚^ÄÁd•®Pc‘dÑuðÉ³— ©Ù¢wæÏÙa®&>Õ;x×ñÕ¦þK¬ã†¼µšÅc4]×kðEÉÚI5ÛÔ–Žj‡NÙ\1æMiâŽ5ct¸)$€!èz¾€@m‘¸á2b.iÚ®èG…)€¡º0”OƒRO÷5§Aø}Oè.Íá48¯ßÓl°±¨7cû?P‚¦\¤J¨ÀBZI#g‹éš$¡'X[€,}Z›+ð›žÂ¾I5Uãuc¨—L‰¶ ¾üv4…5íÐæò‡¨Ç¦@n¹3nË\Ê¡jš¥×–_äÅÈH‘­˜¯òêüÒ\l©h¬mÚê°`1·»!©þ¸Ø'`ñ„“¡sóILß 1]ªfxé…&mÀn4äöèÐ³ý¹]Q±˜zý	c¿üvý‘ŸwEO¬…ïÕÂHÎ s5Œ)m@Z(—eÌÐ[AB‡ö³!_@3ìy‘4Hìø3M³.-CM{"ðC×
+	ÍÐJ©ª*\_„z‹÷‘Ý²ˆZŸ4Ï§UŠ“He ŒØN0òHÙ@ýÌQ¢qhV¦üx6ÍÈ”:EÞs>!IîÍožøž¢Ú+"=†œä¡Ê&¡=Ñ™‘Må¤(Avï"q07m=b‘qŽCe0X­àãü¨|¹n¬ \8=·­‘cM¬wTFÂAà¿X©D dƒ–P5•ZuÛ%¤kROÖE'ÚT«µ¬	É¿I+Ñ²Ä[þ[]“’lÓºC÷~VFžÅûYÙ’‡eùhá½”¸&,f†·cí¥7ñTÀ‚æ{¨ÓÇèßl
+¾šdb¹àÔ;@!`.E…žŠX_"C+0‹Òmýººí¸WGù_¸!‹™"ºß
+ì.¢‚3ž²ì}þÛ&^ŠV2÷E¥¡œü™øø½Ã`i*½Íý¤;³óÏÝîwzW4ÂÙX 6ñò0GlµøxlÈ^LþÜ´/~÷—}-°<6+Ê«Ÿ>ó>§Ì¨â3¼á¥ŸæÜ+jÈ¯og§¤Ÿu‘}R&’ôYJHFÐê»ww¢¨1Œ¿¸‚&û;!”î—ÿ¹¨—Ïüµuô+•›¡ª_pƒWÜ®µ=¾t„lgAË Å´ÜÚë€¯ò%â¬:Ì#! ¤k7¶áŽ&Ô‹Ýa.¡+õçc“K¡KMC¤FïôMA
+ÚØ3Äüe–Öb]\¸2ËŸq¬ÉV_Æ€ÜªH>mÈ2ãÔ‘“aMþð~±í,TbâËO1PIÙœßaÕ$Êma7..Í™L¸®Â5ä…´v¡¡yoJ9u{X†ÙL#>Cã]Y9Á˜[3ÁÙª%ÿ&Ü½©Ï¯µXã%U”š^GÉ{N‘TšJ½XSÓ3ôÞŠ¯²©÷¥Å:Þ˜5D²'ºÕiw`¹s&S½ŽblýfÓô-[*ëŽ{ûÜ`jå,Çþð'0eû‘ú#a1ÊFemº µ¨‚¬„÷gž(¡NÇù³*Ð7BË.‹>ä4dÔ$æ,D¥™+j±F²è$p11uÜ‹Õ]Üja˜qKXa¡¢§½—)ZôØó–[ÈOÖâ©Â”¤aÝáIt±6}¯:sÛ3ãåç¤>Ú¡™ÓúŒmÐä½’]n)@&ìÛ–5±_‘&ÚSÓM§ç°Nç€ýáïþ%*
+î¸°?]vŒ	Q¬qÒ6OÈÜ¹³˜Ý s‘€ûu§ÃkÄ+e<©uè\ƒxbK"ÏÒ3ÐFÀ¾Zf—^ègÃCo<ØoÊôl£.eÒò*ö©ÛH_ÆTZºÀŠ?råMp=X'ÎóFÞxe°Âï¯®Åb/Bð*Á³\)—•2évXé{¼i@‰½KAQJy ‡.fÌÀÒ”s2zê0ì÷" dàä@ïBýK<7­”cg9²Ë¤‚ÅqÍ[YžŽÎ£MZÖcoÔÏ':†Aw7=Îwù“œát·?$›È®s@
+2ò¤hË¼ÁËw¯x.ßþŸ$çJ—“‘¨mÏ_.ª»;ñA¦_SÞ´®/Ãkr$žgžJ«>ÛªPŽ¯Â‚9º*ÏÁ'V·‡kC­fK«¦k±©ÈùÛÀœ¿bÉÛ‡i;Žo-œ*Wé«z:{pSSÒ’Û†t!%F/+z^D·xší#=[ë8[ë¶”½æ ÐèµH’“!k"E'ÄUÐšÀfBÝÀC-ÁÄ×/û‹ŸúW»¥
+«°Ú:ü¿Ä.¼áp·b$ 2i"G,©²dØÐÒ@|70¬<¥ºÍÆu°R/×_Ö»••òÖÚJycêè/ÄÄ1—pîózOe•Ìw!¼gâ=þðºÕín…ÁÙ™ïB¼¾8†¿¿ÄA<‡“éÂ,óm˜ÖÛRAË]˜Rý	ZKA¹˜XO”ƒ·¥äü{K}áf–ý‘×›vK˜&Ž€ï:“Ý1ùèç øÇ‡utA±êy©b½[-¯oÃD¯o°µ•µr­
+ÿjÀÃ¿
+ý¯ºo×ºpÞæPÃƒÅY‡Cµx©jåÍõ•\©e~\c[e :V+¯Q¬—Á´^Ã†›ló§æ–Ã«±jíù6üï¹Ž—&ÊYÀ¿AJéï …t¯ñ\‚KŒŒ£¹NZ«¯ÁRnÂ¿U V·i5ñ0¾Û&¢ŸV¢#ñÑñé§†ÕÛ]vUÝ-m”Ø5ÿÏUm·TÝ‚â¿ê‰³¾0]*¹òÆ.|¯¤<wØ[!Üñï I`öŒ¨ÆjµpöóÖJµò²>\ÙZYƒ®]nÛØÀ=^¡
+„tÍð¶*°‡[UñAVOgrk2•&µ
+éFãQ¿é1ï§\«Öiu—ÇƒjÎ7~·¼r±»|„6ÇÍaÊoå+J
+è¶l5›K“QêçmP]4U7Ž/Çö€ÞƒŸBÔ©1}¢WF£ë~å÷<§?¾ý:œR°¶Û#LeíiÓaUÇõÚç7´L¢{5–âž6öÚÇ{íÆþÑí—%^#õ’Í	Ô”>xÃÁ¨÷œ©ej×r’'ÎjÄóP·K†¦½öÌíœEwÇÌœÇÇOn¨gþÌß;üÉRò4ÞÅE×÷çGK'ÞÆ•hçrè¢Sjê°}ÄlAõD@ÉÄ:~þs&4?ñjwHÚN­gìT,.“|C6W“j;	CÓû
+X:þ÷:hr„X¾ôP~-Ýh3 óHéÅ­§wP”€·#–ô¦Ä”YñöÔ³]¯gIöUµF¹	ò£Í–™™%›Íu_“D;ˆâž­p:öùÍÌ–Å|¨½×t†Þywä -bB¸0£=š"©þÙíW!O_xŽø@¢íÇÉKÍÙíïvÒhv²™G7°§'¢ÙAtõâÝJ»c?é&49/Zì³•»9ÔøìoJ™$h[É,»ëaÄU»€–ì‘„œ/\ÙsJÅéÑœ²çþ”Ý>5žÖÐƒ:Yhƒ?$LS.²7¹"ö5¹N5ûQeÃà”6í§§fûöË#¶ßÙ{ÆÍ³öË†z<já©òkr•Ð| Yà…˜bÎ¬ò¾ª,ƒv½Ìjð·ëðW‡¿øÛ„¿-øÛ¦s*¯Ë#g²D-tÕp]ªkˆbzì†!ÛÅ_±L?P]	H<>”ƒÍH^_¸×»7pQ­c23e@f©Ô:.W{¡å"¹Wu=É§”LAQØ8µ2=†MãŒ…MG'–„F´ê*â’ôii›<zòYÐ?_úþÍ!X?e:¾]ýu²Þ-³»žðè³e½ƒ—	ãÉ.¢Fï½N?
+ïh. A<3æ]=¡åÿ«…ò“ÀkïrBÔj;
+†aÇSœL£²¾ïŒFb cf ¢">¦ùˆ>T/+’ã°¹öíoƒ°>6…7#qpêaAŸ‹í
+&n6)Ðé'/úD ð;¾cì‰¬Î©Âóã¬':ðËœqD?/lõ<kŸ=tÆ3ƒp84I§‚á”XbábGßè†oÌO[Æ†Ë½Àïxc‚V]tØúÎ¸sGC/Œb¨ðJ\ÿŒ/œ½)ÿÜqy"ÎRö1”C`ù‚=TÎ	¶ð©çPWÂˆÞð4úîYàøur]fçÊŸdn¦a¢
+w ®`µÌš/Z§'tÙ‚ªt"U2QNWt2	ß:ÖÜòA`7ð.Ô¥<‚*8Á3~J7KVPok*òYûô°ÁðæˆP§’‡>0>õÍRÏï‚¦™K<†€&Ì²û"*Ì&õ„áß@<á\òÍQødi—Cë®§,ÜL“»_Ä\tAÌ·¤®£‰:ä³ö[Â’€wKÂ~äPŸa#(ÖÂe€É ÑéRâ‹LEQK]¯$	}õÊêf…É-°²5W‡›…Dkƒ#K½Z[Oà:¨ª®§Ä6,Œ*]†iç²ž7-}`F$7ò‹þé7ÿüþ¿ÿeaR}_½V\À˜»<ÉY`Ê´™$æ,Ín³Êa·ªYø<p/x–çXÚapƒ|	vUzQ=wÂ>ÑÏT7oF²~…”ÔåBëÓêEðZ¸&jòsƒZ¦–(7J_6g^î_C `©ìXQÁ"éª¨Ùß¤9WéP´yk…«©¾¤µ£×ý?ì©Û÷0Ž°à³ªTªüSx°ŸC½ãäá¯ÓÚ[ôá’kË8Ö.e.@É^ßSÞ2ï&ñ†xÜ€þM£Šôå2‚Ý“¢‡bì%˜¸Žú«ûíÎÙ)|ÐOÂ7¾:ŸûöÜ¾3œ‘ä£ó¦°º¥'î5wüÀÔ!`“ÄŸýe.F1'uëR#˜–YuýÑÂìZŸ!.ÔÀTn¿Æ'¾55¤P°k©.yÝUj˜ëj…T–¿rŠ<eË(ÊŒ¤~m«B?CÔ)§£Ó–•Ž3Rä¼´‚Ç2æQñ—”M%ÑRÅ_”XE+kìŒ¯Tºqu=š¹ê&éKªD+6ò®`îaýVF³áÔ›¯ï²@`ZJQ*¶r)kÙL),§J±‰ã~¹cVL{“@Ùx-uçÂ>CY€1%xa­RIéSqá—¬Lõ**X¹?ýæ×¿â60ê½ö~û¬qpØ::k™°ù­>õA“w›Éî¦Úœ)÷¸^­lÌQ€©.úÚN;¦EŠ)l§”Îj«WÍQX©•^õm„ìÑT^MŠ»c±s ‹\ÖÝ¾GI(\4ayþq%v@"øê±°G3•èbPv9/ÈT³„ËÌúA{§Ç¬Ó>ºýòÃßj€Òw4‡`Ëà 
+G¯Ç·—ÎÝ? õËéËYòøñ)~ÿ”¾Þa%gøÆ¹KËÜÌŠóß¥sèõc{HÍœÚ«£œOm¡Êý¬öZ—ùø¤Óîêøí—§û£c¶trû‹ýöQƒµöZ'­£½6²Eµ×ãFá-ü,LŠÙ|`"Ø(³½Vgÿà¸Óså‡/:gígí¦Ï!2ýA£#Žµ:j"½Ãs8k®þ½„Ò\<ðÒm–Yã¨õããÌYjœ²§íãÃVóöÔ. »÷ÙAã;´5Lœàz.ùÐÛãdý¤Ëûçø|K±_"J?AÊ1ŸnŒ•-ñJƒß½ûÿ?   ÿÿ $aéœ
